@@ -32,7 +32,8 @@ function applyPlayerState(player, { active, audioEnabled, visible }) {
     const audible = visible && active && audioEnabled;
     player.setMuted(!audible);
     player.setVolume(audible ? 1 : 0);
-    if (!visible) player.pause?.();
+    // Keep hidden players mounted and muted so changing modes or carousel slots
+    // does not restart the Twitch player or replay its startup animation.
   } catch {
     // Twitch can still be initializing when React state changes.
   }
@@ -95,7 +96,6 @@ export default function TwitchPlayer({
       registerPlayer(channel, null);
       try {
         playerRef.current?.setMuted?.(true);
-        playerRef.current?.pause?.();
       } catch {
         // Twitch may already have disposed the iframe.
       }

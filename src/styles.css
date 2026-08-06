@@ -212,3 +212,109 @@ body.viewer-active { overflow: hidden; background: #392724; }
   .coming-soon { font-size: 10px; }
 }
 
+
+/* Group editing and install controls — included in the full stylesheet overwrite. */
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.install-button,.edit-group-button,.secondary-button { border: 1px solid var(--border); background: #0b1b16; color: #c9ddd6; cursor: pointer; }
+.install-button { min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.edit-group-button { min-height: 32px; padding: 0 11px; border-radius: 999px; white-space: nowrap; font-size: 10px; font-weight: 800; }
+.edit-group-button:hover,.install-button:hover,.secondary-button:hover { border-color: var(--mint); color: var(--mint-soft); }
+.edit-group-modal { text-align: left; }
+.edit-group-modal h2,.edit-group-modal > p { text-align: center; }
+.edit-channel-list { display: grid; gap: 8px; margin: 18px 0; }
+.edit-channel-list label { display: grid; grid-template-columns: 32px minmax(0,1fr) 36px; align-items: center; min-height: 48px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #071310; }
+.edit-channel-list label > span { display: grid; place-items: center; height: 100%; color: #78958c; border-right: 1px solid var(--border); font-size: 11px; }
+.edit-channel-list input { min-width: 0; width: 100%; min-height: 46px; margin: 0; border: 0; border-radius: 0; background: transparent; }
+.edit-channel-list label > button { width: 36px; height: 36px; border: 0; background: transparent; color: #8fa59e; cursor: pointer; }
+.modal-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 9px; }
+.modal-actions .primary-button,.modal-actions .secondary-button { min-height: 48px; border-radius: 12px; }
+.secondary-button { font-weight: 800; }
+.favorite-update-note { display: block; margin-top: 11px; color: #78958c; text-align: center; font-size: 10px; }
+
+@media (max-width: 600px) {
+  .coming-soon { display: none; }
+  .install-button { min-height: 31px; padding-inline: 10px; font-size: 10px; }
+  .viewer-header { grid-template-columns: 36px minmax(0,1fr) auto; padding-inline: 6px; }
+  .header-actions { gap: 1px; }
+  .edit-group-button { min-height: 29px; padding-inline: 8px; font-size: 9px; }
+  .header-actions .icon-button { width: 31px; }
+}
+
+
+/* Desktop viewport-fit grid. This replaces the earlier desktop sizing rules. */
+@media (min-width: 1100px) {
+  .viewer-workspace {
+    overflow: hidden;
+  }
+
+  .stream-stage.mode-dual .stream-stage-players {
+    grid-template-columns: repeat(2, minmax(400px, 1fr));
+    align-items: stretch;
+  }
+
+  .stream-stage.mode-dual + .mix-controls {
+    display: none;
+  }
+
+  /* Three- and four-tile desktop grids must fit between the fixed header and toolbar. */
+  .stream-stage.mode-dual.desktop-count-3,
+  .stream-stage.mode-dual.desktop-count-4 {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .stream-stage.mode-dual.desktop-count-3 .stream-stage-players,
+  .stream-stage.mode-dual.desktop-count-4 .stream-stage-players {
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .stream-stage.mode-dual.desktop-count-3 .stream-card.is-visible,
+  .stream-stage.mode-dual.desktop-count-4 .stream-card.is-visible,
+  .stream-stage.mode-dual.desktop-count-3 .desktop-grid-chat-tile {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stream-stage.mode-dual.desktop-count-3 .player-viewport,
+  .stream-stage.mode-dual.desktop-count-4 .player-viewport {
+    flex: 1 1 auto;
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .desktop-grid-chat-tile {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+
+  .desktop-grid-chat-tile .chat-panel {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .desktop-grid-chat-tile .chat-panel iframe {
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    border: 0;
+  }
+
+  /* Four streams use the full viewport grid; chat is accessed with the Chat mode button. */
+  .stream-stage.mode-dual.desktop-count-4 ~ .chat-preview {
+    display: none;
+  }
+}

@@ -47,9 +47,15 @@ export default function App() {
   const [favorites, setFavorites] = useState(readFavorites);
   const [favoriteName, setFavoriteName] = useState('');
   const [showSave, setShowSave] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editInputs, setEditInputs] = useState(['', '', '', '']);
+  const [activeFavoriteId, setActiveFavoriteId] = useState(null);
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [viewMode, setViewMode] = useState('dual');
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState([]);
+  const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
 
   const registerPlayer = useCallback((channel, player) => {
@@ -74,11 +80,33 @@ export default function App() {
     return () => document.body.classList.remove('viewer-active');
   }, [screen]);
 
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1100px)');
+    const syncDesktopGrid = () => setIsDesktopGrid(media.matches);
+    syncDesktopGrid();
+    media.addEventListener?.('change', syncDesktopGrid);
+    return () => media.removeEventListener?.('change', syncDesktopGrid);
+  }, []);
+
+  useEffect(() => {
+    const captureInstallPrompt = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    const clearInstallPrompt = () => setInstallPrompt(null);
+
+    window.addEventListener('beforeinstallprompt', captureInstallPrompt);
+    window.addEventListener('appinstalled', clearInstallPrompt);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', captureInstallPrompt);
+      window.removeEventListener('appinstalled', clearInstallPrompt);
+    };
+  }, []);
 
 
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
 
-  function beginWatching(selected = validInputs) {
+  function beginWatching(selected = validInputs, favoriteId = null) {
     const unique = [...new Set(selected)].slice(0, 4);
     if (!unique.length) return;
     setChannels(unique);
@@ -86,6 +114,7 @@ export default function App() {
     setAudioEnabled(false);
     setViewMode('dual');
     setSlotChannels(unique.slice(0, 2));
+    setActiveFavoriteId(favoriteId);
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
     setScreen('loading');
   }
@@ -95,16 +124,21 @@ export default function App() {
     setActiveChannel(channel);
     setAudioEnabled(true);
 
-    // This runs inside the user's tap/click, which gives mobile browsers the
-    // user gesture they require before starting audible playback.
+    // A direct click is the best opportunity to start every stream currently
+    // visible. Only the selected stream is audible; the others keep playing muted.
+    const visibleNow = viewMode === 'dual'
+      ? (isDesktopGrid ? channels : slotChannels)
+      : [channel];
+
     playersRef.current.forEach((player, playerChannel) => {
       try {
+        const visible = visibleNow.includes(playerChannel);
         const selected = playerChannel === channel;
-        if (selected) player.play?.();
+        if (visible) player.play?.();
         player.setMuted(!selected);
         player.setVolume(selected ? 1 : 0);
       } catch {
-        // The React state effect will apply the same state once the player is ready.
+        // The React state effect will apply the same audio state once ready.
       }
     });
   }
@@ -120,13 +154,13 @@ export default function App() {
     const nextIndex = (currentIndex + direction + candidates.length) % candidates.length;
     const nextChannel = candidates[nextIndex];
 
-    // The replacement player already exists in the DOM, so this button press
-    // is a real user gesture that can restart muted playback immediately.
+    // Keep the replacement player mounted and muted. Avoid calling play again
+    // here because repeated play calls can replay Twitch's startup sequence.
     try {
-      playersRef.current.get(nextChannel)?.play?.();
       playersRef.current.get(nextChannel)?.setMuted?.(true);
+      playersRef.current.get(nextChannel)?.setVolume?.(0);
     } catch {
-      // Twitch's native play control remains available if playback is blocked.
+      // The player may still be initializing.
     }
 
     setSlotChannels((current) => current.map((channel, index) => index === replaceIndex ? nextChannel : channel));
@@ -138,6 +172,45 @@ export default function App() {
 
   function nextOther() {
     rotateOther(1);
+  }
+
+  function openEditGroup() {
+    setEditInputs([...channels, '', '', '', ''].slice(0, 4));
+    setShowEdit(true);
+  }
+
+  function updateGroup() {
+    const unique = [...new Set(editInputs.map(cleanChannel).filter(Boolean))].slice(0, 4);
+    if (!unique.length) return;
+
+    const nextActive = unique.includes(activeChannel) ? activeChannel : unique[0];
+    const currentSecondary = slotChannels.find((channel) => channel !== activeChannel && unique.includes(channel));
+    const nextSecondary = currentSecondary || unique.find((channel) => channel !== nextActive);
+
+    setChannels(unique);
+    setActiveChannel(nextActive);
+    setSlotChannels([nextActive, nextSecondary].filter(Boolean));
+    localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
+
+    if (activeFavoriteId) {
+      const nextFavorites = favorites.map((favorite) => (
+        favorite.id === activeFavoriteId ? { ...favorite, channels: unique } : favorite
+      ));
+      setFavorites(nextFavorites);
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(nextFavorites));
+    }
+
+    setShowEdit(false);
+  }
+
+  async function installApp() {
+    if (installPrompt) {
+      installPrompt.prompt();
+      await installPrompt.userChoice;
+      setInstallPrompt(null);
+      return;
+    }
+    setShowInstallHelp(true);
   }
 
 
@@ -186,8 +259,10 @@ export default function App() {
 
       nextSlots.forEach((channel) => {
         try {
-          playersRef.current.get(channel)?.play?.();
-          if (channel !== activeChannel) playersRef.current.get(channel)?.setMuted?.(true);
+          if (channel !== activeChannel) {
+            playersRef.current.get(channel)?.setMuted?.(true);
+            playersRef.current.get(channel)?.setVolume?.(0);
+          }
         } catch {
           // Twitch's native controls remain available.
         }
@@ -199,8 +274,10 @@ export default function App() {
 
   function saveFavorite() {
     const name = favoriteName.trim() || channels.join(' + ');
-    const next = [{ id: crypto.randomUUID(), name, channels }, ...favorites];
+    const id = crypto.randomUUID();
+    const next = [{ id, name, channels }, ...favorites];
     setFavorites(next);
+    setActiveFavoriteId(id);
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
     setFavoriteName('');
     setShowSave(false);
@@ -209,6 +286,7 @@ export default function App() {
   function removeFavorite(id) {
     const next = favorites.filter((favorite) => favorite.id !== id);
     setFavorites(next);
+    if (activeFavoriteId === id) setActiveFavoriteId(null);
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
   }
 
@@ -230,7 +308,9 @@ export default function App() {
 
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
-    const visibleChannels = viewMode === 'dual' ? dualChannels : [activeChannel];
+    const visibleChannels = viewMode === 'dual'
+      ? (isDesktopGrid ? channels : dualChannels)
+      : [activeChannel];
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const cycleBackward = viewMode === 'dual' ? previousOther : () => cycleFocused(-1);
     const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
@@ -241,9 +321,10 @@ export default function App() {
           <button className="icon-button" onClick={() => setScreen('home')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{viewMode === 'dual' ? 'Dual view' : viewMode === 'chat' ? 'Stream + chat' : 'Solo focus'}</span>
+            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? 'Stream + chat' : 'Solo focus'}</span>
           </div>
           <div className="header-actions">
+            <button className="edit-group-button" onClick={openEditGroup}>Edit group</button>
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
             <button className="icon-button" onClick={() => setShowSave(true)} aria-label="Save favorite"><Heart /></button>
           </div>
@@ -251,7 +332,7 @@ export default function App() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <section className={`stream-stage mode-${viewMode}`}>
+            <section className={`stream-stage mode-${viewMode} desktop-count-${channels.length}`}>
               <div className="stream-stage-players">
                 {channels.map((channel) => (
                   <TwitchPlayer
@@ -265,6 +346,12 @@ export default function App() {
                     registerPlayer={registerPlayer}
                   />
                 ))}
+
+                {viewMode === 'dual' && isDesktopGrid && channels.length === 3 && (
+                  <section className="desktop-grid-chat-tile">
+                    <ChatPanel channel={activeChannel} />
+                  </section>
+                )}
               </div>
 
               {viewMode === 'chat' && (
@@ -274,7 +361,7 @@ export default function App() {
               )}
             </section>
 
-            {viewMode === 'dual' && channels.length > 2 && dualChannels.length > 1 && (
+            {viewMode === 'dual' && !isDesktopGrid && channels.length > 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
                 <button onClick={previousOther} aria-label="Previous secondary stream">←</button>
                 <div>
@@ -285,7 +372,7 @@ export default function App() {
               </div>
             )}
 
-            {viewMode === 'dual' && (
+            {viewMode === 'dual' && !(isDesktopGrid && channels.length === 3) && (
               <section className="chat-preview">
                 <ChatPanel channel={activeChannel} compact />
                 <button className="expand-chat-button" onClick={enterChatMode}>Open full chat</button>
@@ -305,12 +392,42 @@ export default function App() {
           </div>
 
           <nav className="viewer-toolbar">
-            <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ Dual</button>
+            <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
             <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
             <button onClick={cycleForward} disabled={channels.length <= 1}>Next →</button>
           </nav>
         </main>
+
+        {showEdit && (
+          <div className="modal-backdrop" onClick={() => setShowEdit(false)}>
+            <section className="modal edit-group-modal" onClick={(event) => event.stopPropagation()}>
+              <button className="modal-close" onClick={() => setShowEdit(false)}><X /></button>
+              <h2>Edit this group</h2>
+              <p>Correct, add, or remove channels without leaving your current view.</p>
+              <div className="edit-channel-list">
+                {editInputs.map((value, index) => (
+                  <label key={index}>
+                    <span>{index + 1}</span>
+                    <input
+                      value={value}
+                      onChange={(event) => setEditInputs((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                      placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                    />
+                    {value && <button type="button" onClick={() => setEditInputs((current) => current.map((item, itemIndex) => itemIndex === index ? '' : item))} aria-label="Clear channel"><X /></button>}
+                  </label>
+                ))}
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => setShowEdit(false)}>Cancel</button>
+                <button className="primary-button" onClick={updateGroup} disabled={!editInputs.some((value) => cleanChannel(value))}>Update group</button>
+              </div>
+              {activeFavoriteId && <small className="favorite-update-note">This also updates the saved favorite on this device.</small>}
+            </section>
+          </div>
+        )}
 
         {showSave && (
           <div className="modal-backdrop" onClick={() => setShowSave(false)}>
@@ -332,14 +449,17 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <a className="brand" href="#top"><span><Radio /></span>SquadView</a>
-        <span className="coming-soon">Premium coming soon</span>
+        <div className="topbar-actions">
+          <button className="install-button" onClick={installApp}>Install app</button>
+          <span className="coming-soon">Premium coming soon</span>
+        </div>
       </header>
 
       <main id="top">
         <section className="hero">
           <div className="eyebrow"><span /> Built for phones, tablets, and laptops</div>
           <h1>Your streams.<br /><em>One view.</em></h1>
-          <p>Add up to four Twitch channels. SquadView keeps two playable streams visible, then lets you rotate the second slot through the rest of your group.</p>
+          <p>Add up to four Twitch channels. SquadView shows up to four streams on desktop and keeps two playable streams visible on smaller screens, with rotation through the rest of your group.</p>
         </section>
 
         <section className="builder-card">
@@ -385,7 +505,7 @@ export default function App() {
             <div className="favorites-list">
               {favorites.map((favorite) => (
                 <article key={favorite.id}>
-                  <button className="favorite-main" onClick={() => beginWatching(favorite.channels)}>
+                  <button className="favorite-main" onClick={() => beginWatching(favorite.channels, favorite.id)}>
                     <strong>{favorite.name}</strong>
                     <span>{favorite.channels.join(' · ')}</span>
                   </button>
@@ -414,6 +534,17 @@ export default function App() {
       </main>
 
       <footer><strong>SquadView</strong><span>Watch together, wherever.</span></footer>
+
+      {showInstallHelp && (
+        <div className="modal-backdrop" onClick={() => setShowInstallHelp(false)}>
+          <section className="modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowInstallHelp(false)}><X /></button>
+            <h2>Add SquadView to your home screen</h2>
+            <p>On iPhone, open the Share menu in Safari and choose <strong>Add to Home Screen</strong>. On Android or desktop Chrome, open the browser menu and choose <strong>Install app</strong>.</p>
+            <button className="primary-button" onClick={() => setShowInstallHelp(false)}>Got it</button>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
