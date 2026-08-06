@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
 
-# Production build
+# Vite build output
 dist/
 
-# Environment files
+# Local environment files
 .env
 .env.*
 !.env.example
@@ -19,9 +19,6 @@ pnpm-debug.log*
 # macOS
 .DS_Store
 
-# Editor files
+# Editors
 .vscode/
 .idea/
-
-# Vite cache
-.vite/
