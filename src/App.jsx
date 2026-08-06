@@ -37,7 +37,7 @@ export default function App() {
   const [inputs, setInputs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
-      return [...saved, '', '', '', ''].slice(0, 4);
+      return [...saved, '', '', '', '', '', '', '', ''].slice(0, 8);
     } catch {
       return ['', '', '', ''];
     }
@@ -48,13 +48,14 @@ export default function App() {
   const [favoriteName, setFavoriteName] = useState('');
   const [showSave, setShowSave] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [editInputs, setEditInputs] = useState(['', '', '', '']);
+  const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
   const [activeFavoriteId, setActiveFavoriteId] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [viewMode, setViewMode] = useState('dual');
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState([]);
+  const [desktopPage, setDesktopPage] = useState(0);
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
 
@@ -107,13 +108,14 @@ export default function App() {
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
 
   function beginWatching(selected = validInputs, favoriteId = null) {
-    const unique = [...new Set(selected)].slice(0, 4);
+    const unique = [...new Set(selected)].slice(0, 8);
     if (!unique.length) return;
     setChannels(unique);
     setActiveChannel(unique[0]);
     setAudioEnabled(false);
     setViewMode('dual');
     setSlotChannels(unique.slice(0, 2));
+    setDesktopPage(0);
     setActiveFavoriteId(favoriteId);
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
     setScreen('loading');
@@ -123,11 +125,19 @@ export default function App() {
   function selectChannel(channel) {
     setActiveChannel(channel);
     setAudioEnabled(true);
+    setDesktopPage(0);
 
     // A direct click is the best opportunity to start every stream currently
     // visible. Only the selected stream is audible; the others keep playing muted.
     const visibleNow = viewMode === 'dual'
-      ? (isDesktopGrid ? channels : slotChannels)
+      ? (isDesktopGrid
+          ? [
+              channel,
+              ...channels
+                .filter((item) => item !== channel)
+                .slice(desktopPage * 3, desktopPage * 3 + 3),
+            ]
+          : slotChannels)
       : [channel];
 
     playersRef.current.forEach((player, playerChannel) => {
@@ -175,12 +185,12 @@ export default function App() {
   }
 
   function openEditGroup() {
-    setEditInputs([...channels, '', '', '', ''].slice(0, 4));
+    setEditInputs([...channels, '', '', '', '', '', '', '', ''].slice(0, 8));
     setShowEdit(true);
   }
 
   function updateGroup() {
-    const unique = [...new Set(editInputs.map(cleanChannel).filter(Boolean))].slice(0, 4);
+    const unique = [...new Set(editInputs.map(cleanChannel).filter(Boolean))].slice(0, 8);
     if (!unique.length) return;
 
     const nextActive = unique.includes(activeChannel) ? activeChannel : unique[0];
@@ -188,6 +198,7 @@ export default function App() {
     const nextSecondary = currentSecondary || unique.find((channel) => channel !== nextActive);
 
     setChannels(unique);
+    setDesktopPage(0);
     setActiveChannel(nextActive);
     setSlotChannels([nextActive, nextSecondary].filter(Boolean));
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
@@ -308,12 +319,26 @@ export default function App() {
 
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
+    // On desktop, the focused stream stays pinned on every page. The remaining
+    // three grid slots rotate through the rest of the group.
+    const desktopOtherChannels = channels.filter((channel) => channel !== activeChannel);
+    const desktopPageSize = 3;
+    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherChannels.length / desktopPageSize));
+    const desktopPageStart = desktopPage * desktopPageSize;
+    const desktopPageOthers = desktopOtherChannels.slice(desktopPageStart, desktopPageStart + desktopPageSize);
+    const desktopChannels = [activeChannel, ...desktopPageOthers].filter(Boolean);
     const visibleChannels = viewMode === 'dual'
-      ? (isDesktopGrid ? channels : dualChannels)
+      ? (isDesktopGrid ? desktopChannels : dualChannels)
       : [activeChannel];
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const cycleBackward = viewMode === 'dual' ? previousOther : () => cycleFocused(-1);
     const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
+    const previousDesktopPage = () => {
+      setDesktopPage((current) => (current - 1 + desktopPageCount) % desktopPageCount);
+    };
+    const nextDesktopPage = () => {
+      setDesktopPage((current) => (current + 1) % desktopPageCount);
+    };
 
     return (
       <div className={`viewer-shell mode-${viewMode}`}>
@@ -332,9 +357,9 @@ export default function App() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <section className={`stream-stage mode-${viewMode} desktop-count-${channels.length}`}>
+            <section className={`stream-stage mode-${viewMode} desktop-count-${visibleChannels.length}`}>
               <div className="stream-stage-players">
-                {channels.map((channel) => (
+                {visibleChannels.map((channel) => (
                   <TwitchPlayer
                     key={channel}
                     channel={channel}
@@ -347,7 +372,7 @@ export default function App() {
                   />
                 ))}
 
-                {viewMode === 'dual' && isDesktopGrid && channels.length === 3 && (
+                {viewMode === 'dual' && isDesktopGrid && visibleChannels.length === 3 && (
                   <section className="desktop-grid-chat-tile">
                     <ChatPanel channel={activeChannel} />
                   </section>
@@ -361,6 +386,17 @@ export default function App() {
               )}
             </section>
 
+            {viewMode === 'dual' && isDesktopGrid && desktopPageCount > 1 && (
+              <div className="desktop-page-controls" aria-label="Change visible stream page">
+                <button onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
+                <div>
+                  <span>Focused stream pinned · rotating up to 3 others</span>
+                  <strong>Page {desktopPage + 1} of {desktopPageCount}</strong>
+                </div>
+                <button onClick={nextDesktopPage} aria-label="Next stream page">→</button>
+              </div>
+            )}
+
             {viewMode === 'dual' && !isDesktopGrid && channels.length > 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
                 <button onClick={previousOther} aria-label="Previous secondary stream">←</button>
@@ -372,7 +408,7 @@ export default function App() {
               </div>
             )}
 
-            {viewMode === 'dual' && !(isDesktopGrid && channels.length === 3) && (
+            {viewMode === 'dual' && !(isDesktopGrid && visibleChannels.length === 3) && (
               <section className="chat-preview">
                 <ChatPanel channel={activeChannel} compact />
                 <button className="expand-chat-button" onClick={enterChatMode}>Open full chat</button>
@@ -395,7 +431,7 @@ export default function App() {
             <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
             <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
-            <button onClick={cycleForward} disabled={channels.length <= 1}>Next →</button>
+            <button onClick={cycleForward} disabled={channels.length <= (isDesktopGrid ? 4 : 1)}>Next →</button>
           </nav>
         </main>
 
@@ -459,13 +495,13 @@ export default function App() {
         <section className="hero">
           <div className="eyebrow"><span /> Built for phones, tablets, and laptops</div>
           <h1>Your streams.<br /><em>One view.</em></h1>
-          <p>Add up to four Twitch channels. SquadView shows up to four streams on desktop and keeps two playable streams visible on smaller screens, with rotation through the rest of your group.</p>
+          <p>Add up to eight Twitch channels. SquadView loads only the streams currently on screen: up to four on desktop and two on smaller screens, with fast rotation through the rest of your group.</p>
         </section>
 
         <section className="builder-card">
           <div className="section-title">
             <div><span>Build your view</span><h2>Add Twitch channels</h2></div>
-            <small>{validInputs.length}/4</small>
+            <small>{validInputs.length}/8</small>
           </div>
 
           <div className="channel-list">
