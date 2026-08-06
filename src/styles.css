@@ -318,3 +318,67 @@ body.viewer-active { overflow: hidden; background: #392724; }
     display: none;
   }
 }
+
+/* Mobile Safari viewport and safe-area correction.
+   This is the final rule block in the full stylesheet so it replaces the
+   earlier mobile viewer sizing without requiring a second stylesheet. */
+@media (max-width: 899px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+    background: #030a08;
+  }
+
+  body.viewer-active {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    overflow: hidden;
+    background: #030a08;
+  }
+
+  /* Fixed positioning follows Safari's visible viewport more reliably than
+     a 100dvh flex shell when the browser bars expand or collapse. */
+  .viewer-shell {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    overflow: hidden;
+    background: #030a08;
+  }
+
+  /* Safari tabs do not always expose a non-zero safe-area value. The 44px
+     fallback keeps the title and actions below the status bar/Dynamic Island. */
+  .viewer-header {
+    flex: 0 0 auto;
+    min-height: calc(52px + max(env(safe-area-inset-top), 44px));
+    padding-top: max(env(safe-area-inset-top), 44px);
+    padding-bottom: 5px;
+  }
+
+  .viewer-content,
+  .viewer-workspace {
+    min-height: 0;
+  }
+
+  .viewer-toolbar {
+    flex: 0 0 auto;
+    min-height: calc(50px + max(env(safe-area-inset-bottom), 8px));
+    padding-bottom: max(env(safe-area-inset-bottom), 8px);
+    background: #071311;
+  }
+}
+
+/* Installed PWAs already receive real iOS safe-area values, so the same
+   max() rules remain correct without changing the standalone layout. */
+@media (display-mode: standalone) and (max-width: 899px) {
+  .viewer-header {
+    min-height: calc(52px + max(env(safe-area-inset-top), 20px));
+    padding-top: max(env(safe-area-inset-top), 20px);
+  }
+}
