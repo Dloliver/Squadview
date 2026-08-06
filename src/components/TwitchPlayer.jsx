@@ -44,6 +44,7 @@ export default function TwitchPlayer({
   active,
   audioEnabled,
   onSelect,
+  onFocus,
   registerPlayer,
 }) {
   const mountRef = useRef(null);
@@ -118,9 +119,12 @@ export default function TwitchPlayer({
         <span className="live-dot" />
         <strong>{channel}</strong>
         <small>{status}</small>
-        <button type="button" className={`listen-chip ${listening ? 'is-listening' : ''}`} onClick={handleListen}>
-          {listening ? 'Listening' : 'Play & listen'}
-        </button>
+        <div className="stream-card-actions">
+          <button type="button" className={`listen-chip ${listening ? 'is-listening' : ''}`} onClick={handleListen}>
+            {listening ? 'Listening' : 'Play & listen'}
+          </button>
+          <button type="button" className="focus-chip" onClick={onFocus}>Focus</button>
+        </div>
       </header>
       <div className="player-viewport">
         <div className="player-mount" ref={mountRef} />

@@ -47,10 +47,9 @@ export default function App() {
   const [favorites, setFavorites] = useState(readFavorites);
   const [favoriteName, setFavoriteName] = useState('');
   const [showSave, setShowSave] = useState(false);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [viewMode, setViewMode] = useState('dual');
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState([]);
-  const touchStartX = useRef(null);
   const playersRef = useRef(new Map());
 
   const registerPlayer = useCallback((channel, player) => {
@@ -85,6 +84,7 @@ export default function App() {
     setChannels(unique);
     setActiveChannel(unique[0]);
     setAudioEnabled(false);
+    setViewMode('dual');
     setSlotChannels(unique.slice(0, 2));
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
     setScreen('loading');
@@ -94,7 +94,6 @@ export default function App() {
   function selectChannel(channel) {
     setActiveChannel(channel);
     setAudioEnabled(true);
-    setChatOpen(true);
 
     // This runs inside the user's tap/click, which gives mobile browsers the
     // user gesture they require before starting audible playback.
@@ -141,6 +140,63 @@ export default function App() {
     rotateOther(1);
   }
 
+
+  function cycleFocused(direction) {
+    if (channels.length <= 1) return;
+    const currentIndex = Math.max(0, channels.indexOf(activeChannel));
+    const nextIndex = (currentIndex + direction + channels.length) % channels.length;
+    const nextChannel = channels[nextIndex];
+
+    setActiveChannel(nextChannel);
+    setAudioEnabled(true);
+
+    try {
+      playersRef.current.forEach((player, channel) => {
+        const selected = channel === nextChannel;
+        if (selected) player.play?.();
+        player.setMuted?.(!selected);
+        player.setVolume?.(selected ? 1 : 0);
+      });
+    } catch {
+      // State synchronization will apply once the player is ready.
+    }
+  }
+
+  function enterSolo(channel = activeChannel) {
+    setActiveChannel(channel);
+    setAudioEnabled(true);
+    setViewMode('solo');
+    try {
+      playersRef.current.get(channel)?.play?.();
+    } catch {
+      // Twitch's native controls remain available.
+    }
+  }
+
+  function enterChatMode() {
+    setViewMode('chat');
+  }
+
+  function returnToDual() {
+    setViewMode('dual');
+    setSlotChannels((current) => {
+      const nextSlots = current.includes(activeChannel)
+        ? current
+        : [activeChannel, channels.find((channel) => channel !== activeChannel)].filter(Boolean);
+
+      nextSlots.forEach((channel) => {
+        try {
+          playersRef.current.get(channel)?.play?.();
+          if (channel !== activeChannel) playersRef.current.get(channel)?.setMuted?.(true);
+        } catch {
+          // Twitch's native controls remain available.
+        }
+      });
+
+      return nextSlots;
+    });
+  }
+
   function saveFavorite() {
     const name = favoriteName.trim() || channels.join(' + ');
     const next = [{ id: crypto.randomUUID(), name, channels }, ...favorites];
@@ -173,14 +229,20 @@ export default function App() {
   }
 
   if (screen === 'viewer') {
-    const visibleChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
-    const rotatingChannel = visibleChannels.find((channel) => channel !== activeChannel) || visibleChannels[1] || '';
+    const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
+    const visibleChannels = viewMode === 'dual' ? dualChannels : [activeChannel];
+    const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
+    const cycleBackward = viewMode === 'dual' ? previousOther : () => cycleFocused(-1);
+    const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
 
     return (
-      <div className="viewer-shell">
+      <div className={`viewer-shell mode-${viewMode}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => setScreen('home')} aria-label="Back"><ArrowLeft /></button>
-          <div><strong>SquadView</strong><span>{channels.length} stream{channels.length === 1 ? '' : 's'}</span></div>
+          <div>
+            <strong>SquadView</strong>
+            <span>{viewMode === 'dual' ? 'Dual view' : viewMode === 'chat' ? 'Stream + chat' : 'Solo focus'}</span>
+          </div>
           <div className="header-actions">
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
             <button className="icon-button" onClick={() => setShowSave(true)} aria-label="Save favorite"><Heart /></button>
@@ -189,21 +251,30 @@ export default function App() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <section className={`dual-stream-stack showing-${visibleChannels.length}`}>
-              {channels.map((channel) => (
-                <TwitchPlayer
-                  key={channel}
-                  channel={channel}
-                  visible={visibleChannels.includes(channel)}
-                  active={activeChannel === channel}
-                  audioEnabled={audioEnabled}
-                  onSelect={() => selectChannel(channel)}
-                  registerPlayer={registerPlayer}
-                />
-              ))}
+            <section className={`stream-stage mode-${viewMode}`}>
+              <div className="stream-stage-players">
+                {channels.map((channel) => (
+                  <TwitchPlayer
+                    key={channel}
+                    channel={channel}
+                    visible={visibleChannels.includes(channel)}
+                    active={activeChannel === channel}
+                    audioEnabled={audioEnabled}
+                    onSelect={() => selectChannel(channel)}
+                    onFocus={() => enterSolo(channel)}
+                    registerPlayer={registerPlayer}
+                  />
+                ))}
+              </div>
+
+              {viewMode === 'chat' && (
+                <section className="focused-chat-panel">
+                  <ChatPanel channel={activeChannel} />
+                </section>
+              )}
             </section>
 
-            {channels.length > 2 && visibleChannels.length > 1 && (
+            {viewMode === 'dual' && channels.length > 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
                 <button onClick={previousOther} aria-label="Previous secondary stream">←</button>
                 <div>
@@ -214,18 +285,30 @@ export default function App() {
               </div>
             )}
 
-            {chatOpen && (
-              <section className="chat-below">
-                <ChatPanel channel={activeChannel} />
+            {viewMode === 'dual' && (
+              <section className="chat-preview">
+                <ChatPanel channel={activeChannel} compact />
+                <button className="expand-chat-button" onClick={enterChatMode}>Open full chat</button>
               </section>
+            )}
+
+            {viewMode !== 'dual' && channels.length > 1 && (
+              <div className="focus-carousel" aria-label="Move through selected streams">
+                <button onClick={cycleBackward} aria-label="Previous stream">←</button>
+                <div>
+                  <span>{viewMode === 'chat' ? 'Stream + chat' : 'Focused stream'}</span>
+                  <strong>{activeChannel}</strong>
+                </div>
+                <button onClick={cycleForward} aria-label="Next stream">→</button>
+              </div>
             )}
           </div>
 
           <nav className="viewer-toolbar">
-            <button onClick={previousOther} disabled={channels.length <= 2}>← Previous</button>
-            <button onClick={() => setChatOpen((value) => !value)}><Menu />{chatOpen ? 'Hide chat' : 'Show chat'}</button>
-            <button onClick={nextOther} disabled={channels.length <= 2}>Next →</button>
-            <button onClick={() => setShowSave(true)}><Save />Favorite</button>
+            <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ Dual</button>
+            <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
+            <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
+            <button onClick={cycleForward} disabled={channels.length <= 1}>Next →</button>
           </nav>
         </main>
 
