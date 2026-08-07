@@ -1,4 +1,4 @@
-const MEASUREMENT_ID = 'G-25Q1MYPG8Q';
+const MEASUREMENT_ID = 'G-25Q1MYPGBQ';
 const DATA_LAYER_NAME = 'squadviewDataLayer';
 
 function getDeviceCategory() {
