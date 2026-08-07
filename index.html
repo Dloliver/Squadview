@@ -27,10 +27,24 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="SquadView" />
     <title>SquadView — Watch Twitch Together</title>
-    <script type="module" crossorigin src="/assets/index-B4KoY_CA.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DqtzSWZK.css">
+
+    <!-- Google AdSense site verification and ad loader -->
+    <script
+      async
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2542993681900296"
+      crossorigin="anonymous"
+    ></script>
+    <script type="module" crossorigin src="/assets/index-DPXngtst.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BA34v376.css">
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      const redirectPath = sessionStorage.getItem('squadview:redirect-path');
+      if (redirectPath) {
+        sessionStorage.removeItem('squadview:redirect-path');
+        history.replaceState(null, '', redirectPath);
+      }
+    </script>
   </body>
 </html>
