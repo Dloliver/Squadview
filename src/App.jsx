@@ -3,6 +3,7 @@ import TwitchPlayer from './components/TwitchPlayer';
 import ChatPanel from './components/ChatPanel';
 import LoadingAd from './components/LoadingAd';
 import HomeAdSlot from './components/ads/HomeAdSlot';
+import FooterAdSlot from './components/ads/FooterAdSlot';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
@@ -637,6 +638,8 @@ function SquadViewApp() {
             <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and add them to any group in one tap.</p></article>
           </div>
         </section>
+
+        <FooterAdSlot />
       </main>
 
       <SiteFooter />

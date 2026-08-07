@@ -1,6 +1,17 @@
 export const AD_CONFIG = {
   enabled: import.meta.env.VITE_ADS_ENABLED !== 'false',
-  testMode: import.meta.env.VITE_ADS_TEST_MODE !== 'false',
+  testMode: import.meta.env.VITE_ADS_TEST_MODE === 'true',
+  clientId: 'ca-pub-2542993681900296',
+  slots: {
+    home: '7156528726',
+    loading: '6991063106',
+    footer: '3276993469',
+  },
+  formats: {
+    home: 'horizontal',
+    loading: 'vertical',
+    footer: 'horizontal',
+  },
   loadingMinimumSeconds: 5,
   loadingMaximumSeconds: 15,
   loadingCooldownMinutes: 20,
