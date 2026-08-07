@@ -24,21 +24,6 @@ export function initializeAnalytics() {
   window.gtag = window.gtag || function gtag() {
     window.dataLayer.push(arguments);
   };
-
-  window.gtag('js', new Date());
-  window.gtag('config', MEASUREMENT_ID, {
-    anonymize_ip: true,
-    send_page_view: true,
-  });
-
-  const existing = document.querySelector(`script[data-squadview-ga4="${MEASUREMENT_ID}"]`);
-  if (!existing) {
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = `https://www.googletagmanager.com/gtag/js?id=${MEASUREMENT_ID}`;
-    script.dataset.squadviewGa4 = MEASUREMENT_ID;
-    document.head.appendChild(script);
-  }
 }
 
 export function trackEvent(eventName, parameters = {}) {
