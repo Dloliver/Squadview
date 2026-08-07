@@ -9,6 +9,7 @@ import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
 import { markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
+import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
@@ -76,6 +77,7 @@ function SquadViewApp() {
   const [desktopPage, setDesktopPage] = useState(0);
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
+  const viewerSessionActiveRef = useRef(false);
 
   const registerPlayer = useCallback((channel, player) => {
     if (player) playersRef.current.set(channel, player);
@@ -122,6 +124,21 @@ function SquadViewApp() {
     };
   }, []);
 
+  useEffect(() => {
+    const trackViewerExitOnPageLeave = () => {
+      if (!viewerSessionActiveRef.current) return;
+      viewerSessionActiveRef.current = false;
+      trackEvent('viewer_exited', {
+        stream_count_bucket: getStreamCountBucket(channels.length),
+        exit_method: 'page_leave',
+      });
+    };
+
+    window.addEventListener('pagehide', trackViewerExitOnPageLeave);
+    return () => window.removeEventListener('pagehide', trackViewerExitOnPageLeave);
+  }, [channels.length]);
+
+
 
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
 
@@ -135,6 +152,10 @@ function SquadViewApp() {
     setSlotChannels(unique.slice(0, 2));
     setDesktopPage(0);
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
+    viewerSessionActiveRef.current = true;
+    trackEvent('viewer_started', {
+      stream_count_bucket: getStreamCountBucket(unique.length),
+    });
     if (shouldShowLoadingAd()) {
       markLoadingAdShown();
       setScreen('loading');
@@ -230,15 +251,32 @@ function SquadViewApp() {
   }
 
   async function installApp() {
+    trackEvent('install_app_clicked', {
+      current_screen: 'home',
+      install_prompt_available: Boolean(installPrompt),
+    });
+
     if (installPrompt) {
       installPrompt.prompt();
       await installPrompt.userChoice;
       setInstallPrompt(null);
       return;
     }
+
     setShowInstallHelp(true);
   }
 
+
+  function exitViewer(exitMethod = 'back_button') {
+    if (viewerSessionActiveRef.current) {
+      viewerSessionActiveRef.current = false;
+      trackEvent('viewer_exited', {
+        stream_count_bucket: getStreamCountBucket(channels.length),
+        exit_method: exitMethod,
+      });
+    }
+    setScreen('home');
+  }
 
   function cycleFocused(direction) {
     if (channels.length <= 1) return;
@@ -345,7 +383,7 @@ function SquadViewApp() {
       setAudioEnabled(false);
       setDesktopPage(0);
       localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify([]));
-      setScreen('home');
+      exitViewer('last_stream_removed');
       return;
     }
 
@@ -404,7 +442,7 @@ function SquadViewApp() {
     return (
       <div className={`viewer-shell mode-${viewMode}`}>
         <header className="viewer-header">
-          <button className="icon-button" onClick={() => setScreen('home')} aria-label="Back"><ArrowLeft /></button>
+          <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
             <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? 'Stream + chat' : 'Solo focus'}</span>
