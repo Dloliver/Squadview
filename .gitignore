@@ -22,3 +22,9 @@ pnpm-debug.log*
 # Editors
 .vscode/
 .idea/
+
+# Local project handoffs
+squadview-handoff-*/
+squadview-handoff-*.zip
+generate-squadview-handoff.sh
+SQUADVIEW_NEW_THREAD_STARTER.md
