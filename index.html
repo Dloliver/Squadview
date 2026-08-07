@@ -28,7 +28,6 @@
     <meta name="apple-mobile-web-app-title" content="SquadView" />
     <title>SquadView — Watch Twitch Together</title>
 
-    <!-- Google AdSense site verification and ad loader -->
     <script
       async
       src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2542993681900296"
@@ -39,12 +38,5 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      const redirectPath = sessionStorage.getItem('squadview:redirect-path');
-      if (redirectPath) {
-        sessionStorage.removeItem('squadview:redirect-path');
-        history.replaceState(null, '', redirectPath);
-      }
-    </script>
   </body>
 </html>
