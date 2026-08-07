@@ -1,22 +1,22 @@
 {
   "name": "SquadView",
   "short_name": "SquadView",
-  "description": "Watch multiple Twitch streams from one mobile-friendly view.",
-  "start_url": "./",
-  "scope": "./",
+  "description": "Watch multiple Twitch streams from one responsive, mobile-friendly view.",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#030a08",
   "theme_color": "#071311",
   "icons": [
     {
-      "src": "icons/icon-192.png",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "icons/icon-512.png",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
