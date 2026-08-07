@@ -2,12 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TwitchPlayer from './components/TwitchPlayer';
 import ChatPanel from './components/ChatPanel';
 import LoadingAd from './components/LoadingAd';
+import HomeAdSlot from './components/ads/HomeAdSlot';
+import SiteFooter from './components/legal/SiteFooter';
+import PrivacyPage from './pages/PrivacyPage';
+import TermsPage from './pages/TermsPage';
+import SupportPage from './pages/SupportPage';
+import { markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
 }
 const ArrowLeft = () => <Icon symbol="←" />;
 const Heart = () => <Icon symbol="♡" />;
+const FilledHeart = () => <Icon symbol="♥" />;
 const Maximize2 = () => <Icon symbol="⛶" />;
 const Menu = () => <Icon symbol="☰" />;
 const Radio = () => <Icon symbol="◉" />;
@@ -17,12 +24,25 @@ const Sparkles = () => <Icon symbol="✦" />;
 const Trash2 = () => <Icon symbol="×" />;
 const X = () => <Icon symbol="×" />;
 
-const FAVORITES_KEY = 'squadview:favorites:v1';
+const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
+const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
 
-function readFavorites() {
+function readFavoriteStreamers() {
   try {
-    return JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+    const saved = JSON.parse(localStorage.getItem(FAVORITE_STREAMERS_KEY) || '[]');
+    if (Array.isArray(saved) && saved.length) {
+      return [...new Set(saved.map(cleanChannel).filter(Boolean))];
+    }
+
+    // Preserve channels from the previous saved-group format the first time
+    // this version runs, then store them as individual favorite streamers.
+    const legacyGroups = JSON.parse(localStorage.getItem(LEGACY_FAVORITES_KEY) || '[]');
+    const migrated = [...new Set(legacyGroups.flatMap((group) => group?.channels || []).map(cleanChannel).filter(Boolean))];
+    if (migrated.length) {
+      localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(migrated));
+    }
+    return migrated;
   } catch {
     return [];
   }
@@ -32,7 +52,7 @@ function cleanChannel(value) {
   return value.trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 }
 
-export default function App() {
+function SquadViewApp() {
   const [screen, setScreen] = useState('home');
   const [inputs, setInputs] = useState(() => {
     try {
@@ -44,12 +64,9 @@ export default function App() {
   });
   const [channels, setChannels] = useState([]);
   const [activeChannel, setActiveChannel] = useState('');
-  const [favorites, setFavorites] = useState(readFavorites);
-  const [favoriteName, setFavoriteName] = useState('');
-  const [showSave, setShowSave] = useState(false);
+  const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
   const [showEdit, setShowEdit] = useState(false);
   const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
-  const [activeFavoriteId, setActiveFavoriteId] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [viewMode, setViewMode] = useState('dual');
@@ -107,7 +124,7 @@ export default function App() {
 
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
 
-  function beginWatching(selected = validInputs, favoriteId = null) {
+  function beginWatching(selected = validInputs) {
     const unique = [...new Set(selected)].slice(0, 8);
     if (!unique.length) return;
     setChannels(unique);
@@ -116,9 +133,13 @@ export default function App() {
     setViewMode('dual');
     setSlotChannels(unique.slice(0, 2));
     setDesktopPage(0);
-    setActiveFavoriteId(favoriteId);
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
-    setScreen('loading');
+    if (shouldShowLoadingAd()) {
+      markLoadingAdShown();
+      setScreen('loading');
+    } else {
+      setScreen('viewer');
+    }
   }
 
 
@@ -203,13 +224,6 @@ export default function App() {
     setSlotChannels([nextActive, nextSecondary].filter(Boolean));
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
 
-    if (activeFavoriteId) {
-      const nextFavorites = favorites.map((favorite) => (
-        favorite.id === activeFavoriteId ? { ...favorite, channels: unique } : favorite
-      ));
-      setFavorites(nextFavorites);
-      localStorage.setItem(FAVORITES_KEY, JSON.stringify(nextFavorites));
-    }
 
     setShowEdit(false);
   }
@@ -283,22 +297,68 @@ export default function App() {
     });
   }
 
-  function saveFavorite() {
-    const name = favoriteName.trim() || channels.join(' + ');
-    const id = crypto.randomUUID();
-    const next = [{ id, name, channels }, ...favorites];
-    setFavorites(next);
-    setActiveFavoriteId(id);
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
-    setFavoriteName('');
-    setShowSave(false);
+  function saveFavoriteStreamers(nextStreamers) {
+    const cleaned = [...new Set(nextStreamers.map(cleanChannel).filter(Boolean))];
+    setFavoriteStreamers(cleaned);
+    localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(cleaned));
   }
 
-  function removeFavorite(id) {
-    const next = favorites.filter((favorite) => favorite.id !== id);
-    setFavorites(next);
-    if (activeFavoriteId === id) setActiveFavoriteId(null);
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
+  function toggleFavoriteStreamer(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+    const next = favoriteStreamers.includes(cleaned)
+      ? favoriteStreamers.filter((item) => item !== cleaned)
+      : [cleaned, ...favoriteStreamers];
+    saveFavoriteStreamers(next);
+  }
+
+  function addFavoriteToGroup(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+    setInputs((current) => {
+      if (current.some((item) => cleanChannel(item) === cleaned)) return current;
+      const emptyIndex = current.findIndex((item) => !cleanChannel(item));
+      if (emptyIndex === -1) return current;
+      return current.map((item, index) => index === emptyIndex ? cleaned : item);
+    });
+  }
+
+  function removeFavoriteStreamer(channel) {
+    saveFavoriteStreamers(favoriteStreamers.filter((item) => item !== channel));
+  }
+
+  function removeChannelFromGroup(channelToRemove) {
+    const remaining = channels.filter((channel) => channel !== channelToRemove);
+
+    try {
+      playersRef.current.get(channelToRemove)?.setMuted?.(true);
+      playersRef.current.get(channelToRemove)?.setVolume?.(0);
+    } catch {
+      // The player may already be unmounting.
+    }
+
+    if (!remaining.length) {
+      setChannels([]);
+      setActiveChannel('');
+      setSlotChannels([]);
+      setAudioEnabled(false);
+      setDesktopPage(0);
+      localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify([]));
+      setScreen('home');
+      return;
+    }
+
+    const nextActive = channelToRemove === activeChannel ? remaining[0] : activeChannel;
+    const retainedSecondary = slotChannels.find(
+      (channel) => channel !== channelToRemove && channel !== nextActive && remaining.includes(channel),
+    );
+    const nextSecondary = retainedSecondary || remaining.find((channel) => channel !== nextActive);
+
+    setChannels(remaining);
+    setActiveChannel(nextActive);
+    setSlotChannels([nextActive, nextSecondary].filter(Boolean));
+    setDesktopPage(0);
+    localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(remaining));
   }
 
   async function shareView() {
@@ -351,7 +411,14 @@ export default function App() {
           <div className="header-actions">
             <button className="edit-group-button" onClick={openEditGroup}>Edit group</button>
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
-            <button className="icon-button" onClick={() => setShowSave(true)} aria-label="Save favorite"><Heart /></button>
+            <button
+              className={`icon-button ${favoriteStreamers.includes(activeChannel) ? 'is-favorite' : ''}`}
+              onClick={() => toggleFavoriteStreamer(activeChannel)}
+              aria-label={favoriteStreamers.includes(activeChannel) ? `Remove ${activeChannel} from favorite streamers` : `Save ${activeChannel} as a favorite streamer`}
+              title={favoriteStreamers.includes(activeChannel) ? 'Remove favorite streamer' : 'Save favorite streamer'}
+            >
+              {favoriteStreamers.includes(activeChannel) ? <FilledHeart /> : <Heart />}
+            </button>
           </div>
         </header>
 
@@ -368,6 +435,9 @@ export default function App() {
                     audioEnabled={audioEnabled}
                     onSelect={() => selectChannel(channel)}
                     onFocus={() => enterSolo(channel)}
+                    isFavorite={favoriteStreamers.includes(channel)}
+                    onToggleFavorite={() => toggleFavoriteStreamer(channel)}
+                    onRemove={() => removeChannelFromGroup(channel)}
                     registerPlayer={registerPlayer}
                   />
                 ))}
@@ -460,23 +530,10 @@ export default function App() {
                 <button className="secondary-button" onClick={() => setShowEdit(false)}>Cancel</button>
                 <button className="primary-button" onClick={updateGroup} disabled={!editInputs.some((value) => cleanChannel(value))}>Update group</button>
               </div>
-              {activeFavoriteId && <small className="favorite-update-note">This also updates the saved favorite on this device.</small>}
             </section>
           </div>
         )}
 
-        {showSave && (
-          <div className="modal-backdrop" onClick={() => setShowSave(false)}>
-            <section className="modal" onClick={(event) => event.stopPropagation()}>
-              <button className="modal-close" onClick={() => setShowSave(false)}><X /></button>
-              <Sparkles />
-              <h2>Save this favorite</h2>
-              <p>It will stay on this device. Accounts and cloud sync are coming later.</p>
-              <input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} placeholder="Friday night squad" />
-              <button className="primary-button" onClick={saveFavorite}>Save favorite</button>
-            </section>
-          </div>
-        )}
       </div>
     );
   }
@@ -531,29 +588,42 @@ export default function App() {
           <p className="ad-note">A short sponsor screen appears while your streams load.</p>
         </section>
 
+        <HomeAdSlot />
+
         <section className="favorites-section">
           <div className="section-title">
             <div><span>Your shortcuts</span><h2>Favorites</h2></div>
             <Heart />
           </div>
 
-          {favorites.length ? (
-            <div className="favorites-list">
-              {favorites.map((favorite) => (
-                <article key={favorite.id}>
-                  <button className="favorite-main" onClick={() => beginWatching(favorite.channels, favorite.id)}>
-                    <strong>{favorite.name}</strong>
-                    <span>{favorite.channels.join(' · ')}</span>
-                  </button>
-                  <button className="delete-button" onClick={() => removeFavorite(favorite.id)} aria-label={`Delete ${favorite.name}`}><Trash2 /></button>
-                </article>
-              ))}
+          {favoriteStreamers.length ? (
+            <div className="favorite-streamers-list">
+              {favoriteStreamers.map((streamer) => {
+                const alreadyAdded = validInputs.includes(streamer);
+                const groupIsFull = validInputs.length >= 8;
+                return (
+                  <article key={streamer}>
+                    <div className="favorite-streamer-name">
+                      <FilledHeart />
+                      <span><strong>{streamer}</strong><small>Twitch streamer</small></span>
+                    </div>
+                    <button
+                      className="favorite-add-button"
+                      onClick={() => addFavoriteToGroup(streamer)}
+                      disabled={alreadyAdded || groupIsFull}
+                    >
+                      {alreadyAdded ? 'Added' : groupIsFull ? 'Group full' : '+ Add'}
+                    </button>
+                    <button className="delete-button" onClick={() => removeFavoriteStreamer(streamer)} aria-label={`Remove ${streamer} from favorites`}><Trash2 /></button>
+                  </article>
+                );
+              })}
             </div>
           ) : (
             <div className="empty-favorites">
               <Heart />
-              <strong>No favorites yet</strong>
-              <p>Start a view, then save it for one-tap access next time.</p>
+              <strong>No favorite streamers yet</strong>
+              <p>While watching, tap the heart beside the active streamer. They will appear here for quick group building.</p>
             </div>
           )}
         </section>
@@ -564,12 +634,12 @@ export default function App() {
           <div className="steps">
             <article><b>01</b><strong>Tap</strong><p>Switch the active audio and chat.</p></article>
             <article><b>02</b><strong>Rotate</strong><p>Swap the other visible stream without losing your active one.</p></article>
-            <article><b>03</b><strong>Save</strong><p>Keep favorite groups on this device.</p></article>
+            <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and add them to any group in one tap.</p></article>
           </div>
         </section>
       </main>
 
-      <footer><strong>SquadView</strong><span>Watch together, wherever.</span></footer>
+      <SiteFooter />
 
       {showInstallHelp && (
         <div className="modal-backdrop" onClick={() => setShowInstallHelp(false)}>
@@ -583,4 +653,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+
+export default function App() {
+  const route = window.location.pathname.replace(/\/+$/, '') || '/';
+
+  if (route === '/privacy') return <PrivacyPage />;
+  if (route === '/terms') return <TermsPage />;
+  if (route === '/support' || route === '/contact') return <SupportPage />;
+
+  return <SquadViewApp />;
 }

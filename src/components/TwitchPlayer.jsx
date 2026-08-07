@@ -46,6 +46,9 @@ export default function TwitchPlayer({
   audioEnabled,
   onSelect,
   onFocus,
+  isFavorite = false,
+  onToggleFavorite,
+  onRemove,
   registerPlayer,
 }) {
   const mountRef = useRef(null);
@@ -119,11 +122,29 @@ export default function TwitchPlayer({
         <span className="live-dot" />
         <strong>{channel}</strong>
         <small>{status}</small>
+        <button
+          type="button"
+          className="remove-stream-chip"
+          onClick={onRemove}
+          aria-label={`Remove ${channel} from this group`}
+          title="Remove from this group"
+        >
+          <span aria-hidden="true">×</span>
+        </button>
         <div className="stream-card-actions">
           <button type="button" className={`listen-chip ${listening ? 'is-listening' : ''}`} onClick={handleListen}>
             {listening ? 'Listening' : 'Play & listen'}
           </button>
           <button type="button" className="focus-chip" onClick={onFocus}>Focus</button>
+          <button
+            type="button"
+            className={`favorite-chip ${isFavorite ? 'is-favorite' : ''}`}
+            onClick={onToggleFavorite}
+            aria-label={isFavorite ? `Remove ${channel} from favorites` : `Add ${channel} to favorites`}
+            title={isFavorite ? 'Remove favorite streamer' : 'Add favorite streamer'}
+          >
+            <span aria-hidden="true">{isFavorite ? '♥' : '♡'}</span>
+          </button>
         </div>
       </header>
       <div className="player-viewport">

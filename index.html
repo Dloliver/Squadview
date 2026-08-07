@@ -30,6 +30,13 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      const redirectPath = sessionStorage.getItem('squadview:redirect-path');
+      if (redirectPath) {
+        sessionStorage.removeItem('squadview:redirect-path');
+        history.replaceState(null, '', redirectPath);
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
