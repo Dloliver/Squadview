@@ -299,6 +299,22 @@ function SquadViewApp() {
     }
   }
 
+  function focusChannelAudio(channel) {
+    setActiveChannel(channel);
+    setAudioEnabled(true);
+
+    playersRef.current.forEach((player, playerChannel) => {
+      try {
+        const selected = playerChannel === channel;
+        if (selected) player.play?.();
+        player.setMuted?.(!selected);
+        player.setVolume?.(selected ? 1 : 0);
+      } catch {
+        // State synchronization will apply once the player is ready.
+      }
+    });
+  }
+
   function enterSolo(channel = activeChannel) {
     setActiveChannel(channel);
     setAudioEnabled(true);
@@ -426,9 +442,15 @@ function SquadViewApp() {
     const desktopPageStart = desktopPage * desktopPageSize;
     const desktopPageOthers = desktopOtherChannels.slice(desktopPageStart, desktopPageStart + desktopPageSize);
     const desktopChannels = [activeChannel, ...desktopPageOthers].filter(Boolean);
+    const desktopChatChannels = desktopChannels.slice(0, 3);
     const visibleChannels = viewMode === 'dual'
       ? (isDesktopGrid ? desktopChannels : dualChannels)
-      : [activeChannel];
+      : viewMode === 'chat' && isDesktopGrid
+        ? desktopChatChannels
+        : [activeChannel];
+    const desktopTileCount = viewMode === 'chat' && isDesktopGrid
+      ? visibleChannels.length + 1
+      : visibleChannels.length;
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const cycleBackward = viewMode === 'dual' ? previousOther : () => cycleFocused(-1);
     const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
@@ -463,7 +485,7 @@ function SquadViewApp() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <section className={`stream-stage mode-${viewMode} desktop-count-${visibleChannels.length}`}>
+            <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
               <div className="stream-stage-players">
                 {visibleChannels.map((channel) => (
                   <TwitchPlayer
@@ -473,7 +495,7 @@ function SquadViewApp() {
                     active={activeChannel === channel}
                     audioEnabled={audioEnabled}
                     onSelect={() => selectChannel(channel)}
-                    onFocus={() => enterSolo(channel)}
+                    onFocus={() => focusChannelAudio(channel)}
                     isFavorite={favoriteStreamers.includes(channel)}
                     onToggleFavorite={() => toggleFavoriteStreamer(channel)}
                     onRemove={() => removeChannelFromGroup(channel)}
@@ -481,30 +503,19 @@ function SquadViewApp() {
                   />
                 ))}
 
-                {viewMode === 'dual' && isDesktopGrid && visibleChannels.length === 3 && (
+                {viewMode === 'chat' && isDesktopGrid && (
                   <section className="desktop-grid-chat-tile">
                     <ChatPanel channel={activeChannel} />
                   </section>
                 )}
-              </div>
 
-              {viewMode === 'chat' && (
-                <section className="focused-chat-panel">
-                  <ChatPanel channel={activeChannel} />
-                </section>
-              )}
+                {viewMode === 'chat' && !isDesktopGrid && (
+                  <section className="mobile-chat-tile">
+                    <ChatPanel channel={activeChannel} />
+                  </section>
+                )}
+              </div>
             </section>
-
-            {viewMode === 'dual' && isDesktopGrid && desktopPageCount > 1 && (
-              <div className="desktop-page-controls" aria-label="Change visible stream page">
-                <button onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
-                <div>
-                  <span>Focused stream pinned · rotating up to 3 others</span>
-                  <strong>Page {desktopPage + 1} of {desktopPageCount}</strong>
-                </div>
-                <button onClick={nextDesktopPage} aria-label="Next stream page">→</button>
-              </div>
-            )}
 
             {viewMode === 'dual' && !isDesktopGrid && channels.length > 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
@@ -517,14 +528,14 @@ function SquadViewApp() {
               </div>
             )}
 
-            {viewMode === 'dual' && !(isDesktopGrid && visibleChannels.length === 3) && (
+            {viewMode === 'dual' && !isDesktopGrid && (
               <section className="chat-preview">
                 <ChatPanel channel={activeChannel} compact />
                 <button className="expand-chat-button" onClick={enterChatMode}>Open full chat</button>
               </section>
             )}
 
-            {viewMode !== 'dual' && channels.length > 1 && (
+            {viewMode !== 'dual' && !(viewMode === 'chat' && isDesktopGrid) && channels.length > 1 && (
               <div className="focus-carousel" aria-label="Move through selected streams">
                 <button onClick={cycleBackward} aria-label="Previous stream">←</button>
                 <div>
@@ -536,11 +547,25 @@ function SquadViewApp() {
             )}
           </div>
 
-          <nav className="viewer-toolbar">
+          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && viewMode !== 'solo' ? 'has-page-controls' : ''}`}>
             <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
             <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
+
+            {isDesktopGrid && desktopPageCount > 1 && viewMode !== 'solo' && (
+              <div className="toolbar-page-controls" aria-label="Change visible stream page">
+                <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
+                <span>Page {desktopPage + 1} of {desktopPageCount}</span>
+                <button type="button" onClick={nextDesktopPage} aria-label="Next stream page">→</button>
+              </div>
+            )}
+
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
-            <button onClick={cycleForward} disabled={channels.length <= (isDesktopGrid ? 4 : 1)}>Next →</button>
+            <button
+              onClick={isDesktopGrid && viewMode !== 'solo' ? nextDesktopPage : cycleForward}
+              disabled={isDesktopGrid && viewMode !== 'solo' ? desktopPageCount <= 1 : channels.length <= 1}
+            >
+              Next →
+            </button>
           </nav>
         </main>
 
