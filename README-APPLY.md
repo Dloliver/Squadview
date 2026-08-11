@@ -1,19 +1,37 @@
-# SquadView remove-stream buttons
+# SquadView static Google tag fix
 
-This overwrite adds an X beside each visible streamer's name. Clicking it removes that streamer from the current group and unmounts the player. If the active streamer is removed, focus moves to the next remaining streamer. Removing the final streamer returns to the home screen. Favorites are not affected.
+This moves the standard GA4 tag for `G-25Q1MYPG8Q` into the static `<head>` so Google Tag Diagnostics can detect it.
 
-Apply from the SquadView project root:
+It also updates the analytics helper so it does **not** load or configure GA4 a second time. Custom SquadView events continue using the existing `gtag()` function.
+
+## Apply
 
 ```bash
-rm -rf /tmp/SquadView-remove-stream-buttons
-mkdir -p /tmp/SquadView-remove-stream-buttons
-unzip -o ~/Downloads/SquadView-remove-stream-buttons.zip -d /tmp/SquadView-remove-stream-buttons
-cp -R /tmp/SquadView-remove-stream-buttons/SquadView-remove-stream-buttons/. .
+cd "/Users/dennisoliver/Dev/SquadView/Squadview"
+
+rm -rf /tmp/SquadView-static-Google-tag
+unzip -o ~/Downloads/SquadView-static-Google-tag.zip -d /tmp/SquadView-static-Google-tag
+
+cp -R /tmp/SquadView-static-Google-tag/SquadView-static-Google-tag/. .
 ```
 
-Then run:
+## Verify before deployment
 
 ```bash
-npm run dev
+grep -n -A8 -B2 "G-25Q1MYPG8Q" index.html
 npm run build
+grep -n -A8 -B2 "G-25Q1MYPG8Q" dist/index.html
 ```
+
+The tag should appear once in the built HTML.
+
+## Deploy
+
+```bash
+git add index.html src/analytics/dataLayer.js
+git commit -m "Move GA4 tag into static head"
+git push origin main
+npm run deploy
+```
+
+After deployment, use Google Analytics **Retest**. The existing `collect` requests should continue returning `204`.

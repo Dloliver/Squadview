@@ -29,6 +29,7 @@ const X = () => <Icon symbol="×" />;
 const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
 const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
+const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 
 function readFavoriteStreamers() {
   try {
@@ -67,6 +68,7 @@ function SquadViewApp() {
   const [channels, setChannels] = useState([]);
   const [activeChannel, setActiveChannel] = useState('');
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
+  const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
   const [showEdit, setShowEdit] = useState(false);
   const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -141,6 +143,51 @@ function SquadViewApp() {
 
 
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
+
+  useEffect(() => {
+    if (!LIVE_STATUS_API_URL || !favoriteStreamers.length) {
+      setLiveFavoriteStreamers(new Set());
+      return;
+    }
+
+    let cancelled = false;
+
+    async function refreshFavoriteLiveStatus() {
+      try {
+        const url = new URL(LIVE_STATUS_API_URL);
+        favoriteStreamers.forEach((streamer) => url.searchParams.append('login', streamer));
+
+        const response = await fetch(url.toString(), {
+          headers: { Accept: 'application/json' },
+        });
+
+        if (!response.ok) throw new Error(`Live status request failed with ${response.status}`);
+
+        const result = await response.json();
+        if (cancelled) return;
+
+        const live = Array.isArray(result?.live)
+          ? result.live.map(cleanChannel).filter(Boolean)
+          : [];
+
+        setLiveFavoriteStreamers(new Set(live));
+      } catch (error) {
+        if (!cancelled) setLiveFavoriteStreamers(new Set());
+        if (import.meta.env.DEV) {
+          console.info('[SquadView live status] unavailable', error);
+        }
+      }
+    }
+
+    refreshFavoriteLiveStatus();
+    const interval = window.setInterval(refreshFavoriteLiveStatus, 3 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [favoriteStreamers]);
+
 
   function beginWatching(selected = validInputs) {
     const unique = [...new Set(selected)].slice(0, 8);
@@ -517,7 +564,7 @@ function SquadViewApp() {
               </div>
             </section>
 
-            {viewMode === 'dual' && !isDesktopGrid && channels.length > 2 && dualChannels.length > 1 && (
+            {!isDesktopGrid && viewMode === 'dual' && channels.length === 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
                 <button onClick={previousOther} aria-label="Previous secondary stream">←</button>
                 <div>
@@ -528,21 +575,39 @@ function SquadViewApp() {
               </div>
             )}
 
-            {viewMode === 'dual' && !isDesktopGrid && (
-              <section className="chat-preview">
-                <ChatPanel channel={activeChannel} compact />
-                <button className="expand-chat-button" onClick={enterChatMode}>Open full chat</button>
-              </section>
+            {!isDesktopGrid && channels.length > 2 && (
+              <div className="mobile-stream-pager" aria-label="Move through streams">
+                <button
+                  onClick={viewMode === 'dual' ? previousOther : () => cycleFocused(-1)}
+                  aria-label="Previous stream"
+                >
+                  ←
+                </button>
+                <div>
+                  <span>{viewMode === 'dual' ? 'Other stream' : viewMode === 'chat' ? 'Stream + chat' : 'Focused stream'}</span>
+                  <strong>
+                    {viewMode === 'dual'
+                      ? `${channels.indexOf(rotatingChannel) + 1} of ${channels.length}`
+                      : `${channels.indexOf(activeChannel) + 1} of ${channels.length}`}
+                  </strong>
+                </div>
+                <button
+                  onClick={viewMode === 'dual' ? nextOther : () => cycleFocused(1)}
+                  aria-label="Next stream"
+                >
+                  →
+                </button>
+              </div>
             )}
 
-            {viewMode !== 'dual' && !(viewMode === 'chat' && isDesktopGrid) && channels.length > 1 && (
+            {!isDesktopGrid && channels.length === 2 && viewMode !== 'dual' && (
               <div className="focus-carousel" aria-label="Move through selected streams">
-                <button onClick={cycleBackward} aria-label="Previous stream">←</button>
+                <button onClick={() => cycleFocused(-1)} aria-label="Previous stream">←</button>
                 <div>
                   <span>{viewMode === 'chat' ? 'Stream + chat' : 'Focused stream'}</span>
                   <strong>{activeChannel}</strong>
                 </div>
-                <button onClick={cycleForward} aria-label="Next stream">→</button>
+                <button onClick={() => cycleFocused(1)} aria-label="Next stream">→</button>
               </div>
             )}
           </div>
@@ -560,12 +625,14 @@ function SquadViewApp() {
             )}
 
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
-            <button
-              onClick={isDesktopGrid && viewMode !== 'solo' ? nextDesktopPage : cycleForward}
-              disabled={isDesktopGrid && viewMode !== 'solo' ? desktopPageCount <= 1 : channels.length <= 1}
-            >
-              Next →
-            </button>
+            {isDesktopGrid && (
+              <button
+                onClick={viewMode !== 'solo' ? nextDesktopPage : cycleForward}
+                disabled={viewMode !== 'solo' ? desktopPageCount <= 1 : channels.length <= 1}
+              >
+                Next →
+              </button>
+            )}
           </nav>
         </main>
 
@@ -669,7 +736,13 @@ function SquadViewApp() {
                   <article key={streamer}>
                     <div className="favorite-streamer-name">
                       <FilledHeart />
-                      <span><strong>{streamer}</strong><small>Twitch streamer</small></span>
+                      <span>
+                        <strong>{streamer}</strong>
+                        <small>
+                          {liveFavoriteStreamers.has(streamer) && <i className="live-dot" aria-hidden="true" />}
+                          {liveFavoriteStreamers.has(streamer) ? 'Live now' : 'Twitch streamer'}
+                        </small>
+                      </span>
                     </div>
                     <button
                       className="favorite-add-button"
