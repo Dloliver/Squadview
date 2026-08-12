@@ -2,7 +2,9 @@ import LegalLayout from './LegalLayout';
 
 export default function TermsPage() {
   return (
-    <LegalLayout eyebrow="Using SquadView" title="SquadView Terms of Use">
+    <LegalLayout eyebrow="Using SquadView" title="SquadView Terms of Use"
+      description="Read the terms that apply when using SquadView, including Twitch embeds, acceptable use, local data, availability, and intellectual property."
+    >
       <p>These terms apply when you access or use SquadView, a product operated by Do More Business LLC.</p>
 
       <h2>Independent service</h2>

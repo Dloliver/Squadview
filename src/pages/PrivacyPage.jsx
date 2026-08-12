@@ -2,7 +2,9 @@ import LegalLayout from './LegalLayout';
 
 export default function PrivacyPage() {
   return (
-    <LegalLayout eyebrow="Your privacy" title="SquadView Privacy Policy">
+    <LegalLayout eyebrow="Your privacy" title="SquadView Privacy Policy"
+      description="Read how SquadView handles local preferences, Twitch embeds, analytics, advertising, cookies, and privacy choices."
+    >
       <p>SquadView is operated by Do More Business LLC. This policy describes information used when you visit squadview.app and use the SquadView multistream viewer.</p>
 
       <h2>Information stored on your device</h2>

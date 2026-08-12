@@ -8,6 +8,7 @@ import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
+import AboutPage from './pages/AboutPage';
 import { markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
 
@@ -944,6 +945,17 @@ function SquadViewApp() {
               </div>
             </section>
 
+            <section className="about-squadview" aria-labelledby="about-squadview-heading">
+              <span>Built for multi stream viewing</span>
+              <h2 id="about-squadview-heading">Follow more of the action without living in browser tabs.</h2>
+              <p>SquadView is an independent viewing interface for Twitch streams. Add the creators you want to follow, keep multiple perspectives visible, and choose which stream you want to hear without rebuilding your setup every time the action moves.</p>
+              <p>The experience is designed for tournaments, creator collaborations, friend groups, watch parties, and any moment where one Twitch stream does not tell the whole story. SquadView provides the layout, audio focus, favorites, and viewing controls while Twitch continues to provide the video and chat.</p>
+              <div className="about-squadview-links">
+                <a href="/about">Learn more about SquadView →</a>
+                <a href="/support">Help and FAQ →</a>
+              </div>
+            </section>
+
             <FooterAdSlot />
           </>
         ) : (
@@ -1060,6 +1072,7 @@ function SquadViewApp() {
 export default function App() {
   const route = window.location.pathname.replace(/\/+$/, '') || '/';
 
+  if (route === '/about') return <AboutPage />;
   if (route === '/privacy') return <PrivacyPage />;
   if (route === '/terms') return <TermsPage />;
   if (route === '/support' || route === '/contact') return <SupportPage />;
