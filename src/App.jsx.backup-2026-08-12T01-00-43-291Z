@@ -871,6 +871,11 @@ function SquadViewApp() {
                 </div>
               )}
 
+              <div className="auto-layout">
+                <div><Sparkles /><span><strong>Auto layout</strong><small>We’ll arrange the screen based on how many streams you add.</small></span></div>
+                <span className="status-pill">On</span>
+              </div>
+
               <button className="primary-button start-button" disabled={!validInputs.length} onClick={() => beginWatching()}>
                 {validInputs.length ? `Start watching ${validInputs.length}` : 'Start watching'} <span>→</span>
               </button>

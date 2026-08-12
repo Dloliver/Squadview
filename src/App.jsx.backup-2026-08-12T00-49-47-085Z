@@ -69,8 +69,6 @@ function SquadViewApp() {
   const [activeChannel, setActiveChannel] = useState('');
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
   const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
-  const [landingTab, setLandingTab] = useState('home');
-  const [builderMode, setBuilderMode] = useState('manual');
   const [showEdit, setShowEdit] = useState(false);
   const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -145,18 +143,6 @@ function SquadViewApp() {
 
 
   const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
-  const sortedFavoriteStreamers = useMemo(
-    () => [...favoriteStreamers].sort((first, second) => {
-      const liveDifference =
-        Number(liveFavoriteStreamers.has(second)) - Number(liveFavoriteStreamers.has(first));
-      return liveDifference || first.localeCompare(second);
-    }),
-    [favoriteStreamers, liveFavoriteStreamers],
-  );
-  const liveFavoriteList = useMemo(
-    () => sortedFavoriteStreamers.filter((streamer) => liveFavoriteStreamers.has(streamer)),
-    [sortedFavoriteStreamers, liveFavoriteStreamers],
-  );
 
   useEffect(() => {
     if (!LIVE_STATUS_API_URL || !favoriteStreamers.length) {
@@ -443,21 +429,6 @@ function SquadViewApp() {
     saveFavoriteStreamers(favoriteStreamers.filter((item) => item !== channel));
   }
 
-  function removeFromBuildList(channel) {
-    const cleaned = cleanChannel(channel);
-    if (!cleaned) return;
-    setInputs((current) =>
-      current.map((item) => cleanChannel(item) === cleaned ? '' : item),
-    );
-  }
-
-  function openLandingTab(tab) {
-    setLandingTab(tab);
-    window.requestAnimationFrame(() => {
-      document.getElementById('top')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }
-
   function removeChannelFromGroup(channelToRemove) {
     const remaining = channels.filter((channel) => channel !== channelToRemove);
 
@@ -701,30 +672,7 @@ function SquadViewApp() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" onClick={() => setLandingTab('home')}>
-          <span><Radio /></span>SquadView
-        </a>
-
-        <nav className="topbar-nav" aria-label="SquadView pages">
-          <button
-            type="button"
-            className={landingTab === 'home' ? 'is-current' : ''}
-            onClick={() => openLandingTab('home')}
-          >
-            Home
-          </button>
-          <button
-            type="button"
-            className={landingTab === 'favorites' ? 'is-current' : ''}
-            onClick={() => openLandingTab('favorites')}
-          >
-            Favorites
-            {liveFavoriteList.length > 0 && (
-              <span className="nav-live-count">{liveFavoriteList.length} live</span>
-            )}
-          </button>
-        </nav>
-
+        <a className="brand" href="#top"><span><Radio /></span>SquadView</a>
         <div className="topbar-actions">
           <button className="install-button" onClick={installApp}>Install app</button>
           <span className="coming-soon">Premium coming soon</span>
@@ -732,316 +680,106 @@ function SquadViewApp() {
       </header>
 
       <main id="top">
-        {landingTab === 'home' ? (
-          <>
-            <section className="hero">
-              <div className="eyebrow"><span /> Built for phones, tablets, and laptops</div>
-              <h1>Your streams.<br /><em>One view.</em></h1>
-              <p>Add up to eight Twitch channels. Type a channel directly or build your view from favorites, then SquadView only loads the streams currently on screen.</p>
-            </section>
+        <section className="hero">
+          <div className="eyebrow"><span /> Built for phones, tablets, and laptops</div>
+          <h1>Your streams.<br /><em>One view.</em></h1>
+          <p>Add up to eight Twitch channels. SquadView loads only the streams currently on screen: up to four on desktop and two on smaller screens, with fast rotation through the rest of your group.</p>
+        </section>
 
-            <section className="builder-card">
-              <div className="section-title">
-                <div><span>Build your view</span><h2>Choose your streams</h2></div>
-                <small>{validInputs.length}/8</small>
-              </div>
+        <section className="builder-card">
+          <div className="section-title">
+            <div><span>Build your view</span><h2>Add Twitch channels</h2></div>
+            <small>{validInputs.length}/8</small>
+          </div>
 
-              <div className="builder-source-toggle" role="radiogroup" aria-label="Choose how to add streams">
-                <label className={builderMode === 'manual' ? 'is-current' : ''}>
-                  <input
-                    type="radio"
-                    name="builder-source"
-                    value="manual"
-                    checked={builderMode === 'manual'}
-                    onChange={() => setBuilderMode('manual')}
-                  />
-                  <span>Enter streamers</span>
-                </label>
-                <label className={builderMode === 'favorites' ? 'is-current' : ''}>
-                  <input
-                    type="radio"
-                    name="builder-source"
-                    value="favorites"
-                    checked={builderMode === 'favorites'}
-                    onChange={() => setBuilderMode('favorites')}
-                  />
-                  <span>Favorites</span>
-                </label>
-              </div>
+          <div className="channel-list">
+            {inputs.map((value, index) => (
+              <label key={index}>
+                <span>{index + 1}</span>
+                <input
+                  value={value}
+                  onChange={(event) => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                  placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
+                {value && <button onClick={() => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? '' : item))} aria-label="Clear"><X /></button>}
+              </label>
+            ))}
+          </div>
 
-              {builderMode === 'manual' ? (
-                <div className="channel-list">
-                  {inputs.map((value, index) => (
-                    <label key={index}>
-                      <span>{index + 1}</span>
-                      <input
-                        value={value}
-                        onChange={(event) => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
-                        placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                      />
-                      {value && (
-                        <button
-                          type="button"
-                          onClick={() => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? '' : item))}
-                          aria-label="Clear"
-                        >
-                          <X />
-                        </button>
-                      )}
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <div className="builder-favorites-panel">
-                  <div className="builder-favorites-heading">
-                    <div>
-                      <strong>Favorite streamers</strong>
-                      <small>
-                        {liveFavoriteList.length
-                          ? `${liveFavoriteList.length} live now. Live streamers are shown first.`
-                          : 'Your saved streamers are ready when you are.'}
-                      </small>
+          <div className="auto-layout">
+            <div><Sparkles /><span><strong>Auto layout</strong><small>We’ll arrange the screen based on how many streams you add.</small></span></div>
+            <span className="status-pill">On</span>
+          </div>
+
+          <button className="primary-button start-button" disabled={!validInputs.length} onClick={() => beginWatching()}>
+            Start watching <span>→</span>
+          </button>
+          <p className="ad-note">A short sponsor screen appears while your streams load.</p>
+        </section>
+
+        <HomeAdSlot />
+
+        <section className="favorites-section">
+          <div className="section-title">
+            <div><span>Your shortcuts</span><h2>Favorites</h2></div>
+            <Heart />
+          </div>
+
+          {favoriteStreamers.length ? (
+            <div className="favorite-streamers-list">
+              {favoriteStreamers.map((streamer) => {
+                const alreadyAdded = validInputs.includes(streamer);
+                const groupIsFull = validInputs.length >= 8;
+                return (
+                  <article key={streamer}>
+                    <div className="favorite-streamer-name">
+                      <FilledHeart />
+                      <span>
+                        <strong>{streamer}</strong>
+                        <small>
+                          {liveFavoriteStreamers.has(streamer) && <i className="live-dot" aria-hidden="true" />}
+                          {liveFavoriteStreamers.has(streamer) ? 'Live now' : 'Twitch streamer'}
+                        </small>
+                      </span>
                     </div>
-                    <button type="button" onClick={() => openLandingTab('favorites')}>
-                      Manage favorites →
+                    <button
+                      className="favorite-add-button"
+                      onClick={() => addFavoriteToGroup(streamer)}
+                      disabled={alreadyAdded || groupIsFull}
+                    >
+                      {alreadyAdded ? 'Added' : groupIsFull ? 'Group full' : '+ Add'}
                     </button>
-                  </div>
-
-                  {sortedFavoriteStreamers.length ? (
-                    <div className="builder-favorite-list">
-                      {sortedFavoriteStreamers.map((streamer) => {
-                        const alreadyAdded = validInputs.includes(streamer);
-                        const groupIsFull = validInputs.length >= 8;
-                        const isLive = liveFavoriteStreamers.has(streamer);
-
-                        return (
-                          <article key={streamer} className={isLive ? 'is-live' : ''}>
-                            <div className="favorite-streamer-name">
-                              <FilledHeart />
-                              <span>
-                                <strong>{streamer}</strong>
-                                <small>
-                                  {isLive && <i className="live-dot" aria-hidden="true" />}
-                                  {isLive ? 'Live now' : 'Offline'}
-                                </small>
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              className="favorite-add-button"
-                              onClick={() => addFavoriteToGroup(streamer)}
-                              disabled={alreadyAdded || groupIsFull}
-                            >
-                              {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add'}
-                            </button>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="empty-favorites compact">
-                      <Heart />
-                      <strong>No favorite streamers yet</strong>
-                      <p>Favorite someone while watching and they will appear here.</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {validInputs.length > 0 && (
-                <div className="build-selection-strip">
-                  <div className="build-selection-heading">
-                    <span>Your view</span>
-                    <strong>{validInputs.length} of 8 selected</strong>
-                  </div>
-                  <div className="build-selection-chips">
-                    {validInputs.map((streamer) => (
-                      <button
-                        type="button"
-                        key={streamer}
-                        onClick={() => removeFromBuildList(streamer)}
-                        aria-label={`Remove ${streamer} from view`}
-                      >
-                        {streamer} <span aria-hidden="true">×</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <button className="primary-button start-button" disabled={!validInputs.length} onClick={() => beginWatching()}>
-                {validInputs.length ? `Start watching ${validInputs.length}` : 'Start watching'} <span>→</span>
-              </button>
-              <p className="ad-note">A short sponsor screen appears while your streams load.</p>
-            </section>
-
-            <HomeAdSlot />
-
-            {favoriteStreamers.length > 0 && (
-              <section className="live-favorites-section">
-                <div className="section-title">
-                  <div>
-                    <span>Your shortcuts</span>
-                    <h2>
-                      {liveFavoriteList.length
-                        ? `${liveFavoriteList.length} favorite${liveFavoriteList.length === 1 ? '' : 's'} live now`
-                        : 'Favorite streamers'}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    className="favorites-link-button"
-                    onClick={() => openLandingTab('favorites')}
-                  >
-                    View favorites →
-                  </button>
-                </div>
-
-                {liveFavoriteList.length ? (
-                  <div className="live-favorites-preview">
-                    {liveFavoriteList.slice(0, 3).map((streamer) => {
-                      const alreadyAdded = validInputs.includes(streamer);
-                      const groupIsFull = validInputs.length >= 8;
-                      return (
-                        <article key={streamer}>
-                          <div>
-                            <strong>{streamer}</strong>
-                            <small><i className="live-dot" aria-hidden="true" /> Live now</small>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => addFavoriteToGroup(streamer)}
-                            disabled={alreadyAdded || groupIsFull}
-                          >
-                            {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add to view'}
-                          </button>
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="live-favorites-empty">
-                    <Heart />
-                    <div>
-                      <strong>No favorites are live right now</strong>
-                      <small>You can still build a view from your saved streamers.</small>
-                    </div>
-                    <button type="button" onClick={() => openLandingTab('favorites')}>Open favorites</button>
-                  </div>
-                )}
-              </section>
-            )}
-
-            <section className="how-it-works">
-              <span>Simple by design</span>
-              <h2>Tap. Listen. Focus.</h2>
-              <div className="steps">
-                <article><b>01</b><strong>Tap</strong><p>Switch the active audio and chat.</p></article>
-                <article><b>02</b><strong>Rotate</strong><p>Swap the other visible stream without losing your active one.</p></article>
-                <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and build future views in one tap.</p></article>
-              </div>
-            </section>
-
-            <FooterAdSlot />
-          </>
-        ) : (
-          <section className="favorites-page">
-            <div className="favorites-page-heading">
-              <div>
-                <span>Your shortcuts</span>
-                <h1>Favorites</h1>
-                <p>See who is live, add streamers directly to your current view, and keep your saved list organized.</p>
-              </div>
-              <div className="favorites-live-summary">
-                <strong>{liveFavoriteList.length}</strong>
-                <span>live now</span>
-              </div>
+                    <button className="delete-button" onClick={() => removeFavoriteStreamer(streamer)} aria-label={`Remove ${streamer} from favorites`}><Trash2 /></button>
+                  </article>
+                );
+              })}
             </div>
-
-            {sortedFavoriteStreamers.length ? (
-              <div className="favorites-page-list">
-                {sortedFavoriteStreamers.map((streamer) => {
-                  const alreadyAdded = validInputs.includes(streamer);
-                  const groupIsFull = validInputs.length >= 8;
-                  const isLive = liveFavoriteStreamers.has(streamer);
-
-                  return (
-                    <article key={streamer} className={isLive ? 'is-live' : ''}>
-                      <div className="favorite-streamer-name">
-                        <FilledHeart />
-                        <span>
-                          <strong>{streamer}</strong>
-                          <small>
-                            {isLive && <i className="live-dot" aria-hidden="true" />}
-                            {isLive ? 'Live now' : 'Offline'}
-                          </small>
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="favorite-add-button"
-                        onClick={() => addFavoriteToGroup(streamer)}
-                        disabled={alreadyAdded || groupIsFull}
-                      >
-                        {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add'}
-                      </button>
-
-                      <button
-                        type="button"
-                        className="delete-button"
-                        onClick={() => removeFavoriteStreamer(streamer)}
-                        aria-label={`Remove ${streamer} from favorites`}
-                      >
-                        <Trash2 />
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="empty-favorites favorites-page-empty">
-                <Heart />
-                <strong>No favorite streamers yet</strong>
-                <p>While watching, tap the heart beside a streamer. They will appear here for quick group building.</p>
-              </div>
-            )}
-
-            <div className="favorites-build-dock">
-              <div>
-                <span>Current view</span>
-                <strong>
-                  {validInputs.length
-                    ? `${validInputs.length} streamer${validInputs.length === 1 ? '' : 's'} selected`
-                    : 'No streamers selected yet'}
-                </strong>
-              </div>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setBuilderMode('manual');
-                  openLandingTab('home');
-                }}
-              >
-                View list
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={!validInputs.length}
-                onClick={() => beginWatching()}
-              >
-                {validInputs.length ? `Start watching ${validInputs.length} →` : 'Start watching →'}
-              </button>
+          ) : (
+            <div className="empty-favorites">
+              <Heart />
+              <strong>No favorite streamers yet</strong>
+              <p>While watching, tap the heart beside the active streamer. They will appear here for quick group building.</p>
             </div>
-          </section>
-        )}
+          )}
+        </section>
+
+        <section className="how-it-works">
+          <span>Simple by design</span>
+          <h2>Tap. Listen. Focus.</h2>
+          <div className="steps">
+            <article><b>01</b><strong>Tap</strong><p>Switch the active audio and chat.</p></article>
+            <article><b>02</b><strong>Rotate</strong><p>Swap the other visible stream without losing your active one.</p></article>
+            <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and add them to any group in one tap.</p></article>
+          </div>
+        </section>
+
+        <FooterAdSlot />
       </main>
 
       <SiteFooter />
+
       {showInstallHelp && (
         <div className="modal-backdrop" onClick={() => setShowInstallHelp(false)}>
           <section className="modal" onClick={(event) => event.stopPropagation()}>
