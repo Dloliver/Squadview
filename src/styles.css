@@ -329,11 +329,18 @@ body.viewer-active { overflow: hidden; background: #392724; }
 /* Desktop viewport-fit grid. This replaces the earlier desktop sizing rules. */
 @media (min-width: 1100px) {
   .viewer-workspace {
+    /* Give the Twitch grid a definite height. This prevents the absolutely
+       positioned Twitch iframes from leaving only their header rows visible
+       after a hard browser refresh. */
+    flex: 0 0 calc(100dvh - 110px);
+    height: calc(100dvh - 110px);
+    min-height: 0;
     overflow: hidden;
   }
 
   .stream-stage.mode-dual,
   .stream-stage.mode-chat {
+    box-sizing: border-box;
     height: 100%;
     min-height: 0;
   }
@@ -342,9 +349,18 @@ body.viewer-active { overflow: hidden; background: #392724; }
   .stream-stage.mode-chat .stream-stage-players {
     height: 100%;
     min-height: 0;
+    align-items: stretch;
+  }
+
+  .stream-stage.mode-dual .stream-stage-players {
     grid-template-columns: repeat(2, minmax(400px, 1fr));
     grid-template-rows: repeat(2, minmax(0, 1fr));
-    align-items: stretch;
+  }
+
+  /* Desktop chat mirrors mobile: one selected stream plus its chat. */
+  .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: minmax(0, 1.35fr) minmax(360px, .65fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .stream-stage.mode-dual + .mix-controls {
@@ -400,7 +416,7 @@ body.viewer-active { overflow: hidden; background: #392724; }
     border: 0;
   }
 
-  /* On desktop Chat is a true fourth tile, never an overlay or side panel. */
+  /* Keep desktop chat inside the same viewer workspace as the focused stream. */
   .stream-stage.mode-chat {
     display: block;
   }

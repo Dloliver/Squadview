@@ -30,6 +30,7 @@ const X = () => <Icon symbol="×" />;
 const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
 const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
+const VIEWER_SESSION_KEY = 'squadview:viewer-session:v1';
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 
 function readFavoriteStreamers() {
@@ -53,11 +54,48 @@ function readFavoriteStreamers() {
 }
 
 function cleanChannel(value) {
-  return value.trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+  return String(value || '').trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+}
+
+function readViewerSession() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(VIEWER_SESSION_KEY) || 'null');
+    const restoredChannels = Array.isArray(saved?.channels)
+      ? [...new Set(saved.channels.map(cleanChannel).filter(Boolean))].slice(0, 8)
+      : [];
+
+    if (!restoredChannels.length) return null;
+
+    const requestedActive = cleanChannel(saved?.activeChannel);
+    const restoredActive = restoredChannels.includes(requestedActive)
+      ? requestedActive
+      : restoredChannels[0];
+    const restoredMode = ['dual', 'chat', 'solo'].includes(saved?.viewMode)
+      ? saved.viewMode
+      : 'dual';
+    const restoredSlots = Array.isArray(saved?.slotChannels)
+      ? [...new Set(saved.slotChannels.map(cleanChannel).filter((channel) => restoredChannels.includes(channel)))].slice(0, 2)
+      : [];
+    const fallbackSecondary = restoredChannels.find((channel) => channel !== restoredActive);
+    const normalizedSlots = restoredSlots.includes(restoredActive)
+      ? restoredSlots
+      : [restoredActive, restoredSlots[0] || fallbackSecondary].filter(Boolean);
+
+    return {
+      channels: restoredChannels,
+      activeChannel: restoredActive,
+      viewMode: restoredMode,
+      slotChannels: normalizedSlots,
+      desktopPage: Number.isInteger(saved?.desktopPage) && saved.desktopPage >= 0 ? saved.desktopPage : 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function SquadViewApp() {
-  const [screen, setScreen] = useState('home');
+  const [restoredViewer] = useState(readViewerSession);
+  const [screen, setScreen] = useState(() => restoredViewer ? 'viewer' : 'home');
   const [inputs, setInputs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
@@ -66,8 +104,8 @@ function SquadViewApp() {
       return ['', '', '', ''];
     }
   });
-  const [channels, setChannels] = useState([]);
-  const [activeChannel, setActiveChannel] = useState('');
+  const [channels, setChannels] = useState(() => restoredViewer?.channels || []);
+  const [activeChannel, setActiveChannel] = useState(() => restoredViewer?.activeChannel || '');
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
   const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
   const [landingTab, setLandingTab] = useState('home');
@@ -76,13 +114,15 @@ function SquadViewApp() {
   const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
-  const [viewMode, setViewMode] = useState('dual');
+  const [viewMode, setViewMode] = useState(() => restoredViewer?.viewMode || 'dual');
+  // Always restore refreshed viewers muted. Browsers generally block autoplaying
+  // audio after a hard refresh until the user interacts with the page again.
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [slotChannels, setSlotChannels] = useState([]);
-  const [desktopPage, setDesktopPage] = useState(0);
+  const [slotChannels, setSlotChannels] = useState(() => restoredViewer?.slotChannels || []);
+  const [desktopPage, setDesktopPage] = useState(() => restoredViewer?.desktopPage || 0);
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
-  const viewerSessionActiveRef = useRef(false);
+  const viewerSessionActiveRef = useRef(Boolean(restoredViewer));
 
   const registerPlayer = useCallback((channel, player) => {
     if (player) playersRef.current.set(channel, player);
@@ -105,6 +145,25 @@ function SquadViewApp() {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
     return () => document.body.classList.remove('viewer-active');
   }, [screen]);
+
+  // Preserve the active viewer layout across a browser refresh. Session storage
+  // intentionally expires with the tab, so reopening SquadView later still
+  // starts on the normal home screen.
+  useEffect(() => {
+    if (screen !== 'viewer' || !channels.length) return;
+
+    try {
+      sessionStorage.setItem(VIEWER_SESSION_KEY, JSON.stringify({
+        channels,
+        activeChannel: channels.includes(activeChannel) ? activeChannel : channels[0],
+        viewMode,
+        slotChannels,
+        desktopPage,
+      }));
+    } catch {
+      // Storage can be unavailable in private or restricted browsing contexts.
+    }
+  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage]);
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1100px)');
@@ -330,6 +389,12 @@ function SquadViewApp() {
 
 
   function exitViewer(exitMethod = 'back_button') {
+    try {
+      sessionStorage.removeItem(VIEWER_SESSION_KEY);
+    } catch {
+      // Leaving the viewer should still work when storage is unavailable.
+    }
+
     if (viewerSessionActiveRef.current) {
       viewerSessionActiveRef.current = false;
       trackEvent('viewer_exited', {
@@ -519,17 +584,15 @@ function SquadViewApp() {
     const desktopPageStart = desktopPage * desktopPageSize;
     const desktopPageOthers = desktopOtherChannels.slice(desktopPageStart, desktopPageStart + desktopPageSize);
     const desktopChannels = [activeChannel, ...desktopPageOthers].filter(Boolean);
-    const desktopChatChannels = desktopChannels.slice(0, 3);
+    // Chat mode is intentionally focused on a single stream on every screen
+    // size. Desktop now mirrors mobile: selected stream + that stream's chat.
     const visibleChannels = viewMode === 'dual'
       ? (isDesktopGrid ? desktopChannels : dualChannels)
-      : viewMode === 'chat' && isDesktopGrid
-        ? desktopChatChannels
-        : [activeChannel];
+      : [activeChannel];
     const desktopTileCount = viewMode === 'chat' && isDesktopGrid
-      ? visibleChannels.length + 1
+      ? 2
       : visibleChannels.length;
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
-    const cycleBackward = viewMode === 'dual' ? previousOther : () => cycleFocused(-1);
     const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
     const previousDesktopPage = () => {
       setDesktopPage((current) => (current - 1 + desktopPageCount) % desktopPageCount);
@@ -642,11 +705,11 @@ function SquadViewApp() {
             )}
           </div>
 
-          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && viewMode !== 'solo' ? 'has-page-controls' : ''}`}>
+          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && viewMode === 'dual' ? 'has-page-controls' : ''}`}>
             <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
             <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
 
-            {isDesktopGrid && desktopPageCount > 1 && viewMode !== 'solo' && (
+            {isDesktopGrid && desktopPageCount > 1 && viewMode === 'dual' && (
               <div className="toolbar-page-controls" aria-label="Change visible stream page">
                 <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
                 <span>Page {desktopPage + 1} of {desktopPageCount}</span>
@@ -657,8 +720,8 @@ function SquadViewApp() {
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
             {isDesktopGrid && (
               <button
-                onClick={viewMode !== 'solo' ? nextDesktopPage : cycleForward}
-                disabled={viewMode !== 'solo' ? desktopPageCount <= 1 : channels.length <= 1}
+                onClick={viewMode === 'dual' ? nextDesktopPage : cycleForward}
+                disabled={viewMode === 'dual' ? desktopPageCount <= 1 : channels.length <= 1}
               >
                 Next →
               </button>
