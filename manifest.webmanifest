@@ -1,8 +1,8 @@
 {
   "name": "SquadView",
   "short_name": "SquadView",
-  "description": "Watch multiple Twitch streams from one responsive, mobile-friendly view.",
-  "start_url": "/",
+  "description": "Build a responsive multi stream Twitch view with grid, chat, solo viewing, audio focus, and favorites.",
+  "start_url": "/watch",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
