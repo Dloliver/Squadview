@@ -1,5 +1,5 @@
-const CACHE_NAME = 'squadview-shell-v3';
-const APP_SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE_NAME = 'squadview-shell-v4';
+const APP_SHELL = ['/', '/watch', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -33,11 +33,11 @@ self.addEventListener('fetch', (event) => {
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
+            caches.open(CACHE_NAME).then((cache) => cache.put(url.pathname, copy));
           }
           return response;
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.match(url.pathname).then((match) => match || caches.match('/'))),
     );
     return;
   }

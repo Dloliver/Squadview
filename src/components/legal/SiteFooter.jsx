@@ -6,6 +6,8 @@ export default function SiteFooter() {
         <span>Watch together, wherever.</span>
       </div>
       <nav aria-label="SquadView information and support links">
+        <a href="/">Home</a>
+        <a href="/watch">Open SquadView</a>
         <a href="/about">About</a>
         <a href="/support">Help &amp; FAQ</a>
         <a href="/privacy">Privacy</a>

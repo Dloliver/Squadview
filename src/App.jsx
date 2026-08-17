@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TwitchPlayer from './components/TwitchPlayer';
 import ChatPanel from './components/ChatPanel';
-import LoadingAd from './components/LoadingAd';
-import HomeAdSlot from './components/ads/HomeAdSlot';
-import FooterAdSlot from './components/ads/FooterAdSlot';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
 import AboutPage from './pages/AboutPage';
-import { markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
+import HomePage from './pages/HomePage';
 import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
 
 function Icon({ symbol, className = '' }) {
@@ -57,6 +54,14 @@ function cleanChannel(value) {
   return String(value || '').trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 }
 
+function getDesktopPageChannels(sourceChannels, leadChannel, page) {
+  if (!sourceChannels.length) return [];
+  const lead = sourceChannels.includes(leadChannel) ? leadChannel : sourceChannels[0];
+  const otherChannels = sourceChannels.filter((channel) => channel !== lead);
+  const start = Math.max(0, page) * 3;
+  return [lead, ...otherChannels.slice(start, start + 3)].filter(Boolean);
+}
+
 function readViewerSession() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(VIEWER_SESSION_KEY) || 'null');
@@ -81,12 +86,22 @@ function readViewerSession() {
       ? restoredSlots
       : [restoredActive, restoredSlots[0] || fallbackSecondary].filter(Boolean);
 
+    const requestedDesktopLead = cleanChannel(saved?.desktopLeadChannel);
+    const restoredDesktopLead = restoredChannels.includes(requestedDesktopLead)
+      ? requestedDesktopLead
+      : restoredChannels[0];
+    const restoredChatLayout = ['grid', 'single'].includes(saved?.chatLayout)
+      ? saved.chatLayout
+      : 'single';
+
     return {
       channels: restoredChannels,
       activeChannel: restoredActive,
       viewMode: restoredMode,
       slotChannels: normalizedSlots,
       desktopPage: Number.isInteger(saved?.desktopPage) && saved.desktopPage >= 0 ? saved.desktopPage : 0,
+      desktopLeadChannel: restoredDesktopLead,
+      chatLayout: restoredChatLayout,
     };
   } catch {
     return null;
@@ -120,9 +135,23 @@ function SquadViewApp() {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState(() => restoredViewer?.slotChannels || []);
   const [desktopPage, setDesktopPage] = useState(() => restoredViewer?.desktopPage || 0);
+  // Keep the displayed desktop page independent from the stream that currently
+  // owns audio. Focusing a stream should highlight it, not reshuffle the grid.
+  const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => restoredViewer?.desktopLeadChannel || restoredViewer?.channels?.[0] || '');
+  const [chatLayout, setChatLayout] = useState(() => restoredViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
   const viewerSessionActiveRef = useRef(Boolean(restoredViewer));
+
+  useEffect(() => {
+    document.title = 'SquadView Viewer — Build Your Multi Stream View';
+    const descriptionTag = document.querySelector('meta[name="description"]');
+    const canonical = document.querySelector('link[rel="canonical"]');
+    const ogUrl = document.querySelector('meta[property="og:url"]');
+    descriptionTag?.setAttribute('content', 'Build a SquadView with up to eight Twitch channels and switch between grid, chat, solo viewing, and audio focus.');
+    canonical?.setAttribute('href', 'https://squadview.app/watch');
+    ogUrl?.setAttribute('content', 'https://squadview.app/watch');
+  }, []);
 
   const registerPlayer = useCallback((channel, player) => {
     if (player) playersRef.current.set(channel, player);
@@ -159,11 +188,13 @@ function SquadViewApp() {
         viewMode,
         slotChannels,
         desktopPage,
+        desktopLeadChannel,
+        chatLayout,
       }));
     } catch {
       // Storage can be unavailable in private or restricted browsing contexts.
     }
-  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage]);
+  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout]);
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1100px)');
@@ -269,38 +300,30 @@ function SquadViewApp() {
     setChannels(unique);
     setActiveChannel(unique[0]);
     setAudioEnabled(false);
-    setViewMode('dual');
+    const startWithGridChat = isDesktopGrid && unique.length === 3;
+    setViewMode(startWithGridChat ? 'chat' : 'dual');
     setSlotChannels(unique.slice(0, 2));
     setDesktopPage(0);
+    setDesktopLeadChannel(unique[0]);
+    setChatLayout(startWithGridChat ? 'grid' : 'single');
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
     viewerSessionActiveRef.current = true;
     trackEvent('viewer_started', {
       stream_count_bucket: getStreamCountBucket(unique.length),
     });
-    if (shouldShowLoadingAd()) {
-      markLoadingAdShown();
-      setScreen('loading');
-    } else {
-      setScreen('viewer');
-    }
+    setScreen('viewer');
   }
 
 
   function selectChannel(channel) {
     setActiveChannel(channel);
     setAudioEnabled(true);
-    setDesktopPage(0);
 
-    // A direct click is the best opportunity to start every stream currently
-    // visible. Only the selected stream is audible; the others keep playing muted.
+    // Selecting audio never changes the desktop page order. The grid only gets
+    // a new lead stream when the user explicitly changes pages.
     const visibleNow = viewMode === 'dual'
       ? (isDesktopGrid
-          ? [
-              channel,
-              ...channels
-                .filter((item) => item !== channel)
-                .slice(desktopPage * 3, desktopPage * 3 + 3),
-            ]
+          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage)
           : slotChannels)
       : [channel];
 
@@ -363,8 +386,17 @@ function SquadViewApp() {
 
     setChannels(unique);
     setDesktopPage(0);
+    setDesktopLeadChannel(unique[0]);
     setActiveChannel(nextActive);
     setSlotChannels([nextActive, nextSecondary].filter(Boolean));
+
+    // When a desktop group is edited down to exactly three channels from Grid,
+    // use the naturally empty fourth quadrant for the selected stream's chat.
+    if (isDesktopGrid && unique.length === 3 && viewMode === 'dual') {
+      setChatLayout('grid');
+      setViewMode('chat');
+    }
+
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
 
 
@@ -454,6 +486,12 @@ function SquadViewApp() {
   }
 
   function enterChatMode() {
+    if (viewMode === 'chat') return;
+
+    // Desktop grid chat keeps the current page in place and replaces its fourth
+    // tile with chat. Solo -> Chat (and all mobile Chat views) stays one stream
+    // plus that stream's chat.
+    setChatLayout(isDesktopGrid && viewMode === 'dual' && channels.length > 1 ? 'grid' : 'single');
     setViewMode('chat');
   }
 
@@ -540,6 +578,7 @@ function SquadViewApp() {
       setSlotChannels([]);
       setAudioEnabled(false);
       setDesktopPage(0);
+      setDesktopLeadChannel('');
       localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify([]));
       exitViewer('last_stream_removed');
       return;
@@ -555,6 +594,7 @@ function SquadViewApp() {
     setActiveChannel(nextActive);
     setSlotChannels([nextActive, nextSecondary].filter(Boolean));
     setDesktopPage(0);
+    setDesktopLeadChannel(remaining[0]);
     localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(remaining));
   }
 
@@ -570,44 +610,51 @@ function SquadViewApp() {
     }
   }
 
-  if (screen === 'loading') {
-    return <LoadingAd onComplete={() => setScreen('viewer')} />;
-  }
 
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
-    // On desktop, the focused stream stays pinned on every page. The remaining
-    // three grid slots rotate through the rest of the group.
-    const desktopOtherChannels = channels.filter((channel) => channel !== activeChannel);
-    const desktopPageSize = 3;
-    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherChannels.length / desktopPageSize));
-    const desktopPageStart = desktopPage * desktopPageSize;
-    const desktopPageOthers = desktopOtherChannels.slice(desktopPageStart, desktopPageStart + desktopPageSize);
-    const desktopChannels = [activeChannel, ...desktopPageOthers].filter(Boolean);
-    // Chat mode is intentionally focused on a single stream on every screen
-    // size. Desktop now mirrors mobile: selected stream + that stream's chat.
+
+    // Desktop page order is anchored separately from activeChannel. Focusing a
+    // stream only changes audio/highlighting. When the user changes pages, the
+    // currently focused stream becomes the first tile on the destination page.
+    const desktopOtherCount = Math.max(0, channels.length - 1);
+    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherCount / 3));
+    const desktopChannels = getDesktopPageChannels(channels, desktopLeadChannel, desktopPage);
+    const desktopGridChat = viewMode === 'chat' && isDesktopGrid && chatLayout === 'grid';
+    const desktopSingleChat = viewMode === 'chat' && isDesktopGrid && !desktopGridChat;
+    const desktopChatChannels = desktopGridChat
+      ? (desktopChannels.length === 3
+          ? desktopChannels
+          : desktopChannels.slice(0, Math.max(1, desktopChannels.length - 1)))
+      : [activeChannel];
     const visibleChannels = viewMode === 'dual'
       ? (isDesktopGrid ? desktopChannels : dualChannels)
-      : [activeChannel];
-    const desktopTileCount = viewMode === 'chat' && isDesktopGrid
-      ? 2
-      : visibleChannels.length;
+      : viewMode === 'chat'
+        ? (isDesktopGrid ? desktopChatChannels : [activeChannel])
+        : [activeChannel];
+    const desktopTileCount = desktopGridChat
+      ? visibleChannels.length + 1
+      : desktopSingleChat
+        ? 2
+        : visibleChannels.length;
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
-    const cycleForward = viewMode === 'dual' ? nextOther : () => cycleFocused(1);
-    const previousDesktopPage = () => {
-      setDesktopPage((current) => (current - 1 + desktopPageCount) % desktopPageCount);
+    const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
+    const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
+    const moveDesktopPage = (direction) => {
+      if (desktopPageCount <= 1) return;
+      setDesktopLeadChannel(activeChannel);
+      setDesktopPage((current) => (current + direction + desktopPageCount) % desktopPageCount);
     };
-    const nextDesktopPage = () => {
-      setDesktopPage((current) => (current + 1) % desktopPageCount);
-    };
+    const previousDesktopPage = () => moveDesktopPage(-1);
+    const nextDesktopPage = () => moveDesktopPage(1);
 
     return (
-      <div className={`viewer-shell mode-${viewMode}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? 'Stream + chat' : 'Solo focus'}</span>
+            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Solo focus'}</span>
           </div>
           <div className="header-actions">
             <button className="edit-group-button" onClick={openEditGroup}>Edit group</button>
@@ -703,13 +750,24 @@ function SquadViewApp() {
                 <button onClick={() => cycleFocused(1)} aria-label="Next stream">→</button>
               </div>
             )}
+
+            {isDesktopGrid && viewMode === 'chat' && chatLayout === 'single' && channels.length > 1 && (
+              <div className="desktop-stream-pager" aria-label="Move through streams in chat view">
+                <button onClick={() => cycleFocused(-1)} aria-label="Previous stream">←</button>
+                <div>
+                  <span>Stream + chat</span>
+                  <strong>{channels.indexOf(activeChannel) + 1} of {channels.length}</strong>
+                </div>
+                <button onClick={() => cycleFocused(1)} aria-label="Next stream">→</button>
+              </div>
+            )}
           </div>
 
-          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && viewMode === 'dual' ? 'has-page-controls' : ''}`}>
+          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && desktopPagedMode ? 'has-page-controls' : ''}`}>
             <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
             <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
 
-            {isDesktopGrid && desktopPageCount > 1 && viewMode === 'dual' && (
+            {isDesktopGrid && desktopPageCount > 1 && desktopPagedMode && (
               <div className="toolbar-page-controls" aria-label="Change visible stream page">
                 <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
                 <span>Page {desktopPage + 1} of {desktopPageCount}</span>
@@ -720,8 +778,8 @@ function SquadViewApp() {
             <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
             {isDesktopGrid && (
               <button
-                onClick={viewMode === 'dual' ? nextDesktopPage : cycleForward}
-                disabled={viewMode === 'dual' ? desktopPageCount <= 1 : channels.length <= 1}
+                onClick={desktopPagedMode ? nextDesktopPage : cycleForward}
+                disabled={desktopPagedMode ? desktopPageCount <= 1 : channels.length <= 1}
               >
                 Next →
               </button>
@@ -775,7 +833,7 @@ function SquadViewApp() {
             className={landingTab === 'home' ? 'is-current' : ''}
             onClick={() => openLandingTab('home')}
           >
-            Home
+            Build
           </button>
           <button
             type="button"
@@ -938,10 +996,9 @@ function SquadViewApp() {
               <button className="primary-button start-button" disabled={!validInputs.length} onClick={() => beginWatching()}>
                 {validInputs.length ? `Start watching ${validInputs.length}` : 'Start watching'} <span>→</span>
               </button>
-              <p className="ad-note">A short sponsor screen appears while your streams load.</p>
+              <p className="ad-note">Streams open muted so you can choose which channel you want to hear.</p>
             </section>
 
-            <HomeAdSlot />
 
             {favoriteStreamers.length > 0 && (
               <section className="live-favorites-section">
@@ -1019,7 +1076,6 @@ function SquadViewApp() {
               </div>
             </section>
 
-            <FooterAdSlot />
           </>
         ) : (
           <section className="favorites-page">
@@ -1135,10 +1191,12 @@ function SquadViewApp() {
 export default function App() {
   const route = window.location.pathname.replace(/\/+$/, '') || '/';
 
+  if (route === '/') return <HomePage />;
+  if (route === '/watch') return <SquadViewApp />;
   if (route === '/about') return <AboutPage />;
   if (route === '/privacy') return <PrivacyPage />;
   if (route === '/terms') return <TermsPage />;
   if (route === '/support' || route === '/contact') return <SupportPage />;
 
-  return <SquadViewApp />;
+  return <HomePage />;
 }
