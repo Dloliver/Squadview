@@ -8,6 +8,17 @@ import SupportPage from './pages/SupportPage';
 import AboutPage from './pages/AboutPage';
 import HomePage from './pages/HomePage';
 import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
+import {
+  ensureSquadViewProfile,
+  getCurrentAccountSession,
+  isSquadViewAuthConfigured,
+  loadSquadViewUserState,
+  saveSquadViewUserState,
+  signInWithTwitch,
+  signOutOfSquadView,
+  subscribeToAccountChanges,
+} from './services/accountService';
+import { loadFollowedLiveStreams } from './services/twitchFollowingService';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
@@ -129,6 +140,16 @@ function SquadViewApp() {
   const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [accountSession, setAccountSession] = useState(null);
+  const [accountProfile, setAccountProfile] = useState(null);
+  const [accountError, setAccountError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [defaultLayout, setDefaultLayout] = useState('smart');
+  const [followedLiveStreams, setFollowedLiveStreams] = useState([]);
+  const [followingStatus, setFollowingStatus] = useState('idle');
+  const [followingError, setFollowingError] = useState('');
+  const accountHydratedUserRef = useRef('');
   const [viewMode, setViewMode] = useState(() => restoredViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
   // audio after a hard refresh until the user interacts with the page again.
@@ -157,6 +178,116 @@ function SquadViewApp() {
     if (player) playersRef.current.set(channel, player);
     else playersRef.current.delete(channel);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSession() {
+      try {
+        const session = await getCurrentAccountSession();
+        if (!cancelled) setAccountSession(session);
+      } catch (error) {
+        if (!cancelled) setAccountError(error?.message || 'Could not read the SquadView account session.');
+      }
+    }
+
+    void loadSession();
+    const unsubscribe = subscribeToAccountChanges((session) => {
+      setAccountSession(session);
+      if (!session) {
+        setAccountProfile(null);
+        setDefaultLayout('smart');
+        accountHydratedUserRef.current = '';
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const user = accountSession?.user;
+    if (!user?.id || accountHydratedUserRef.current === user.id) return;
+
+    let cancelled = false;
+
+    async function hydrateAccount() {
+      setAccountError('');
+      try {
+        const [profile, cloudState] = await Promise.all([
+          ensureSquadViewProfile(user),
+          loadSquadViewUserState(user.id),
+        ]);
+
+        if (cancelled) return;
+        setAccountProfile(profile);
+
+        let localFavorites = [];
+        let localLastChannels = [];
+        try {
+          localFavorites = JSON.parse(localStorage.getItem(FAVORITE_STREAMERS_KEY) || '[]');
+          localLastChannels = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
+        } catch {
+          // Restricted storage should not block Twitch sign in.
+        }
+
+        const remoteFavorites = Array.isArray(cloudState?.favorite_streamers)
+          ? cloudState.favorite_streamers
+          : [];
+        const mergedFavorites = [
+          ...new Set([...remoteFavorites, ...localFavorites].map(cleanChannel).filter(Boolean)),
+        ];
+
+        const remoteLastChannels = Array.isArray(cloudState?.last_channels)
+          ? cloudState.last_channels.map(cleanChannel).filter(Boolean).slice(0, 8)
+          : [];
+        const cleanedLocalLastChannels = Array.isArray(localLastChannels)
+          ? localLastChannels.map(cleanChannel).filter(Boolean).slice(0, 8)
+          : [];
+        const syncedLastChannels = remoteLastChannels.length
+          ? remoteLastChannels
+          : cleanedLocalLastChannels;
+
+        const syncedDefaultLayout = ['smart', 'dual', 'chat', 'solo'].includes(cloudState?.default_view)
+          ? cloudState.default_view
+          : 'smart';
+
+        setFavoriteStreamers(mergedFavorites);
+        setDefaultLayout(syncedDefaultLayout);
+        if (syncedLastChannels.length) {
+          setInputs([...syncedLastChannels, '', '', '', '', '', '', '', ''].slice(0, 8));
+        }
+
+        try {
+          localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(mergedFavorites));
+          if (syncedLastChannels.length) {
+            localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(syncedLastChannels));
+          }
+        } catch {
+          // Cloud state remains usable even if local storage is unavailable.
+        }
+
+        await saveSquadViewUserState(user.id, {
+          favorite_streamers: mergedFavorites,
+          last_channels: syncedLastChannels,
+          default_view: syncedDefaultLayout,
+        });
+
+        if (!cancelled) accountHydratedUserRef.current = user.id;
+      } catch (error) {
+        if (!cancelled) {
+          setAccountError(error?.message || 'Could not sync this SquadView account.');
+        }
+      }
+    }
+
+    void hydrateAccount();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountSession?.user?.id]);
 
   useEffect(() => {
     playersRef.current.forEach((player, channel) => {
@@ -294,6 +425,71 @@ function SquadViewApp() {
   }, [favoriteStreamers]);
 
 
+  const refreshFollowedLiveStreams = useCallback(async ({ silent = false } = {}) => {
+    if (!accountSession?.user?.id) {
+      setFollowedLiveStreams([]);
+      setFollowingStatus('idle');
+      setFollowingError('');
+      return;
+    }
+
+    if (!silent) setFollowingStatus('loading');
+    setFollowingError('');
+
+    try {
+      const streams = await loadFollowedLiveStreams();
+      setFollowedLiveStreams(streams);
+      setFollowingStatus('ready');
+    } catch (error) {
+      const needsReconnect =
+        error?.code === 'twitch_reconnect_required' ||
+        error?.code === 'twitch_scope_required';
+      setFollowedLiveStreams([]);
+      setFollowingStatus(needsReconnect ? 'reconnect' : 'error');
+      setFollowingError(error?.message || 'Could not load the Twitch channels you follow.');
+    }
+  }, [accountSession?.user?.id]);
+
+  useEffect(() => {
+    if (!accountSession?.user?.id) {
+      setFollowedLiveStreams([]);
+      setFollowingStatus('idle');
+      setFollowingError('');
+      return undefined;
+    }
+
+    void refreshFollowedLiveStreams();
+    const interval = window.setInterval(
+      () => void refreshFollowedLiveStreams({ silent: true }),
+      3 * 60 * 1000,
+    );
+
+    return () => window.clearInterval(interval);
+  }, [accountSession?.user?.id, refreshFollowedLiveStreams]);
+
+  async function handleReconnectTwitchFollows() {
+    setAuthBusy(true);
+    setFollowingError('');
+    try {
+      await signInWithTwitch({ forceVerify: true });
+    } catch (error) {
+      setFollowingStatus('reconnect');
+      setFollowingError(error?.message || 'Could not reconnect Twitch.');
+      setAuthBusy(false);
+    }
+  }
+
+  function addFollowedToGroup(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+    setInputs((current) => {
+      if (current.some((item) => cleanChannel(item) === cleaned)) return current;
+      const emptyIndex = current.findIndex((item) => !cleanChannel(item));
+      if (emptyIndex === -1) return current;
+      return current.map((item, index) => index === emptyIndex ? cleaned : item);
+    });
+  }
+
   function beginWatching(selected = validInputs) {
     const unique = [...new Set(selected)].slice(0, 8);
     if (!unique.length) return;
@@ -301,12 +497,18 @@ function SquadViewApp() {
     setActiveChannel(unique[0]);
     setAudioEnabled(false);
     const startWithGridChat = isDesktopGrid && unique.length === 3;
-    setViewMode(startWithGridChat ? 'chat' : 'dual');
+    const initialViewMode = defaultLayout === 'smart'
+      ? (startWithGridChat ? 'chat' : 'dual')
+      : defaultLayout;
+    const initialChatLayout = initialViewMode === 'chat'
+      ? (isDesktopGrid && unique.length > 1 ? 'grid' : 'single')
+      : 'single';
+    setViewMode(initialViewMode);
     setSlotChannels(unique.slice(0, 2));
     setDesktopPage(0);
     setDesktopLeadChannel(unique[0]);
-    setChatLayout(startWithGridChat ? 'grid' : 'single');
-    localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
+    setChatLayout(initialChatLayout);
+    saveLastChannels(unique);
     viewerSessionActiveRef.current = true;
     trackEvent('viewer_started', {
       stream_count_bucket: getStreamCountBucket(unique.length),
@@ -397,7 +599,7 @@ function SquadViewApp() {
       setViewMode('chat');
     }
 
-    localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(unique));
+    saveLastChannels(unique);
 
 
     setShowEdit(false);
@@ -520,7 +722,70 @@ function SquadViewApp() {
   function saveFavoriteStreamers(nextStreamers) {
     const cleaned = [...new Set(nextStreamers.map(cleanChannel).filter(Boolean))];
     setFavoriteStreamers(cleaned);
-    localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(cleaned));
+    try {
+      localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(cleaned));
+    } catch {
+      // Favorites can still sync to the signed-in account.
+    }
+    if (accountSession?.user?.id) {
+      void saveSquadViewUserState(accountSession.user.id, {
+        favorite_streamers: cleaned,
+      }).catch((error) => {
+        setAccountError(error?.message || 'Could not sync favorites.');
+      });
+    }
+  }
+
+  function saveLastChannels(nextChannels) {
+    const cleaned = [...new Set(nextChannels.map(cleanChannel).filter(Boolean))].slice(0, 8);
+    try {
+      localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(cleaned));
+    } catch {
+      // The cloud copy can still be saved for signed-in users.
+    }
+    if (accountSession?.user?.id) {
+      void saveSquadViewUserState(accountSession.user.id, {
+        last_channels: cleaned,
+      }).catch((error) => {
+        setAccountError(error?.message || 'Could not sync the current stream group.');
+      });
+    }
+  }
+
+  function updateDefaultLayout(nextLayout) {
+    if (!['smart', 'dual', 'chat', 'solo'].includes(nextLayout)) return;
+    setDefaultLayout(nextLayout);
+    if (accountSession?.user?.id) {
+      void saveSquadViewUserState(accountSession.user.id, {
+        default_view: nextLayout,
+      }).catch((error) => {
+        setAccountError(error?.message || 'Could not sync your default layout.');
+      });
+    }
+  }
+
+  async function handleTwitchSignIn() {
+    setAuthBusy(true);
+    setAccountError('');
+    try {
+      await signInWithTwitch();
+    } catch (error) {
+      setAccountError(error?.message || 'Twitch sign in could not be started.');
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleAccountSignOut() {
+    setAuthBusy(true);
+    setAccountError('');
+    try {
+      await signOutOfSquadView();
+      setShowAccount(false);
+    } catch (error) {
+      setAccountError(error?.message || 'Could not sign out.');
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   function toggleFavoriteStreamer(channel) {
@@ -579,7 +844,7 @@ function SquadViewApp() {
       setAudioEnabled(false);
       setDesktopPage(0);
       setDesktopLeadChannel('');
-      localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify([]));
+      saveLastChannels([]);
       exitViewer('last_stream_removed');
       return;
     }
@@ -595,7 +860,7 @@ function SquadViewApp() {
     setSlotChannels([nextActive, nextSecondary].filter(Boolean));
     setDesktopPage(0);
     setDesktopLeadChannel(remaining[0]);
-    localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(remaining));
+    saveLastChannels(remaining);
   }
 
   async function shareView() {
@@ -837,6 +1102,16 @@ function SquadViewApp() {
           </button>
           <button
             type="button"
+            className={landingTab === 'following' ? 'is-current' : ''}
+            onClick={() => openLandingTab('following')}
+          >
+            Following
+            {followedLiveStreams.length > 0 && (
+              <span className="nav-live-count">{followedLiveStreams.length} live</span>
+            )}
+          </button>
+          <button
+            type="button"
             className={landingTab === 'favorites' ? 'is-current' : ''}
             onClick={() => openLandingTab('favorites')}
           >
@@ -849,7 +1124,18 @@ function SquadViewApp() {
 
         <div className="topbar-actions">
           <button className="install-button" onClick={installApp}>Install app</button>
-          <span className="coming-soon">Premium coming soon</span>
+          <button
+            type="button"
+            className={`account-button ${accountSession ? 'is-signed-in' : ''}`}
+            onClick={() => setShowAccount(true)}
+          >
+            {accountProfile?.avatar_url ? (
+              <img src={accountProfile.avatar_url} alt="" />
+            ) : (
+              <span className="account-avatar-fallback">T</span>
+            )}
+            <span>{accountSession ? (accountProfile?.display_name || 'Account') : 'Sign in with Twitch'}</span>
+          </button>
         </div>
       </header>
 
@@ -1077,6 +1363,147 @@ function SquadViewApp() {
             </section>
 
           </>
+        ) : landingTab === 'following' ? (
+          <section className="following-page">
+            <div className="following-page-heading">
+              <div>
+                <span>From your Twitch account</span>
+                <h1>Following Live</h1>
+                <p>See channels you follow on Twitch that are live right now. Adding one to a view does not make it a SquadView favorite.</p>
+              </div>
+              {accountSession && (
+                <div className="following-heading-actions">
+                  <div className="following-live-summary">
+                    <strong>{followedLiveStreams.length}</strong>
+                    <span>live now</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="following-refresh-button"
+                    onClick={() => void refreshFollowedLiveStreams()}
+                    disabled={followingStatus === 'loading'}
+                  >
+                    {followingStatus === 'loading' ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {!accountSession ? (
+              <div className="following-state-card">
+                <div className="twitch-account-mark">T</div>
+                <strong>Sign in with Twitch to see who is live</strong>
+                <p>SquadView only asks for permission to read the channels you follow. Your Twitch follows stay separate from SquadView Favorites.</p>
+                <button type="button" className="twitch-login-button" onClick={() => setShowAccount(true)}>
+                  Sign in with Twitch
+                </button>
+              </div>
+            ) : followingStatus === 'reconnect' ? (
+              <div className="following-state-card">
+                <div className="twitch-account-mark">T</div>
+                <strong>Connect your Twitch follows</strong>
+                <p>{followingError || 'Authorize the follow-list permission once and SquadView can show your live followed channels here.'}</p>
+                <button
+                  type="button"
+                  className="twitch-login-button"
+                  onClick={handleReconnectTwitchFollows}
+                  disabled={authBusy}
+                >
+                  {authBusy ? 'Opening Twitch…' : 'Reconnect Twitch'}
+                </button>
+              </div>
+            ) : followingStatus === 'loading' ? (
+              <div className="following-state-card compact">
+                <strong>Checking your Twitch follows…</strong>
+                <p>This normally takes only a moment.</p>
+              </div>
+            ) : followingStatus === 'error' ? (
+              <div className="following-state-card">
+                <strong>Following Live is temporarily unavailable</strong>
+                <p>{followingError}</p>
+                <button type="button" className="secondary-button" onClick={() => void refreshFollowedLiveStreams()}>
+                  Try again
+                </button>
+              </div>
+            ) : followedLiveStreams.length ? (
+              <>
+                <div className="following-live-grid">
+                  {followedLiveStreams.map((stream) => {
+                    const channel = cleanChannel(stream.user_login);
+                    const alreadyAdded = validInputs.includes(channel);
+                    const groupIsFull = validInputs.length >= 8;
+                    const isFavorite = favoriteStreamers.includes(channel);
+                    return (
+                      <article key={stream.id || channel} className="following-live-card">
+                        <div className="following-live-thumbnail">
+                          {stream.thumbnail_url ? (
+                            <img src={stream.thumbnail_url} alt="" loading="lazy" />
+                          ) : (
+                            <div className="following-thumbnail-fallback">T</div>
+                          )}
+                          <span className="following-live-badge">LIVE</span>
+                        </div>
+                        <div className="following-live-copy">
+                          <div className="following-streamer-line">
+                            <div>
+                              <strong>{stream.user_name || channel}</strong>
+                              <small>@{channel}</small>
+                            </div>
+                            {isFavorite && <span className="following-favorite-badge"><FilledHeart /> Favorite</span>}
+                          </div>
+                          <p>{stream.title || 'Live on Twitch'}</p>
+                          <small className="following-stream-meta">
+                            {stream.game_name || 'Twitch'} · {stream.viewer_count.toLocaleString()} viewers
+                          </small>
+                          <button
+                            type="button"
+                            className="favorite-add-button following-add-button"
+                            onClick={() => addFollowedToGroup(channel)}
+                            disabled={alreadyAdded || groupIsFull}
+                          >
+                            {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add to view'}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+                <div className="favorites-build-dock following-build-dock">
+                  <div>
+                    <span>Current view</span>
+                    <strong>
+                      {validInputs.length
+                        ? `${validInputs.length} streamer${validInputs.length === 1 ? '' : 's'} selected`
+                        : 'Choose live channels to build your view'}
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setBuilderMode('manual');
+                      openLandingTab('home');
+                    }}
+                  >
+                    View list
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={!validInputs.length}
+                    onClick={() => beginWatching()}
+                  >
+                    {validInputs.length ? `Start watching ${validInputs.length} →` : 'Start watching →'}
+                  </button>
+                </div>
+              </>
+            ) : followingStatus === 'ready' ? (
+              <div className="following-state-card compact">
+                <strong>No followed channels are live right now</strong>
+                <p>When someone you follow goes live, they will appear here automatically.</p>
+              </div>
+            ) : null}
+          </section>
         ) : (
           <section className="favorites-page">
             <div className="favorites-page-heading">
@@ -1172,6 +1599,70 @@ function SquadViewApp() {
         )}
       </main>
 
+      {showAccount && (
+        <div className="modal-backdrop" onClick={() => setShowAccount(false)}>
+          <section className="modal account-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowAccount(false)}><X /></button>
+            {!accountSession ? (
+              <>
+                <div className="twitch-account-mark">T</div>
+                <h2>Sync SquadView with Twitch</h2>
+                <p>Sign in to carry your favorite streamers, most recent stream group, and default layout across devices. SquadView can also show which Twitch channels you follow are live. Guest viewing stays available.</p>
+                {accountError && <div className="account-error">{accountError}</div>}
+                {!isSquadViewAuthConfigured && (
+                  <div className="account-setup-note">
+                    Twitch sign in is ready in the app code, but the Supabase environment values still need to be configured.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="twitch-login-button"
+                  onClick={handleTwitchSignIn}
+                  disabled={authBusy || !isSquadViewAuthConfigured}
+                >
+                  {authBusy ? 'Opening Twitch…' : 'Continue with Twitch'}
+                </button>
+                <button type="button" className="secondary-button account-guest-button" onClick={() => setShowAccount(false)}>
+                  Keep using Guest Mode
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="account-profile-row">
+                  {accountProfile?.avatar_url ? (
+                    <img src={accountProfile.avatar_url} alt="" />
+                  ) : (
+                    <div className="twitch-account-mark compact">T</div>
+                  )}
+                  <div>
+                    <small>Signed in with Twitch</small>
+                    <h2>{accountProfile?.display_name || 'SquadView account'}</h2>
+                    {accountProfile?.twitch_login && <p>@{accountProfile.twitch_login}</p>}
+                  </div>
+                </div>
+                {accountError && <div className="account-error">{accountError}</div>}
+                <label className="account-layout-field">
+                  <span>Default viewing layout</span>
+                  <select value={defaultLayout} onChange={(event) => updateDefaultLayout(event.target.value)}>
+                    <option value="smart">Smart layout</option>
+                    <option value="dual">Grid / Dual</option>
+                    <option value="chat">Stream + Chat</option>
+                    <option value="solo">Solo focus</option>
+                  </select>
+                  <small>Smart layout keeps SquadView's current automatic behavior, including placing chat in the fourth desktop slot when three streams are selected.</small>
+                </label>
+                <div className="account-sync-summary">
+                  <strong>Sync is on</strong>
+                  <span>Favorites and your most recent stream group follow this account across devices. Following Live reads your Twitch follows and never changes them.</span>
+                </div>
+                <button type="button" className="secondary-button account-signout-button" onClick={handleAccountSignOut} disabled={authBusy}>
+                  {authBusy ? 'Signing out…' : 'Sign out'}
+                </button>
+              </>
+            )}
+          </section>
+        </div>
+      )}
       <SiteFooter />
       {showInstallHelp && (
         <div className="modal-backdrop" onClick={() => setShowInstallHelp(false)}>

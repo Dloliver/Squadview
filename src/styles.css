@@ -2156,3 +2156,407 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   .marketing-modal-footer button,
   .marketing-modal-footer a { width: 100%; }
 }
+
+
+/* SquadView Twitch account auth v1 */
+.account-button {
+  min-height: 36px;
+  max-width: 190px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #0b1b16;
+  color: #d9ece5;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+.account-button:hover,
+.account-button:focus-visible {
+  border-color: #9146ff;
+}
+.account-button img,
+.account-avatar-fallback {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 999px;
+}
+.account-button img {
+  object-fit: cover;
+}
+.account-avatar-fallback {
+  display: grid;
+  place-items: center;
+  background: #9146ff;
+  color: #fff;
+  font: 800 12px 'Space Grotesk';
+}
+.account-button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-button.is-signed-in {
+  border-color: rgba(145,70,255,.45);
+  background: rgba(145,70,255,.08);
+}
+.account-modal {
+  text-align: left;
+}
+.account-modal > h2,
+.account-modal > p {
+  text-align: center;
+}
+.twitch-account-mark {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 12px;
+  border-radius: 17px;
+  background: #9146ff;
+  color: #fff;
+  font: 800 24px 'Space Grotesk';
+}
+.twitch-account-mark.compact {
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  border-radius: 14px;
+  font-size: 20px;
+}
+.twitch-login-button {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 14px;
+  background: #9146ff;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+.twitch-login-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.twitch-login-button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.account-guest-button,
+.account-signout-button {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 10px;
+  border-radius: 14px;
+}
+.account-setup-note,
+.account-error,
+.account-sync-summary {
+  margin: 14px 0;
+  padding: 12px 13px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.account-setup-note {
+  border: 1px solid rgba(255,159,67,.35);
+  background: rgba(255,159,67,.08);
+  color: #ffd2a8;
+}
+.account-error {
+  border: 1px solid rgba(255,86,99,.35);
+  background: rgba(255,86,99,.08);
+  color: #ffc0c5;
+}
+.account-profile-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 20px;
+}
+.account-profile-row > img {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+.account-profile-row small,
+.account-profile-row h2,
+.account-profile-row p {
+  display: block;
+  margin: 0;
+  text-align: left;
+}
+.account-profile-row small {
+  color: #a7bbb4;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+}
+.account-profile-row h2 {
+  margin-top: 3px;
+  font-size: 20px;
+}
+.account-profile-row p {
+  margin-top: 2px;
+  color: #89a69d;
+  font-size: 12px;
+}
+.account-layout-field {
+  display: grid;
+  gap: 7px;
+  margin: 16px 0;
+  text-align: left;
+}
+.account-layout-field > span {
+  color: #dceee8;
+  font-size: 12px;
+  font-weight: 800;
+}
+.account-layout-field select {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #071310;
+  color: #fff;
+  font: inherit;
+}
+.account-layout-field small {
+  color: #78958c;
+  line-height: 1.45;
+}
+.account-sync-summary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(69,224,181,.22);
+  background: rgba(69,224,181,.07);
+}
+.account-sync-summary strong {
+  color: var(--mint-soft);
+}
+.account-sync-summary span {
+  color: #9ab1a9;
+}
+@media (max-width: 600px) {
+  .account-button {
+    max-width: 42px;
+    width: 42px;
+    min-height: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .account-button > span:last-child {
+    display: none;
+  }
+}
+
+
+/* SquadView Twitch Following Live v2 */
+.following-page {
+  max-width: 980px;
+  margin: 0 auto 28px;
+  padding: 54px 22px 100px;
+}
+.following-page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.following-page-heading > div:first-child > span {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: .12em;
+  font-size: 10px;
+}
+.following-page-heading h1 {
+  margin: 6px 0 8px;
+  font: 700 42px 'Space Grotesk';
+  letter-spacing: -.04em;
+}
+.following-page-heading p {
+  max-width: 590px;
+  margin: 0;
+  color: #89a69d;
+  line-height: 1.55;
+  font-size: 13px;
+}
+.following-heading-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.following-live-summary {
+  min-width: 88px;
+  padding: 10px 13px;
+  border: 1px solid rgba(145,70,255,.28);
+  border-radius: 14px;
+  background: rgba(145,70,255,.08);
+  text-align: center;
+}
+.following-live-summary strong,
+.following-live-summary span { display: block; }
+.following-live-summary strong { color: #c8a7ff; font: 700 24px 'Space Grotesk'; }
+.following-live-summary span { margin-top: 1px; color: #8d7aa9; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.following-refresh-button {
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #0b1b16;
+  color: #cfe3dc;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+.following-refresh-button:disabled { opacity: .5; cursor: wait; }
+.following-state-card {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: rgba(13,28,25,.86);
+  text-align: center;
+}
+.following-state-card.compact { min-height: 190px; }
+.following-state-card > strong { color: #effcf7; font: 700 21px 'Space Grotesk'; }
+.following-state-card > p { max-width: 540px; margin: 10px auto 0; color: #8fa79e; font-size: 13px; line-height: 1.65; }
+.following-state-card .twitch-login-button,
+.following-state-card .secondary-button { width: min(380px,100%); margin-top: 18px; }
+.following-live-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 14px;
+}
+.following-live-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #081512;
+  box-shadow: 0 14px 40px rgba(0,0,0,.18);
+}
+.following-live-thumbnail {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #0b1c18;
+}
+.following-live-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.following-thumbnail-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(145,70,255,.16);
+  font: 800 28px 'Space Grotesk';
+}
+.following-live-badge {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #e91916;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+.following-live-copy { padding: 15px; }
+.following-streamer-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.following-streamer-line > div { min-width: 0; }
+.following-streamer-line strong,
+.following-streamer-line small { display: block; }
+.following-streamer-line strong {
+  overflow: hidden;
+  color: #effcf7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 16px 'Space Grotesk';
+}
+.following-streamer-line small { margin-top: 2px; color: #728f85; font-size: 10px; }
+.following-favorite-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: rgba(69,224,181,.08);
+  color: var(--mint-soft);
+  font-size: 9px;
+  font-weight: 800;
+}
+.following-favorite-badge .text-icon { font-size: 10px; }
+.following-live-copy > p {
+  min-height: 38px;
+  margin: 12px 0 7px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #b8cdc5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.following-stream-meta {
+  display: block;
+  overflow: hidden;
+  color: #78958c;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.following-add-button {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 13px;
+  border: 1px solid rgba(145,70,255,.28);
+  border-radius: 11px;
+  background: rgba(145,70,255,.09);
+  color: #d7c1ff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+.following-add-button:disabled { opacity: .48; cursor: not-allowed; }
+.following-build-dock { margin-top: 18px; }
+
+@media (max-width: 760px) {
+  .topbar-nav { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .topbar-nav button { padding-inline: 7px; font-size: 10px; }
+  .following-page { padding-top: 38px; }
+  .following-page-heading { align-items: flex-start; }
+  .following-page-heading h1 { font-size: 34px; }
+  .following-live-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .following-page-heading { flex-direction: column; }
+  .following-heading-actions { width: 100%; justify-content: space-between; }
+  .following-live-summary { flex: 1; }
+  .following-state-card { padding: 24px 18px; }
+  .following-build-dock { bottom: 8px; }
+  .topbar-nav .nav-live-count { display: none; }
+}
