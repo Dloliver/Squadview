@@ -5,7 +5,7 @@
     <title>SquadView</title>
     <script>
       sessionStorage.setItem('squadview:redirect-path', location.pathname + location.search + location.hash);
-      location.replace('/');
+      location.replace('/' + location.search + location.hash);
     </script>
   </head>
   <body></body>
