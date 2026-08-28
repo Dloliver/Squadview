@@ -18,7 +18,7 @@ import {
   signOutOfSquadView,
   subscribeToAccountChanges,
 } from './services/accountService';
-import { loadFollowedLiveStreams } from './services/twitchFollowingService';
+import { loadFollowedChannels, loadFollowedLiveStreams } from './services/twitchFollowingService';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
@@ -137,7 +137,11 @@ function SquadViewApp() {
   const [landingTab, setLandingTab] = useState('home');
   const [builderMode, setBuilderMode] = useState('manual');
   const [showEdit, setShowEdit] = useState(false);
-  const [editInputs, setEditInputs] = useState(['', '', '', '', '', '', '', '']);
+  const [managerSource, setManagerSource] = useState('live');
+  const [managerSearch, setManagerSearch] = useState('');
+  const [manualManagerChannel, setManualManagerChannel] = useState('');
+  const [pendingReplacement, setPendingReplacement] = useState('');
+  const [draggedManagerChannel, setDraggedManagerChannel] = useState('');
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -149,6 +153,9 @@ function SquadViewApp() {
   const [followedLiveStreams, setFollowedLiveStreams] = useState([]);
   const [followingStatus, setFollowingStatus] = useState('idle');
   const [followingError, setFollowingError] = useState('');
+  const [followedChannels, setFollowedChannels] = useState([]);
+  const [followedChannelsStatus, setFollowedChannelsStatus] = useState('idle');
+  const [followedChannelsError, setFollowedChannelsError] = useState('');
   const accountHydratedUserRef = useRef('');
   const [viewMode, setViewMode] = useState(() => restoredViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
@@ -379,6 +386,28 @@ function SquadViewApp() {
     () => sortedFavoriteStreamers.filter((streamer) => liveFavoriteStreamers.has(streamer)),
     [sortedFavoriteStreamers, liveFavoriteStreamers],
   );
+  const followedLiveLogins = useMemo(
+    () => new Set(followedLiveStreams.map((stream) => cleanChannel(stream.user_login)).filter(Boolean)),
+    [followedLiveStreams],
+  );
+  const managerFollowedChannels = useMemo(() => {
+    const query = managerSearch.trim().toLowerCase();
+    const sorted = [...followedChannels].sort((first, second) => {
+      const firstLogin = cleanChannel(first.broadcaster_login);
+      const secondLogin = cleanChannel(second.broadcaster_login);
+      const liveDifference =
+        Number(followedLiveLogins.has(secondLogin)) - Number(followedLiveLogins.has(firstLogin));
+      return liveDifference ||
+        String(first.broadcaster_name || firstLogin).localeCompare(String(second.broadcaster_name || secondLogin));
+    });
+
+    if (!query) return sorted;
+    return sorted.filter((item) => {
+      const login = cleanChannel(item.broadcaster_login);
+      const name = String(item.broadcaster_name || '').toLowerCase();
+      return login.includes(query) || name.includes(query);
+    });
+  }, [followedChannels, followedLiveLogins, managerSearch]);
 
   useEffect(() => {
     if (!LIVE_STATUS_API_URL || !favoriteStreamers.length) {
@@ -450,11 +479,39 @@ function SquadViewApp() {
     }
   }, [accountSession?.user?.id]);
 
+  const refreshFollowedChannels = useCallback(async ({ force = false } = {}) => {
+    if (!accountSession?.user?.id) {
+      setFollowedChannels([]);
+      setFollowedChannelsStatus('idle');
+      setFollowedChannelsError('');
+      return;
+    }
+
+    setFollowedChannelsStatus('loading');
+    setFollowedChannelsError('');
+
+    try {
+      const follows = await loadFollowedChannels({ force });
+      setFollowedChannels(follows);
+      setFollowedChannelsStatus('ready');
+    } catch (error) {
+      const needsReconnect =
+        error?.code === 'twitch_reconnect_required' ||
+        error?.code === 'twitch_scope_required';
+      setFollowedChannels([]);
+      setFollowedChannelsStatus(needsReconnect ? 'reconnect' : 'error');
+      setFollowedChannelsError(error?.message || 'Could not load your Twitch follows.');
+    }
+  }, [accountSession?.user?.id]);
+
   useEffect(() => {
     if (!accountSession?.user?.id) {
       setFollowedLiveStreams([]);
       setFollowingStatus('idle');
       setFollowingError('');
+      setFollowedChannels([]);
+      setFollowedChannelsStatus('idle');
+      setFollowedChannelsError('');
       return undefined;
     }
 
@@ -573,36 +630,28 @@ function SquadViewApp() {
     rotateOther(1);
   }
 
-  function openEditGroup() {
-    setEditInputs([...channels, '', '', '', '', '', '', '', ''].slice(0, 8));
+  function openEditGroup(preferredSource = '') {
+    const nextSource = preferredSource || (accountSession?.user?.id ? 'live' : 'favorites');
+    setManagerSource(nextSource);
+    setManagerSearch('');
+    setManualManagerChannel('');
+    setPendingReplacement('');
     setShowEdit(true);
+
+    if (accountSession?.user?.id) {
+      void refreshFollowedLiveStreams({ silent: true });
+      if (nextSource === 'following' && followedChannelsStatus === 'idle') {
+        void refreshFollowedChannels();
+      }
+    }
   }
 
-  function updateGroup() {
-    const unique = [...new Set(editInputs.map(cleanChannel).filter(Boolean))].slice(0, 8);
-    if (!unique.length) return;
-
-    const nextActive = unique.includes(activeChannel) ? activeChannel : unique[0];
-    const currentSecondary = slotChannels.find((channel) => channel !== activeChannel && unique.includes(channel));
-    const nextSecondary = currentSecondary || unique.find((channel) => channel !== nextActive);
-
-    setChannels(unique);
-    setDesktopPage(0);
-    setDesktopLeadChannel(unique[0]);
-    setActiveChannel(nextActive);
-    setSlotChannels([nextActive, nextSecondary].filter(Boolean));
-
-    // When a desktop group is edited down to exactly three channels from Grid,
-    // use the naturally empty fourth quadrant for the selected stream's chat.
-    if (isDesktopGrid && unique.length === 3 && viewMode === 'dual') {
-      setChatLayout('grid');
-      setViewMode('chat');
-    }
-
-    saveLastChannels(unique);
-
-
-    setShowEdit(false);
+  function submitManualManagerChannel(event) {
+    event?.preventDefault?.();
+    const cleaned = cleanChannel(manualManagerChannel);
+    if (!cleaned) return;
+    addChannelToViewer(cleaned);
+    setManualManagerChannel('');
   }
 
   async function installApp() {
@@ -827,40 +876,134 @@ function SquadViewApp() {
     });
   }
 
-  function removeChannelFromGroup(channelToRemove) {
-    const remaining = channels.filter((channel) => channel !== channelToRemove);
+  function commitViewerChannels(nextChannels, { preferredActive = activeChannel } = {}) {
+    const unique = [...new Set((nextChannels || []).map(cleanChannel).filter(Boolean))].slice(0, 8);
+    const previousCount = channels.length;
 
-    try {
-      playersRef.current.get(channelToRemove)?.setMuted?.(true);
-      playersRef.current.get(channelToRemove)?.setVolume?.(0);
-    } catch {
-      // The player may already be unmounting.
-    }
-
-    if (!remaining.length) {
+    if (!unique.length) {
       setChannels([]);
+      setInputs(['', '', '', '', '', '', '', '']);
       setActiveChannel('');
       setSlotChannels([]);
       setAudioEnabled(false);
       setDesktopPage(0);
       setDesktopLeadChannel('');
       saveLastChannels([]);
+      setShowEdit(false);
       exitViewer('last_stream_removed');
       return;
     }
 
-    const nextActive = channelToRemove === activeChannel ? remaining[0] : activeChannel;
-    const retainedSecondary = slotChannels.find(
-      (channel) => channel !== channelToRemove && channel !== nextActive && remaining.includes(channel),
-    );
-    const nextSecondary = retainedSecondary || remaining.find((channel) => channel !== nextActive);
+    const requestedActive = cleanChannel(preferredActive);
+    const nextActive = unique.includes(requestedActive) ? requestedActive : unique[0];
+    const retainedSlots = slotChannels.filter((channel) => unique.includes(channel));
+    const nextSlots = [
+      nextActive,
+      ...retainedSlots.filter((channel) => channel !== nextActive),
+      ...unique.filter((channel) => channel !== nextActive && !retainedSlots.includes(channel)),
+    ].slice(0, 2);
 
-    setChannels(remaining);
+    setChannels(unique);
+    setInputs([...unique, '', '', '', '', '', '', '', ''].slice(0, 8));
     setActiveChannel(nextActive);
-    setSlotChannels([nextActive, nextSecondary].filter(Boolean));
+    setSlotChannels(nextSlots);
     setDesktopPage(0);
-    setDesktopLeadChannel(remaining[0]);
-    saveLastChannels(remaining);
+    setDesktopLeadChannel(unique[0]);
+    saveLastChannels(unique);
+
+    // Four desktop streams edited down to three should not leave a dead tile.
+    // Reuse that fourth quadrant for the focused stream's chat.
+    if (isDesktopGrid && previousCount >= 4 && unique.length === 3 && viewMode === 'dual') {
+      setChatLayout('grid');
+      setViewMode('chat');
+    }
+
+    // If the user adds a fourth stream back to the automatic three plus chat
+    // arrangement, restore the full grid automatically.
+    if (
+      isDesktopGrid &&
+      previousCount === 3 &&
+      unique.length >= 4 &&
+      viewMode === 'chat' &&
+      chatLayout === 'grid'
+    ) {
+      setViewMode('dual');
+      setChatLayout('single');
+    }
+  }
+
+  function removeChannelFromGroup(channelToRemove) {
+    const cleaned = cleanChannel(channelToRemove);
+    const remaining = channels.filter((channel) => channel !== cleaned);
+
+    try {
+      playersRef.current.get(cleaned)?.setMuted?.(true);
+      playersRef.current.get(cleaned)?.setVolume?.(0);
+    } catch {
+      // The player may already be unmounting.
+    }
+
+    commitViewerChannels(remaining, {
+      preferredActive: cleaned === activeChannel ? remaining[0] : activeChannel,
+    });
+  }
+
+  function addChannelToViewer(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || channels.includes(cleaned)) return;
+
+    if (channels.length >= 8) {
+      setPendingReplacement(cleaned);
+      return;
+    }
+
+    commitViewerChannels([...channels, cleaned]);
+  }
+
+  function replaceChannelInViewer(channelToReplace, replacementChannel = pendingReplacement) {
+    const oldChannel = cleanChannel(channelToReplace);
+    const replacement = cleanChannel(replacementChannel);
+    if (!oldChannel || !replacement || channels.includes(replacement)) return;
+
+    const nextChannels = channels.map((channel) => channel === oldChannel ? replacement : channel);
+    commitViewerChannels(nextChannels, {
+      preferredActive: activeChannel === oldChannel ? replacement : activeChannel,
+    });
+    setPendingReplacement('');
+  }
+
+  function moveViewerChannel(channel, direction) {
+    const cleaned = cleanChannel(channel);
+    const currentIndex = channels.indexOf(cleaned);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= channels.length) return;
+
+    const reordered = [...channels];
+    [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+    commitViewerChannels(reordered);
+  }
+
+  function dropViewerChannel(targetChannel) {
+    const dragged = cleanChannel(draggedManagerChannel);
+    const target = cleanChannel(targetChannel);
+
+    if (!dragged || !target || dragged === target) {
+      setDraggedManagerChannel('');
+      return;
+    }
+
+    const reordered = [...channels];
+    const fromIndex = reordered.indexOf(dragged);
+    const toIndex = reordered.indexOf(target);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggedManagerChannel('');
+      return;
+    }
+
+    reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, dragged);
+    commitViewerChannels(reordered);
+    setDraggedManagerChannel('');
   }
 
   async function shareView() {
@@ -922,7 +1065,7 @@ function SquadViewApp() {
             <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Solo focus'}</span>
           </div>
           <div className="header-actions">
-            <button className="edit-group-button" onClick={openEditGroup}>Edit group</button>
+            <button className="edit-group-button" onClick={() => openEditGroup()}>Manage streams</button>
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
             <button
               className={`icon-button ${favoriteStreamers.includes(activeChannel) ? 'is-favorite' : ''}`}
@@ -954,6 +1097,24 @@ function SquadViewApp() {
                     registerPlayer={registerPlayer}
                   />
                 ))}
+
+                {isDesktopGrid && viewMode === 'dual' && channels.length < 8 && visibleChannels.length < 4 && (
+                  <button
+                    type="button"
+                    className="stream-add-tile"
+                    onClick={() => openEditGroup(accountSession?.user?.id ? 'live' : 'favorites')}
+                  >
+                    <span>+</span>
+                    <strong>Add a stream</strong>
+                    <small>
+                      {accountSession?.user?.id && followedLiveStreams.length
+                        ? `${followedLiveStreams.length} people you follow are live`
+                        : accountSession?.user?.id
+                          ? 'Choose from Twitch follows or favorites'
+                          : 'Choose from favorites or enter a channel'}
+                    </small>
+                  </button>
+                )}
 
                 {viewMode === 'chat' && isDesktopGrid && (
                   <section className="desktop-grid-chat-tile">
@@ -1053,34 +1214,273 @@ function SquadViewApp() {
         </main>
 
         {showEdit && (
-          <div className="modal-backdrop" onClick={() => setShowEdit(false)}>
-            <section className="modal edit-group-modal" onClick={(event) => event.stopPropagation()}>
-              <button className="modal-close" onClick={() => setShowEdit(false)}><X /></button>
-              <h2>Edit this group</h2>
-              <p>Correct, add, or remove channels without leaving your current view.</p>
-              <div className="edit-channel-list">
-                {editInputs.map((value, index) => (
-                  <label key={index}>
-                    <span>{index + 1}</span>
-                    <input
-                      value={value}
-                      onChange={(event) => setEditInputs((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
-                      placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                    />
-                    {value && <button type="button" onClick={() => setEditInputs((current) => current.map((item, itemIndex) => itemIndex === index ? '' : item))} aria-label="Clear channel"><X /></button>}
-                  </label>
-                ))}
-              </div>
-              <div className="modal-actions">
-                <button className="secondary-button" onClick={() => setShowEdit(false)}>Cancel</button>
-                <button className="primary-button" onClick={updateGroup} disabled={!editInputs.some((value) => cleanChannel(value))}>Update group</button>
-              </div>
-            </section>
+          <div className="stream-manager-backdrop" onClick={() => setShowEdit(false)}>
+            <aside className="stream-manager-drawer" onClick={(event) => event.stopPropagation()}>
+              <header className="stream-manager-header">
+                <div>
+                  <span>Current SquadView</span>
+                  <h2>Manage streams</h2>
+                  <p>Add, remove, replace, or reorder without leaving what you are watching.</p>
+                </div>
+                <button className="stream-manager-close" onClick={() => setShowEdit(false)} aria-label="Close stream manager"><X /></button>
+              </header>
+
+              <section className="stream-manager-current">
+                <div className="stream-manager-section-heading">
+                  <div>
+                    <strong>In this view</strong>
+                    <small>Drag on desktop or use the arrows to reorder.</small>
+                  </div>
+                  <b>{channels.length}/8</b>
+                </div>
+
+                <div className="stream-manager-current-list">
+                  {channels.map((channel, index) => (
+                    <article
+                      key={channel}
+                      className={`stream-manager-current-row ${draggedManagerChannel === channel ? 'is-dragging' : ''}`}
+                      draggable
+                      onDragStart={() => setDraggedManagerChannel(channel)}
+                      onDragEnd={() => setDraggedManagerChannel('')}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={() => dropViewerChannel(channel)}
+                    >
+                      <button
+                        type="button"
+                        className="stream-manager-drag"
+                        aria-label={`Drag ${channel} to reorder`}
+                        title="Drag to reorder"
+                      >
+                        ≡
+                      </button>
+                      <div className="stream-manager-channel-copy">
+                        <strong>{channel}</strong>
+                        <small>
+                          {followedLiveLogins.has(channel) && <><i className="live-dot" aria-hidden="true" /> Live now</>}
+                          {!followedLiveLogins.has(channel) && favoriteStreamers.includes(channel) && 'Favorite'}
+                          {!followedLiveLogins.has(channel) && !favoriteStreamers.includes(channel) && (channel === activeChannel ? 'Audio focus' : 'In current view')}
+                        </small>
+                      </div>
+                      <div className="stream-manager-order-buttons">
+                        <button type="button" onClick={() => moveViewerChannel(channel, -1)} disabled={index === 0} aria-label={`Move ${channel} earlier`}>↑</button>
+                        <button type="button" onClick={() => moveViewerChannel(channel, 1)} disabled={index === channels.length - 1} aria-label={`Move ${channel} later`}>↓</button>
+                      </div>
+                      <button
+                        type="button"
+                        className="stream-manager-remove"
+                        onClick={() => removeChannelFromGroup(channel)}
+                        aria-label={`Remove ${channel}`}
+                      >
+                        <X />
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="stream-manager-add">
+                <div className="stream-manager-section-heading">
+                  <div>
+                    <strong>Add a stream</strong>
+                    <small>{channels.length < 8 ? `${8 - channels.length} open spot${8 - channels.length === 1 ? '' : 's'}` : 'View full. Choose someone to replace.'}</small>
+                  </div>
+                </div>
+
+                <div className="stream-manager-tabs" role="tablist" aria-label="Choose a stream source">
+                  <button type="button" className={managerSource === 'live' ? 'is-current' : ''} onClick={() => setManagerSource('live')}>
+                    Following Live
+                    {followedLiveStreams.length > 0 && <span>{followedLiveStreams.length}</span>}
+                  </button>
+                  <button type="button" className={managerSource === 'favorites' ? 'is-current' : ''} onClick={() => setManagerSource('favorites')}>Favorites</button>
+                  <button type="button" className={managerSource === 'following' ? 'is-current' : ''} onClick={() => {
+                    setManagerSource('following');
+                    if (accountSession?.user?.id && followedChannelsStatus === 'idle') void refreshFollowedChannels();
+                  }}>Following</button>
+                  <button type="button" className={managerSource === 'manual' ? 'is-current' : ''} onClick={() => setManagerSource('manual')}>Add channel</button>
+                </div>
+
+                <div className="stream-manager-source-panel">
+                  {managerSource === 'live' && (
+                    !accountSession ? (
+                      <div className="stream-manager-empty">
+                        <strong>Sign in with Twitch to see who is live</strong>
+                        <p>Your Twitch follows stay separate from SquadView Favorites.</p>
+                        <button className="twitch-login-button" onClick={() => { setShowEdit(false); setShowAccount(true); }}>Sign in with Twitch</button>
+                      </div>
+                    ) : followingStatus === 'reconnect' ? (
+                      <div className="stream-manager-empty">
+                        <strong>Reconnect Twitch follows</strong>
+                        <p>{followingError}</p>
+                        <button className="twitch-login-button" onClick={handleReconnectTwitchFollows} disabled={authBusy}>
+                          {authBusy ? 'Opening Twitch…' : 'Reconnect Twitch'}
+                        </button>
+                      </div>
+                    ) : followingStatus === 'loading' ? (
+                      <div className="stream-manager-empty compact"><strong>Checking who is live…</strong></div>
+                    ) : followedLiveStreams.length ? (
+                      <div className="stream-manager-source-list">
+                        {followedLiveStreams.map((stream) => {
+                          const channel = cleanChannel(stream.user_login);
+                          const alreadyAdded = channels.includes(channel);
+                          return (
+                            <article key={stream.id || channel} className="stream-manager-source-row is-live">
+                              <div>
+                                <strong>{stream.user_name || channel}</strong>
+                                <small><i className="live-dot" aria-hidden="true" /> @{channel} · {stream.game_name || 'Twitch'}</small>
+                              </div>
+                              {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
+                              <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
+                                {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                              </button>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="stream-manager-empty compact">
+                        <strong>No followed channels are live right now</strong>
+                        <p>Try Favorites, Following, or enter any Twitch channel.</p>
+                      </div>
+                    )
+                  )}
+
+                  {managerSource === 'favorites' && (
+                    sortedFavoriteStreamers.length ? (
+                      <div className="stream-manager-source-list">
+                        {sortedFavoriteStreamers.map((channel) => {
+                          const alreadyAdded = channels.includes(channel);
+                          const isLive = liveFavoriteStreamers.has(channel) || followedLiveLogins.has(channel);
+                          return (
+                            <article key={channel} className={`stream-manager-source-row ${isLive ? 'is-live' : ''}`}>
+                              <div>
+                                <strong>{channel}</strong>
+                                <small>{isLive ? <><i className="live-dot" aria-hidden="true" /> Live now</> : 'SquadView favorite'}</small>
+                              </div>
+                              <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>
+                              <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
+                                {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                              </button>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="stream-manager-empty compact">
+                        <strong>No favorites yet</strong>
+                        <p>Heart a streamer while watching and they will appear here.</p>
+                      </div>
+                    )
+                  )}
+
+                  {managerSource === 'following' && (
+                    !accountSession ? (
+                      <div className="stream-manager-empty">
+                        <strong>Sign in with Twitch to browse your follows</strong>
+                        <button className="twitch-login-button" onClick={() => { setShowEdit(false); setShowAccount(true); }}>Sign in with Twitch</button>
+                      </div>
+                    ) : followedChannelsStatus === 'reconnect' ? (
+                      <div className="stream-manager-empty">
+                        <strong>Reconnect Twitch follows</strong>
+                        <p>{followedChannelsError}</p>
+                        <button className="twitch-login-button" onClick={handleReconnectTwitchFollows}>Reconnect Twitch</button>
+                      </div>
+                    ) : followedChannelsStatus === 'loading' ? (
+                      <div className="stream-manager-empty compact"><strong>Loading your Twitch follows…</strong></div>
+                    ) : followedChannelsStatus === 'error' ? (
+                      <div className="stream-manager-empty">
+                        <strong>Could not load Twitch follows</strong>
+                        <p>{followedChannelsError}</p>
+                        <button className="secondary-button" onClick={() => void refreshFollowedChannels({ force: true })}>Try again</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="stream-manager-search">
+                          <input
+                            value={managerSearch}
+                            onChange={(event) => setManagerSearch(event.target.value)}
+                            placeholder="Search people you follow"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                          />
+                          <span>{followedChannels.length} following</span>
+                        </div>
+                        <div className="stream-manager-source-list">
+                          {managerFollowedChannels.map((item) => {
+                            const channel = cleanChannel(item.broadcaster_login);
+                            const alreadyAdded = channels.includes(channel);
+                            const isLive = followedLiveLogins.has(channel);
+                            return (
+                              <article key={item.broadcaster_id || channel} className={`stream-manager-source-row ${isLive ? 'is-live' : ''}`}>
+                                <div>
+                                  <strong>{item.broadcaster_name || channel}</strong>
+                                  <small>{isLive ? <><i className="live-dot" aria-hidden="true" /> @{channel} · Live now</> : `@${channel}`}</small>
+                                </div>
+                                {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
+                                <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
+                                  {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                                </button>
+                              </article>
+                            );
+                          })}
+                        </div>
+                        {!managerFollowedChannels.length && (
+                          <div className="stream-manager-empty compact"><strong>No matching followed channels</strong></div>
+                        )}
+                      </>
+                    )
+                  )}
+
+                  {managerSource === 'manual' && (
+                    <form className="stream-manager-manual" onSubmit={submitManualManagerChannel}>
+                      <label htmlFor="manager-channel-input">Twitch username</label>
+                      <div>
+                        <input
+                          id="manager-channel-input"
+                          value={manualManagerChannel}
+                          onChange={(event) => setManualManagerChannel(event.target.value)}
+                          placeholder="e.g. streamername"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                        />
+                        <button className="primary-button" type="submit" disabled={!cleanChannel(manualManagerChannel)}>
+                          {channels.length >= 8 ? 'Choose replacement' : '+ Add stream'}
+                        </button>
+                      </div>
+                      <small>You can add any Twitch channel even if you do not follow or favorite them.</small>
+                    </form>
+                  )}
+                </div>
+              </section>
+
+              {pendingReplacement && (
+                <div className="stream-manager-replace-card">
+                  <div>
+                    <span>View full</span>
+                    <strong>Add {pendingReplacement}</strong>
+                    <p>Choose which current stream you want to replace.</p>
+                  </div>
+                  <div className="stream-manager-replace-list">
+                    {channels.map((channel) => (
+                      <button type="button" key={channel} onClick={() => replaceChannelInViewer(channel)}>
+                        <span>{channel}</span>
+                        <strong>Replace →</strong>
+                      </button>
+                    ))}
+                  </div>
+                  <button type="button" className="secondary-button" onClick={() => setPendingReplacement('')}>Cancel replacement</button>
+                </div>
+              )}
+
+              <footer className="stream-manager-footer">
+                <div>
+                  <span>{channels.length}/8 streams</span>
+                  <small>Changes apply immediately.</small>
+                </div>
+                <button className="primary-button" onClick={() => setShowEdit(false)}>Done</button>
+              </footer>
+            </aside>
           </div>
         )}
-
       </div>
     );
   }

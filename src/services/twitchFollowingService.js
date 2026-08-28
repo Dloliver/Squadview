@@ -158,3 +158,92 @@ export async function loadFollowedLiveStreams() {
     }))
     .filter((stream) => stream.user_login);
 }
+
+
+const FOLLOWED_CHANNELS_CACHE_MS = 10 * 60 * 1000;
+let followedChannelsCache = null;
+
+export async function loadFollowedChannels({ force = false } = {}) {
+  const now = Date.now();
+  if (
+    !force &&
+    followedChannelsCache &&
+    now - followedChannelsCache.checkedAt < FOLLOWED_CHANNELS_CACHE_MS
+  ) {
+    return followedChannelsCache.data;
+  }
+
+  const token = readProviderToken();
+  if (!token) {
+    throw followingError(
+      'twitch_reconnect_required',
+      'Reconnect Twitch once to let SquadView read the channels you follow.',
+    );
+  }
+
+  const validation = await validateProviderToken(token);
+  const scopes = Array.isArray(validation?.scopes) ? validation.scopes : [];
+  if (!scopes.includes(REQUIRED_SCOPE)) {
+    throw followingError(
+      'twitch_scope_required',
+      'Reconnect Twitch once to enable your followed-channel list.',
+    );
+  }
+  if (!validation?.user_id || !validation?.client_id) {
+    throw followingError(
+      'twitch_validation_failed',
+      'Twitch did not return the user information needed to load your follows.',
+    );
+  }
+
+  const follows = [];
+  let cursor = '';
+
+  // Twitch returns up to 100 follows per request. The hard stop prevents a bad
+  // cursor from creating an unbounded loop while still covering large follow lists.
+  for (let page = 0; page < 20; page += 1) {
+    const url = new URL('https://api.twitch.tv/helix/channels/followed');
+    url.searchParams.set('user_id', validation.user_id);
+    url.searchParams.set('first', '100');
+    if (cursor) url.searchParams.set('after', cursor);
+
+    const response = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Client-Id': validation.client_id,
+        Accept: 'application/json',
+      },
+    });
+
+    if (response.status === 401) {
+      clearProviderToken();
+      followedChannelsCache = null;
+      throw followingError('twitch_reconnect_required', 'Reconnect Twitch to refresh your followed channels.');
+    }
+    if (!response.ok) {
+      throw followingError('twitch_following_failed', `Followed channels request failed with ${response.status}.`);
+    }
+
+    const result = await response.json();
+    const pageFollows = Array.isArray(result?.data) ? result.data : [];
+    follows.push(...pageFollows);
+    cursor = result?.pagination?.cursor || '';
+    if (!cursor) break;
+  }
+
+  const normalized = follows
+    .map((item) => ({
+      broadcaster_id: String(item?.broadcaster_id || ''),
+      broadcaster_login: String(item?.broadcaster_login || '').toLowerCase(),
+      broadcaster_name: String(item?.broadcaster_name || item?.broadcaster_login || ''),
+      followed_at: String(item?.followed_at || ''),
+    }))
+    .filter((item) => item.broadcaster_login);
+
+  followedChannelsCache = {
+    checkedAt: now,
+    data: normalized,
+  };
+
+  return normalized;
+}

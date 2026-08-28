@@ -4,10 +4,6 @@ export default function ChatPanel({ channel, compact = false }) {
 
   return (
     <section className={`chat-panel ${compact ? 'is-compact' : ''}`}>
-      <div className="panel-heading">
-        <span>Chat</span>
-        <strong>{channel}</strong>
-      </div>
       <iframe title={`${channel} chat`} src={src} allow="clipboard-write" />
     </section>
   );
