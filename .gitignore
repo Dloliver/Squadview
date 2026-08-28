@@ -28,3 +28,9 @@ squadview-handoff-*/
 squadview-handoff-*.zip
 generate-squadview-handoff.sh
 SQUADVIEW_NEW_THREAD_STARTER.md
+
+# Local SquadView update backups
+.update-backups/
+*.before-manage-streams
+*.before-responsive-manager
+*.before-chat-header-removal
