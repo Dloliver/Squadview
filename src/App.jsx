@@ -19,6 +19,9 @@ import {
   subscribeToAccountChanges,
 } from './services/accountService';
 import { loadFollowedChannels, loadFollowedLiveStreams } from './services/twitchFollowingService';
+import { FREE_ENTITLEMENTS } from './config/plans';
+import { loadSquadViewEntitlements } from './services/premiumService';
+import { createSavedSquad, deleteSavedSquad, loadSavedSquads, updateSavedSquad } from './services/savedSquadService';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
@@ -40,6 +43,13 @@ const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
 const VIEWER_SESSION_KEY = 'squadview:viewer-session:v1';
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
+const MAX_SUPPORTED_VIEWER_STREAMS = 16;
+
+function padViewerInputs(values, limit) {
+  const safeLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, Number(limit) || 8));
+  const source = Array.isArray(values) ? values.slice(0, safeLimit) : [];
+  return [...source, ...Array(Math.max(0, safeLimit - source.length)).fill('')].slice(0, safeLimit);
+}
 
 function readFavoriteStreamers() {
   try {
@@ -77,7 +87,7 @@ function readViewerSession() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(VIEWER_SESSION_KEY) || 'null');
     const restoredChannels = Array.isArray(saved?.channels)
-      ? [...new Set(saved.channels.map(cleanChannel).filter(Boolean))].slice(0, 8)
+      ? [...new Set(saved.channels.map(cleanChannel).filter(Boolean))].slice(0, MAX_SUPPORTED_VIEWER_STREAMS)
       : [];
 
     if (!restoredChannels.length) return null;
@@ -125,7 +135,7 @@ function SquadViewApp() {
   const [inputs, setInputs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
-      return [...saved, '', '', '', '', '', '', '', ''].slice(0, 8);
+      return padViewerInputs(saved, FREE_ENTITLEMENTS.viewerMaxStreams);
     } catch {
       return ['', '', '', ''];
     }
@@ -156,6 +166,23 @@ function SquadViewApp() {
   const [followedChannels, setFollowedChannels] = useState([]);
   const [followedChannelsStatus, setFollowedChannelsStatus] = useState('idle');
   const [followedChannelsError, setFollowedChannelsError] = useState('');
+  const [entitlements, setEntitlements] = useState(() => ({ ...FREE_ENTITLEMENTS }));
+  const [savedSquads, setSavedSquads] = useState([]);
+  const [savedSquadsStatus, setSavedSquadsStatus] = useState('idle');
+  const [savedSquadsError, setSavedSquadsError] = useState('');
+  const [liveSavedSquadStreamers, setLiveSavedSquadStreamers] = useState(() => new Set());
+  const [showSaveSquad, setShowSaveSquad] = useState(false);
+  const [saveSquadName, setSaveSquadName] = useState('');
+  const [saveSquadChannels, setSaveSquadChannels] = useState([]);
+  const [saveSquadBusy, setSaveSquadBusy] = useState(false);
+  const [editingSavedSquad, setEditingSavedSquad] = useState(null);
+  const [editSquadName, setEditSquadName] = useState('');
+  const [editSquadMembers, setEditSquadMembers] = useState([]);
+  const [editSquadSource, setEditSquadSource] = useState('live');
+  const [editSquadSearch, setEditSquadSearch] = useState('');
+  const [editSquadManualChannel, setEditSquadManualChannel] = useState('');
+  const [editSquadBusy, setEditSquadBusy] = useState(false);
+  const [editSquadError, setEditSquadError] = useState('');
   const accountHydratedUserRef = useRef('');
   const [viewMode, setViewMode] = useState(() => restoredViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
@@ -169,14 +196,22 @@ function SquadViewApp() {
   const [chatLayout, setChatLayout] = useState(() => restoredViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
+
+  // Twitch players are created lazily. The initial page creates only its
+  // visible players. Once a channel has been visited, its player stays mounted
+  // and pauses while off page so returning can resume without rebuilding every
+  // Twitch embed. A completely new viewer session resets this cache.
+  const mountedPlayerChannelsRef = useRef(new Set());
+
   const viewerSessionActiveRef = useRef(Boolean(restoredViewer));
+  const viewerStreamLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, entitlements.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
 
   useEffect(() => {
     document.title = 'SquadView Viewer — Build Your Multi Stream View';
     const descriptionTag = document.querySelector('meta[name="description"]');
     const canonical = document.querySelector('link[rel="canonical"]');
     const ogUrl = document.querySelector('meta[property="og:url"]');
-    descriptionTag?.setAttribute('content', 'Build a SquadView with up to eight Twitch channels and switch between grid, chat, solo viewing, and audio focus.');
+    descriptionTag?.setAttribute('content', 'Build a SquadView with multiple Twitch channels and switch between grid, chat, solo viewing, and audio focus.');
     canonical?.setAttribute('href', 'https://squadview.app/watch');
     ogUrl?.setAttribute('content', 'https://squadview.app/watch');
   }, []);
@@ -204,6 +239,11 @@ function SquadViewApp() {
       if (!session) {
         setAccountProfile(null);
         setDefaultLayout('smart');
+        setEntitlements({ ...FREE_ENTITLEMENTS });
+        setSavedSquads([]);
+        setSavedSquadsStatus('idle');
+        setSavedSquadsError('');
+        setLiveSavedSquadStreamers(new Set());
         accountHydratedUserRef.current = '';
       }
     });
@@ -223,13 +263,15 @@ function SquadViewApp() {
     async function hydrateAccount() {
       setAccountError('');
       try {
-        const [profile, cloudState] = await Promise.all([
+        const [profile, cloudState, access] = await Promise.all([
           ensureSquadViewProfile(user),
           loadSquadViewUserState(user.id),
+          loadSquadViewEntitlements(user.id),
         ]);
 
         if (cancelled) return;
         setAccountProfile(profile);
+        setEntitlements(access);
 
         let localFavorites = [];
         let localLastChannels = [];
@@ -247,11 +289,12 @@ function SquadViewApp() {
           ...new Set([...remoteFavorites, ...localFavorites].map(cleanChannel).filter(Boolean)),
         ];
 
+        const accountViewerLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, access.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
         const remoteLastChannels = Array.isArray(cloudState?.last_channels)
-          ? cloudState.last_channels.map(cleanChannel).filter(Boolean).slice(0, 8)
+          ? cloudState.last_channels.map(cleanChannel).filter(Boolean).slice(0, accountViewerLimit)
           : [];
         const cleanedLocalLastChannels = Array.isArray(localLastChannels)
-          ? localLastChannels.map(cleanChannel).filter(Boolean).slice(0, 8)
+          ? localLastChannels.map(cleanChannel).filter(Boolean).slice(0, accountViewerLimit)
           : [];
         const syncedLastChannels = remoteLastChannels.length
           ? remoteLastChannels
@@ -264,7 +307,7 @@ function SquadViewApp() {
         setFavoriteStreamers(mergedFavorites);
         setDefaultLayout(syncedDefaultLayout);
         if (syncedLastChannels.length) {
-          setInputs([...syncedLastChannels, '', '', '', '', '', '', '', ''].slice(0, 8));
+          setInputs(padViewerInputs(syncedLastChannels, accountViewerLimit));
         }
 
         try {
@@ -299,7 +342,10 @@ function SquadViewApp() {
   useEffect(() => {
     playersRef.current.forEach((player, channel) => {
       try {
-        const shouldPlayAudio = audioEnabled && channel === activeChannel;
+        const shouldPlayAudio =
+          audioEnabled &&
+          channel === activeChannel &&
+          player.__squadViewState?.visible !== false;
         player.setMuted(!shouldPlayAudio);
         player.setVolume(shouldPlayAudio ? 1 : 0);
       } catch {
@@ -372,8 +418,25 @@ function SquadViewApp() {
   }, [channels.length]);
 
 
+  useEffect(() => {
+    setInputs((current) => padViewerInputs(current, viewerStreamLimit));
 
-  const validInputs = useMemo(() => inputs.map(cleanChannel).filter(Boolean), [inputs]);
+    setChannels((current) => {
+      if (current.length <= viewerStreamLimit) return current;
+      const trimmed = current.slice(0, viewerStreamLimit);
+      setActiveChannel((active) => trimmed.includes(active) ? active : (trimmed[0] || ''));
+      setSlotChannels((slots) => slots.filter((channel) => trimmed.includes(channel)).slice(0, 2));
+      setDesktopPage(0);
+      setDesktopLeadChannel(trimmed[0] || '');
+      saveLastChannels(trimmed);
+      return trimmed;
+    });
+  }, [viewerStreamLimit]);
+
+  const validInputs = useMemo(
+    () => [...new Set(inputs.map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit),
+    [inputs, viewerStreamLimit],
+  );
   const sortedFavoriteStreamers = useMemo(
     () => [...favoriteStreamers].sort((first, second) => {
       const liveDifference =
@@ -385,6 +448,14 @@ function SquadViewApp() {
   const liveFavoriteList = useMemo(
     () => sortedFavoriteStreamers.filter((streamer) => liveFavoriteStreamers.has(streamer)),
     [sortedFavoriteStreamers, liveFavoriteStreamers],
+  );
+  const savedSquadMemberLogins = useMemo(
+    () => [...new Set(savedSquads.flatMap((squad) => squad.members.map((member) => member.twitchLogin)).filter(Boolean))],
+    [savedSquads],
+  );
+  const activeSavedSquadCount = useMemo(
+    () => savedSquads.filter((squad) => squad.members.some((member) => liveSavedSquadStreamers.has(member.twitchLogin))).length,
+    [savedSquads, liveSavedSquadStreamers],
   );
   const followedLiveLogins = useMemo(
     () => new Set(followedLiveStreams.map((stream) => cleanChannel(stream.user_login)).filter(Boolean)),
@@ -408,6 +479,124 @@ function SquadViewApp() {
       return login.includes(query) || name.includes(query);
     });
   }, [followedChannels, followedLiveLogins, managerSearch]);
+
+  const editSquadCandidateChannels = useMemo(() => {
+    const memberSet = new Set(editSquadMembers);
+    const query = editSquadSearch.trim().toLowerCase();
+    let candidates = [];
+
+    if (editSquadSource === 'live') {
+      candidates = followedLiveStreams.map((stream) => ({
+        login: cleanChannel(stream.user_login),
+        name: stream.user_name || stream.user_login,
+        meta: stream.game_name || 'Live on Twitch',
+        live: true,
+      }));
+    } else if (editSquadSource === 'favorites') {
+      candidates = favoriteStreamers.map((channel) => ({
+        login: cleanChannel(channel),
+        name: channel,
+        meta: liveFavoriteStreamers.has(cleanChannel(channel)) ? 'Live now' : 'Favorite',
+        live: liveFavoriteStreamers.has(cleanChannel(channel)),
+      }));
+    } else {
+      candidates = followedChannels.map((item) => {
+        const login = cleanChannel(item.broadcaster_login);
+        return {
+          login,
+          name: item.broadcaster_name || login,
+          meta: followedLiveLogins.has(login) ? 'Live now' : `@${login}`,
+          live: followedLiveLogins.has(login),
+        };
+      });
+    }
+
+    return candidates
+      .filter((item) => item.login && !memberSet.has(item.login))
+      .filter((item) => !query || item.login.includes(query) || String(item.name || '').toLowerCase().includes(query))
+      .sort((first, second) => Number(second.live) - Number(first.live) || String(first.name).localeCompare(String(second.name)))
+      .slice(0, 80);
+  }, [
+    editSquadMembers,
+    editSquadSearch,
+    editSquadSource,
+    favoriteStreamers,
+    followedChannels,
+    followedLiveLogins,
+    followedLiveStreams,
+    liveFavoriteStreamers,
+  ]);
+
+  const refreshSavedSquads = useCallback(async ({ silent = false } = {}) => {
+    const userId = accountSession?.user?.id;
+    if (!userId) {
+      setSavedSquads([]);
+      setSavedSquadsStatus('idle');
+      setSavedSquadsError('');
+      return;
+    }
+
+    if (!silent) setSavedSquadsStatus('loading');
+    setSavedSquadsError('');
+
+    try {
+      const squads = await loadSavedSquads(userId);
+      setSavedSquads(squads);
+      setSavedSquadsStatus('ready');
+    } catch (error) {
+      setSavedSquads([]);
+      setSavedSquadsStatus('error');
+      setSavedSquadsError(error?.message || 'Could not load your Saved Squads.');
+    }
+  }, [accountSession?.user?.id]);
+
+  useEffect(() => {
+    if (!accountSession?.user?.id) return undefined;
+    void refreshSavedSquads();
+    return undefined;
+  }, [accountSession?.user?.id, refreshSavedSquads]);
+
+  useEffect(() => {
+    if (!LIVE_STATUS_API_URL || !savedSquadMemberLogins.length) {
+      setLiveSavedSquadStreamers(new Set());
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refreshSavedSquadLiveStatus() {
+      try {
+        const batches = [];
+        for (let index = 0; index < savedSquadMemberLogins.length; index += 40) {
+          batches.push(savedSquadMemberLogins.slice(index, index + 40));
+        }
+
+        const results = await Promise.all(batches.map(async (batch) => {
+          const url = new URL(LIVE_STATUS_API_URL);
+          batch.forEach((streamer) => url.searchParams.append('login', streamer));
+          const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(`Live status request failed with ${response.status}`);
+          return response.json();
+        }));
+
+        if (cancelled) return;
+        const live = results.flatMap((result) => Array.isArray(result?.live) ? result.live : [])
+          .map(cleanChannel)
+          .filter(Boolean);
+        setLiveSavedSquadStreamers(new Set(live));
+      } catch (error) {
+        if (!cancelled) setLiveSavedSquadStreamers(new Set());
+        if (import.meta.env.DEV) console.info('[SquadView saved squad live status] unavailable', error);
+      }
+    }
+
+    void refreshSavedSquadLiveStatus();
+    const interval = window.setInterval(refreshSavedSquadLiveStatus, 3 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [savedSquadMemberLogins]);
 
   useEffect(() => {
     if (!LIVE_STATUS_API_URL || !favoriteStreamers.length) {
@@ -548,8 +737,11 @@ function SquadViewApp() {
   }
 
   function beginWatching(selected = validInputs) {
-    const unique = [...new Set(selected)].slice(0, 8);
+    const unique = [...new Set(selected)].slice(0, viewerStreamLimit);
     if (!unique.length) return;
+
+    mountedPlayerChannelsRef.current = new Set();
+
     setChannels(unique);
     setActiveChannel(unique[0]);
     setAudioEnabled(false);
@@ -786,7 +978,7 @@ function SquadViewApp() {
   }
 
   function saveLastChannels(nextChannels) {
-    const cleaned = [...new Set(nextChannels.map(cleanChannel).filter(Boolean))].slice(0, 8);
+    const cleaned = [...new Set(nextChannels.map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit);
     try {
       localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(cleaned));
     } catch {
@@ -822,6 +1014,173 @@ function SquadViewApp() {
       setAccountError(error?.message || 'Twitch sign in could not be started.');
       setAuthBusy(false);
     }
+  }
+
+  function openSaveSquadModal(sourceChannels = validInputs) {
+    const unique = [...new Set((sourceChannels || []).map(cleanChannel).filter(Boolean))].slice(0, entitlements.maxSquadMembers);
+    if (!unique.length) return;
+    if (!accountSession?.user?.id) {
+      setShowAccount(true);
+      return;
+    }
+    setSaveSquadChannels(unique);
+    setSaveSquadName('');
+    setSavedSquadsError('');
+    setShowSaveSquad(true);
+  }
+
+  async function handleCreateSavedSquad(event) {
+    event?.preventDefault?.();
+    if (!accountSession?.user?.id || !saveSquadChannels.length) return;
+
+    setSaveSquadBusy(true);
+    setSavedSquadsError('');
+    try {
+      await createSavedSquad(accountSession.user.id, saveSquadName, saveSquadChannels);
+      trackEvent('saved_squad_created', {
+        plan_key: entitlements.planKey,
+        member_count_bucket: getStreamCountBucket(saveSquadChannels.length),
+      });
+      setShowSaveSquad(false);
+      setSaveSquadName('');
+      setSaveSquadChannels([]);
+      await refreshSavedSquads();
+      setLandingTab('squads');
+    } catch (error) {
+      const message = String(error?.message || 'Could not save this Squad.');
+      setSavedSquadsError(
+        message.includes('saved_squad_limit_reached')
+          ? 'Your Free plan can save up to 3 Squads. Premium removes the Saved Squad limit.'
+          : message.includes('saved_squad_member_limit_reached')
+            ? `This plan supports up to ${entitlements.maxSquadMembers} creators in a Saved Squad.`
+            : message,
+      );
+    } finally {
+      setSaveSquadBusy(false);
+    }
+  }
+
+  async function handleDeleteSavedSquad(squadId) {
+    if (!accountSession?.user?.id || !squadId) return;
+    setSavedSquadsError('');
+    try {
+      await deleteSavedSquad(accountSession.user.id, squadId);
+      setSavedSquads((current) => current.filter((squad) => squad.id !== squadId));
+      trackEvent('saved_squad_deleted');
+    } catch (error) {
+      setSavedSquadsError(error?.message || 'Could not delete that Saved Squad.');
+    }
+  }
+
+  function openSavedSquadEditor(squad) {
+    if (!squad?.id) return;
+    setEditingSavedSquad(squad);
+    setEditSquadName(squad.name || 'My Squad');
+    setEditSquadMembers(
+      [...new Set((squad.members || []).map((member) => cleanChannel(member.twitchLogin)).filter(Boolean))],
+    );
+    setEditSquadSource('live');
+    setEditSquadSearch('');
+    setEditSquadManualChannel('');
+    setEditSquadError('');
+    setSavedSquadsError('');
+
+    if (accountSession?.user?.id) {
+      void refreshFollowedLiveStreams({ silent: true });
+    }
+  }
+
+  function closeSavedSquadEditor() {
+    if (editSquadBusy) return;
+    setEditingSavedSquad(null);
+    setEditSquadName('');
+    setEditSquadMembers([]);
+    setEditSquadSearch('');
+    setEditSquadManualChannel('');
+    setEditSquadError('');
+  }
+
+  function addSavedSquadEditorMember(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+    if (editSquadMembers.includes(cleaned)) return;
+    if (editSquadMembers.length >= entitlements.maxSquadMembers) {
+      setEditSquadError(`Your ${entitlements.isPremium ? 'Premium' : 'Free'} plan supports up to ${entitlements.maxSquadMembers} creators in a Saved Squad.`);
+      return;
+    }
+    setEditSquadMembers((current) => [...current, cleaned]);
+    setEditSquadManualChannel('');
+    setEditSquadError('');
+  }
+
+  function removeSavedSquadEditorMember(channel) {
+    setEditSquadMembers((current) => current.filter((item) => item !== channel));
+    setEditSquadError('');
+  }
+
+  async function handleUpdateSavedSquad(event) {
+    event?.preventDefault?.();
+    if (!accountSession?.user?.id || !editingSavedSquad?.id) return;
+    if (!editSquadMembers.length) {
+      setEditSquadError('A Saved Squad needs at least one Twitch creator.');
+      return;
+    }
+
+    setEditSquadBusy(true);
+    setEditSquadError('');
+    try {
+      await updateSavedSquad(
+        accountSession.user.id,
+        editingSavedSquad.id,
+        editSquadName,
+        editSquadMembers,
+      );
+      trackEvent('saved_squad_updated', {
+        plan_key: entitlements.planKey,
+        member_count_bucket: getStreamCountBucket(editSquadMembers.length),
+      });
+      await refreshSavedSquads();
+      setEditingSavedSquad(null);
+      setEditSquadName('');
+      setEditSquadMembers([]);
+      setEditSquadSearch('');
+      setEditSquadManualChannel('');
+    } catch (error) {
+      const message = String(error?.message || 'Could not update that Saved Squad.');
+      setEditSquadError(
+        message.includes('saved_squad_member_limit_reached')
+          ? `This plan supports up to ${entitlements.maxSquadMembers} creators in a Saved Squad.`
+          : message.includes('saved_squad_not_found')
+            ? 'That Saved Squad could not be found. Refresh SquadView and try again.'
+            : message,
+      );
+    } finally {
+      setEditSquadBusy(false);
+    }
+  }
+
+  function watchSavedSquad(squad) {
+    const memberLogins = squad?.members?.map((member) => member.twitchLogin).filter(Boolean) || [];
+    if (!memberLogins.length) return;
+
+    // Saved Squads are rosters, not forced viewer sessions. Only creators who
+    // are live right now are automatically loaded into the active workspace.
+    const liveMembers = memberLogins
+      .filter((channel) => liveSavedSquadStreamers.has(channel))
+      .slice(0, entitlements.viewerMaxStreams);
+
+    if (!liveMembers.length) {
+      setSavedSquadsError(`${squad.name} does not have anyone live right now.`);
+      return;
+    }
+
+    setSavedSquadsError('');
+    trackEvent('saved_squad_opened', {
+      plan_key: entitlements.planKey,
+      live_member_count_bucket: getStreamCountBucket(liveMembers.length),
+      member_count_bucket: getStreamCountBucket(memberLogins.length),
+    });
+    beginWatching(liveMembers);
   }
 
   async function handleAccountSignOut() {
@@ -877,7 +1236,7 @@ function SquadViewApp() {
   }
 
   function commitViewerChannels(nextChannels, { preferredActive = activeChannel } = {}) {
-    const unique = [...new Set((nextChannels || []).map(cleanChannel).filter(Boolean))].slice(0, 8);
+    const unique = [...new Set((nextChannels || []).map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit);
     const previousCount = channels.length;
 
     if (!unique.length) {
@@ -904,7 +1263,7 @@ function SquadViewApp() {
     ].slice(0, 2);
 
     setChannels(unique);
-    setInputs([...unique, '', '', '', '', '', '', '', ''].slice(0, 8));
+    setInputs(padViewerInputs(unique, viewerStreamLimit));
     setActiveChannel(nextActive);
     setSlotChannels(nextSlots);
     setDesktopPage(0);
@@ -952,7 +1311,7 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channel);
     if (!cleaned || channels.includes(cleaned)) return;
 
-    if (channels.length >= 8) {
+    if (channels.length >= viewerStreamLimit) {
       setPendingReplacement(cleaned);
       return;
     }
@@ -1040,6 +1399,18 @@ function SquadViewApp() {
       : viewMode === 'chat'
         ? (isDesktopGrid ? desktopChatChannels : [activeChannel])
         : [activeChannel];
+
+    // Only instantiate Twitch embeds as the user actually visits channels.
+    // Previously visited channels remain mounted but receive visible={false},
+    // which pauses them in TwitchPlayer until their page becomes active again.
+    visibleChannels.forEach((channel) => {
+      mountedPlayerChannelsRef.current.add(channel);
+    });
+
+    const mountedChannels = channels.filter((channel) =>
+      mountedPlayerChannelsRef.current.has(channel),
+    );
+
     const desktopTileCount = desktopGridChat
       ? visibleChannels.length + 1
       : desktopSingleChat
@@ -1066,6 +1437,7 @@ function SquadViewApp() {
           </div>
           <div className="header-actions">
             <button className="edit-group-button" onClick={() => openEditGroup()}>Manage streams</button>
+            <button className="icon-button" onClick={() => openSaveSquadModal(channels)} aria-label="Save current view as a Squad" title="Save Squad"><Save /></button>
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
             <button
               className={`icon-button ${favoriteStreamers.includes(activeChannel) ? 'is-favorite' : ''}`}
@@ -1082,11 +1454,12 @@ function SquadViewApp() {
           <div className="viewer-workspace">
             <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
               <div className="stream-stage-players">
-                {visibleChannels.map((channel) => (
+                {mountedChannels.map((channel) => (
                   <TwitchPlayer
                     key={channel}
                     channel={channel}
                     visible={visibleChannels.includes(channel)}
+                    visibleCount={visibleChannels.length}
                     active={activeChannel === channel}
                     audioEnabled={audioEnabled}
                     onSelect={() => selectChannel(channel)}
@@ -1098,7 +1471,7 @@ function SquadViewApp() {
                   />
                 ))}
 
-                {isDesktopGrid && viewMode === 'dual' && channels.length < 8 && visibleChannels.length < 4 && (
+                {isDesktopGrid && viewMode === 'dual' && channels.length < viewerStreamLimit && visibleChannels.length < 4 && (
                   <button
                     type="button"
                     className="stream-add-tile"
@@ -1231,7 +1604,7 @@ function SquadViewApp() {
                     <strong>In this view</strong>
                     <small>Drag on desktop or use the arrows to reorder.</small>
                   </div>
-                  <b>{channels.length}/8</b>
+                  <b>{channels.length}/{viewerStreamLimit}</b>
                 </div>
 
                 <div className="stream-manager-current-list">
@@ -1282,7 +1655,7 @@ function SquadViewApp() {
                 <div className="stream-manager-section-heading">
                   <div>
                     <strong>Add a stream</strong>
-                    <small>{channels.length < 8 ? `${8 - channels.length} open spot${8 - channels.length === 1 ? '' : 's'}` : 'View full. Choose someone to replace.'}</small>
+                    <small>{channels.length < viewerStreamLimit ? `${viewerStreamLimit - channels.length} open spot${viewerStreamLimit - channels.length === 1 ? '' : 's'}` : 'View full. Choose someone to replace.'}</small>
                   </div>
                 </div>
 
@@ -1330,7 +1703,7 @@ function SquadViewApp() {
                               </div>
                               {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
                               <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                                {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
                               </button>
                             </article>
                           );
@@ -1358,7 +1731,7 @@ function SquadViewApp() {
                               </div>
                               <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>
                               <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                                {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
                               </button>
                             </article>
                           );
@@ -1417,7 +1790,7 @@ function SquadViewApp() {
                                 </div>
                                 {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
                                 <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                  {alreadyAdded ? 'Added ✓' : channels.length >= 8 ? 'Replace…' : '+ Add'}
+                                  {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
                                 </button>
                               </article>
                             );
@@ -1443,7 +1816,7 @@ function SquadViewApp() {
                           autoCorrect="off"
                         />
                         <button className="primary-button" type="submit" disabled={!cleanChannel(manualManagerChannel)}>
-                          {channels.length >= 8 ? 'Choose replacement' : '+ Add stream'}
+                          {channels.length >= viewerStreamLimit ? 'Choose replacement' : '+ Add stream'}
                         </button>
                       </div>
                       <small>You can add any Twitch channel even if you do not follow or favorite them.</small>
@@ -1473,7 +1846,7 @@ function SquadViewApp() {
 
               <footer className="stream-manager-footer">
                 <div>
-                  <span>{channels.length}/8 streams</span>
+                  <span>{channels.length}/{viewerStreamLimit} streams</span>
                   <small>Changes apply immediately.</small>
                 </div>
                 <button className="primary-button" onClick={() => setShowEdit(false)}>Done</button>
@@ -1512,6 +1885,16 @@ function SquadViewApp() {
           </button>
           <button
             type="button"
+            className={landingTab === 'squads' ? 'is-current' : ''}
+            onClick={() => openLandingTab('squads')}
+          >
+            Squads
+            {activeSavedSquadCount > 0 && (
+              <span className="nav-live-count">{activeSavedSquadCount} active</span>
+            )}
+          </button>
+          <button
+            type="button"
             className={landingTab === 'favorites' ? 'is-current' : ''}
             onClick={() => openLandingTab('favorites')}
           >
@@ -1545,13 +1928,13 @@ function SquadViewApp() {
             <section className="hero">
               <div className="eyebrow"><span /> Built for phones, tablets, and laptops</div>
               <h1>Your streams.<br /><em>One view.</em></h1>
-              <p>Add up to eight Twitch channels. Type a channel directly or build your view from favorites, then SquadView only loads the streams currently on screen.</p>
+              <p>Add up to {viewerStreamLimit} Twitch channels on your current plan. Build the roster you want, then SquadView manages playback so only the streams currently on screen are playing.</p>
             </section>
 
             <section className="builder-card">
               <div className="section-title">
                 <div><span>Build your view</span><h2>Choose your streams</h2></div>
-                <small>{validInputs.length}/8</small>
+                <small>{validInputs.length}/{viewerStreamLimit}</small>
               </div>
 
               <div className="builder-source-toggle" role="radiogroup" aria-label="Choose how to add streams">
@@ -1621,7 +2004,7 @@ function SquadViewApp() {
                     <div className="builder-favorite-list">
                       {sortedFavoriteStreamers.map((streamer) => {
                         const alreadyAdded = validInputs.includes(streamer);
-                        const groupIsFull = validInputs.length >= 8;
+                        const groupIsFull = validInputs.length >= viewerStreamLimit;
                         const isLive = liveFavoriteStreamers.has(streamer);
 
                         return (
@@ -1662,7 +2045,7 @@ function SquadViewApp() {
                 <div className="build-selection-strip">
                   <div className="build-selection-heading">
                     <span>Your view</span>
-                    <strong>{validInputs.length} of 8 selected</strong>
+                    <strong>{validInputs.length} of {viewerStreamLimit} selected</strong>
                   </div>
                   <div className="build-selection-chips">
                     {validInputs.map((streamer) => (
@@ -1682,6 +2065,11 @@ function SquadViewApp() {
               <button className="primary-button start-button" disabled={!validInputs.length} onClick={() => beginWatching()}>
                 {validInputs.length ? `Start watching ${validInputs.length}` : 'Start watching'} <span>→</span>
               </button>
+              {validInputs.length > 0 && (
+                <button className="secondary-button save-squad-button" type="button" onClick={() => openSaveSquadModal(validInputs)}>
+                  <Save /> {accountSession ? 'Save as Squad' : 'Sign in to save this Squad'}
+                </button>
+              )}
               <p className="ad-note">Streams open muted so you can choose which channel you want to hear.</p>
             </section>
 
@@ -1710,7 +2098,7 @@ function SquadViewApp() {
                   <div className="live-favorites-preview">
                     {liveFavoriteList.slice(0, 3).map((streamer) => {
                       const alreadyAdded = validInputs.includes(streamer);
-                      const groupIsFull = validInputs.length >= 8;
+                      const groupIsFull = validInputs.length >= viewerStreamLimit;
                       return (
                         <article key={streamer}>
                           <div>
@@ -1831,7 +2219,7 @@ function SquadViewApp() {
                   {followedLiveStreams.map((stream) => {
                     const channel = cleanChannel(stream.user_login);
                     const alreadyAdded = validInputs.includes(channel);
-                    const groupIsFull = validInputs.length >= 8;
+                    const groupIsFull = validInputs.length >= viewerStreamLimit;
                     const isFavorite = favoriteStreamers.includes(channel);
                     return (
                       <article key={stream.id || channel} className="following-live-card">
@@ -1904,6 +2292,117 @@ function SquadViewApp() {
               </div>
             ) : null}
           </section>
+        ) : landingTab === 'squads' ? (
+          <section className="saved-squads-page">
+            <div className="saved-squads-heading">
+              <div>
+                <span>Your repeat views</span>
+                <h1>Saved Squads</h1>
+                <p>Keep creator groups ready, see when members are live, and jump back into the same viewing setup without rebuilding it.</p>
+              </div>
+              <div className={`plan-chip ${entitlements.isPremium ? 'is-premium' : ''}`}>
+                <strong>{entitlements.isPremium ? 'Premium' : 'Free'}</strong>
+                <span>
+                  {entitlements.savedSquadLimit === null
+                    ? 'Unlimited Squads'
+                    : `${savedSquads.length}/${entitlements.savedSquadLimit} Squads`}
+                </span>
+              </div>
+            </div>
+
+            {!accountSession ? (
+              <div className="following-state-card">
+                <div className="twitch-account-mark">T</div>
+                <strong>Sign in with Twitch to save Squads</strong>
+                <p>Your Saved Squads sync to your SquadView account so the groups you build can follow you across devices.</p>
+                <button type="button" className="twitch-login-button" onClick={() => setShowAccount(true)}>
+                  Sign in with Twitch
+                </button>
+              </div>
+            ) : savedSquadsStatus === 'loading' ? (
+              <div className="following-state-card compact">
+                <strong>Loading your Saved Squads…</strong>
+              </div>
+            ) : (
+              <>
+                {savedSquadsError && <div className="account-error saved-squads-error">{savedSquadsError}</div>}
+
+                {savedSquads.length ? (
+                  <div className="saved-squads-grid">
+                    {savedSquads.map((squad) => {
+                      const memberLogins = squad.members.map((member) => member.twitchLogin);
+                      const liveMembers = memberLogins.filter((channel) => liveSavedSquadStreamers.has(channel));
+                      return (
+                        <article key={squad.id} className="saved-squad-card">
+                          <div className="saved-squad-card-heading">
+                            <div>
+                              <span>{liveMembers.length ? `${liveMembers.length} live now` : 'Ready when they go live'}</span>
+                              <h2>{squad.name}</h2>
+                            </div>
+                            <button type="button" className="delete-button" onClick={() => void handleDeleteSavedSquad(squad.id)} aria-label={`Delete ${squad.name}`}>
+                              <Trash2 />
+                            </button>
+                          </div>
+                          <div className="saved-squad-members">
+                            {memberLogins.map((channel) => (
+                              <span key={channel} className={liveSavedSquadStreamers.has(channel) ? 'is-live' : ''}>
+                                {liveSavedSquadStreamers.has(channel) && <i className="live-dot" aria-hidden="true" />}
+                                {channel}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="saved-squad-card-footer">
+                            <div className="saved-squad-card-meta">
+                              <small>{memberLogins.length}/{entitlements.maxSquadMembers} creators</small>
+                              {liveMembers.length > entitlements.viewerMaxStreams && (
+                                <small>{liveMembers.length} live · {entitlements.viewerMaxStreams} open at once</small>
+                              )}
+                            </div>
+                            <div className="saved-squad-card-actions">
+                              <button type="button" className="secondary-button saved-squad-edit-button" onClick={() => openSavedSquadEditor(squad)}>
+                                Edit Squad
+                              </button>
+                              <button
+                                type="button"
+                                className="primary-button"
+                                onClick={() => watchSavedSquad(squad)}
+                                disabled={!liveMembers.length}
+                                title={!liveMembers.length ? 'No members of this Squad are live right now.' : undefined}
+                              >
+                                {liveMembers.length ? `Watch ${Math.min(liveMembers.length, entitlements.viewerMaxStreams)} live →` : 'No one live'}
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : savedSquadsStatus === 'ready' ? (
+                  <div className="saved-squads-empty">
+                    <Save />
+                    <strong>No Saved Squads yet</strong>
+                    <p>Build a Twitch view, choose Save as Squad, and it will appear here for one click access later.</p>
+                    <button type="button" className="secondary-button" onClick={() => openLandingTab('home')}>Build your first Squad</button>
+                  </div>
+                ) : null}
+
+                {!entitlements.isPremium && (
+                  <aside className="premium-preview-card">
+                    <div>
+                      <span>SquadView Premium</span>
+                      <h2>Build a streaming setup that keeps getting more useful.</h2>
+                      <p>Premium is designed around larger reusable Squads, live Squad alerts, one YouTube Companion, Multi Window, and no SquadView ads.</p>
+                    </div>
+                    <ul>
+                      <li><strong>16</strong><span>creators per Saved Squad</span></li>
+                      <li><strong>Unlimited</strong><span>Saved Squads</span></li>
+                      <li><strong>1</strong><span>YouTube Companion</span></li>
+                    </ul>
+                  </aside>
+                )}
+              </>
+            )}
+          </section>
         ) : (
           <section className="favorites-page">
             <div className="favorites-page-heading">
@@ -1922,7 +2421,7 @@ function SquadViewApp() {
               <div className="favorites-page-list">
                 {sortedFavoriteStreamers.map((streamer) => {
                   const alreadyAdded = validInputs.includes(streamer);
-                  const groupIsFull = validInputs.length >= 8;
+                  const groupIsFull = validInputs.length >= viewerStreamLimit;
                   const isLive = liveFavoriteStreamers.has(streamer);
 
                   return (
@@ -1999,6 +2498,197 @@ function SquadViewApp() {
         )}
       </main>
 
+      {editingSavedSquad && (
+        <div className="modal-backdrop saved-squad-editor-backdrop" onClick={closeSavedSquadEditor}>
+          <section className="modal saved-squad-editor-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={closeSavedSquadEditor} disabled={editSquadBusy}><X /></button>
+            <div className="saved-squad-editor-header">
+              <span className="modal-eyebrow">Saved Squad</span>
+              <h2>Edit {editingSavedSquad.name}</h2>
+              <p>Build the full creator roster here. Opening the Squad automatically loads only members who are live, up to your {viewerStreamLimit} stream viewer limit.</p>
+            </div>
+
+            <form className="saved-squad-editor-form" onSubmit={handleUpdateSavedSquad}>
+              <label className="saved-squad-editor-name">
+                <span>Squad name</span>
+                <input
+                  value={editSquadName}
+                  onChange={(event) => setEditSquadName(event.target.value)}
+                  maxLength={60}
+                  placeholder="e.g. Day Time Gang"
+                />
+              </label>
+
+              <div className="saved-squad-editor-member-heading">
+                <div>
+                  <strong>Squad members</strong>
+                  <small>{editSquadMembers.length}/{entitlements.maxSquadMembers} creators</small>
+                </div>
+                {entitlements.isPremium && <span className="premium-mini-pill">Premium · 16 max</span>}
+              </div>
+
+              <div className="saved-squad-editor-members">
+                {editSquadMembers.map((channel) => {
+                  const isLive = liveSavedSquadStreamers.has(channel) || followedLiveLogins.has(channel);
+                  return (
+                    <span key={channel} className={isLive ? 'is-live' : ''}>
+                      {isLive && <i className="live-dot" aria-hidden="true" />}
+                      {channel}
+                      <button
+                        type="button"
+                        onClick={() => removeSavedSquadEditorMember(channel)}
+                        disabled={editSquadBusy}
+                        aria-label={`Remove ${channel} from ${editingSavedSquad.name}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+
+              <div className="saved-squad-editor-add">
+                <strong>Add creators</strong>
+                <div className="saved-squad-editor-manual">
+                  <input
+                    value={editSquadManualChannel}
+                    onChange={(event) => setEditSquadManualChannel(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        addSavedSquadEditorMember(editSquadManualChannel);
+                      }
+                    }}
+                    placeholder="Twitch username"
+                    disabled={editSquadBusy || editSquadMembers.length >= entitlements.maxSquadMembers}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => addSavedSquadEditorMember(editSquadManualChannel)}
+                    disabled={editSquadBusy || !cleanChannel(editSquadManualChannel) || editSquadMembers.length >= entitlements.maxSquadMembers}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              <div className="saved-squad-editor-sources">
+                <div className="saved-squad-editor-tabs" role="tablist" aria-label="Creator sources">
+                  <button
+                    type="button"
+                    className={editSquadSource === 'live' ? 'is-current' : ''}
+                    onClick={() => { setEditSquadSource('live'); setEditSquadSearch(''); void refreshFollowedLiveStreams({ silent: true }); }}
+                  >
+                    Live now
+                  </button>
+                  <button
+                    type="button"
+                    className={editSquadSource === 'favorites' ? 'is-current' : ''}
+                    onClick={() => { setEditSquadSource('favorites'); setEditSquadSearch(''); }}
+                  >
+                    Favorites
+                  </button>
+                  <button
+                    type="button"
+                    className={editSquadSource === 'following' ? 'is-current' : ''}
+                    onClick={() => {
+                      setEditSquadSource('following');
+                      setEditSquadSearch('');
+                      if (followedChannelsStatus === 'idle') void refreshFollowedChannels();
+                    }}
+                  >
+                    Following
+                  </button>
+                </div>
+
+                {editSquadSource === 'following' && (
+                  <input
+                    className="saved-squad-editor-search"
+                    value={editSquadSearch}
+                    onChange={(event) => setEditSquadSearch(event.target.value)}
+                    placeholder="Search channels you follow"
+                  />
+                )}
+
+                <div className="saved-squad-editor-candidates">
+                  {editSquadSource === 'following' && followedChannelsStatus === 'loading' ? (
+                    <div className="saved-squad-editor-empty">Loading your Twitch follows…</div>
+                  ) : editSquadSource === 'following' && (followedChannelsStatus === 'reconnect' || followedChannelsStatus === 'error') ? (
+                    <div className="saved-squad-editor-empty">{followedChannelsError || 'Could not load your followed channels.'}</div>
+                  ) : editSquadCandidateChannels.length ? (
+                    editSquadCandidateChannels.map((item) => (
+                      <button
+                        key={item.login}
+                        type="button"
+                        className="saved-squad-editor-candidate"
+                        onClick={() => addSavedSquadEditorMember(item.login)}
+                        disabled={editSquadBusy || editSquadMembers.length >= entitlements.maxSquadMembers}
+                      >
+                        <span>
+                          <strong>{item.name}</strong>
+                          <small>{item.live && <i className="live-dot" aria-hidden="true" />}{item.meta}</small>
+                        </span>
+                        <b>+</b>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="saved-squad-editor-empty">
+                      {editSquadMembers.length >= entitlements.maxSquadMembers
+                        ? `This Squad has reached its ${entitlements.maxSquadMembers} creator limit.`
+                        : 'No additional creators available in this list.'}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {editSquadError && <div className="account-error">{editSquadError}</div>}
+
+              <div className="saved-squad-editor-actions">
+                <button type="button" className="secondary-button" onClick={closeSavedSquadEditor} disabled={editSquadBusy}>Cancel</button>
+                <button type="submit" className="primary-button" disabled={editSquadBusy || !editSquadMembers.length}>
+                  {editSquadBusy ? 'Saving…' : `Save ${editSquadMembers.length} creators`}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {showSaveSquad && (
+        <div className="modal-backdrop" onClick={() => !saveSquadBusy && setShowSaveSquad(false)}>
+          <section className="modal save-squad-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowSaveSquad(false)} disabled={saveSquadBusy}><X /></button>
+            <span className="modal-eyebrow">Save this setup</span>
+            <h2>Name your Squad</h2>
+            <p>Saved Squads sync with your Twitch sign in so you can return to the same creator group later.</p>
+            <form onSubmit={handleCreateSavedSquad}>
+              <label>
+                <span>Squad name</span>
+                <input
+                  value={saveSquadName}
+                  onChange={(event) => setSaveSquadName(event.target.value)}
+                  placeholder="e.g. AMP Streams"
+                  maxLength={60}
+                  autoFocus
+                />
+              </label>
+              <div className="save-squad-preview">
+                {saveSquadChannels.map((channel) => <span key={channel}>{channel}</span>)}
+              </div>
+              <small>
+                {entitlements.isPremium
+                  ? `Premium supports up to ${entitlements.maxSquadMembers} creators per Saved Squad.`
+                  : `Free supports ${entitlements.savedSquadLimit} Saved Squads with up to ${entitlements.maxSquadMembers} creators each.`}
+              </small>
+              {savedSquadsError && <div className="account-error">{savedSquadsError}</div>}
+              <button type="submit" className="primary-button" disabled={saveSquadBusy}>
+                {saveSquadBusy ? 'Saving…' : 'Save Squad'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
       {showAccount && (
         <div className="modal-backdrop" onClick={() => setShowAccount(false)}>
           <section className="modal account-modal" onClick={(event) => event.stopPropagation()}>
@@ -2051,6 +2741,17 @@ function SquadViewApp() {
                   </select>
                   <small>Smart layout keeps SquadView's current automatic behavior, including placing chat in the fourth desktop slot when three streams are selected.</small>
                 </label>
+                <div className={`account-plan-summary ${entitlements.isPremium ? 'is-premium' : ''}`}>
+                  <div>
+                    <small>SquadView plan</small>
+                    <strong>{entitlements.isPremium ? 'Premium' : 'Free'}</strong>
+                  </div>
+                  <span>
+                    {entitlements.isPremium
+                      ? 'Premium entitlements are synced to this account.'
+                      : 'Free includes the full Twitch viewer. Premium adds power user tools without changing the automatic layouts.'}
+                  </span>
+                </div>
                 <div className="account-sync-summary">
                   <strong>Sync is on</strong>
                   <span>Favorites and your most recent stream group follow this account across devices. Following Live reads your Twitch follows and never changes them.</span>
