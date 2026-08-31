@@ -1,4 +1,4 @@
-const CACHE_NAME = 'squadview-shell-v6';
+const CACHE_NAME = 'squadview-shell-v7';
 
 const APP_SHELL = [
   '/',
@@ -35,7 +35,6 @@ self.addEventListener('fetch', (event) => {
 
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Never allow the app cache to become the source of truth for the worker file.
   if (url.pathname.endsWith('/sw.js')) return;
 
   if (request.mode === 'navigate') {
@@ -57,8 +56,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Vite fingerprints JS/CSS filenames, so cache-first is safe for those static
-  // assets: every new production build receives a different URL.
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
