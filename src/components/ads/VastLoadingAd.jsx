@@ -12,6 +12,10 @@ function loadImaSdk() {
   imaSdkPromise = new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${IMA_SDK_URL}"]`);
     if (existing) {
+      if (window.google?.ima) {
+        resolve(window.google.ima);
+        return;
+      }
       existing.addEventListener('load', () => resolve(window.google?.ima), { once: true });
       existing.addEventListener('error', () => reject(new Error('Google IMA SDK failed to load.')), { once: true });
       return;
@@ -40,14 +44,28 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
 
   useEffect(() => {
     let cancelled = false;
-    let startupTimer;
+    let startupWarningTimer;
+    let startupTimeoutTimer;
+    let stallTimer;
+    let progressInterval;
     let hardStopTimer;
     let resizeHandler;
     let adsLoader;
+    let lastRemainingTime = null;
+    let lastProgressAt = 0;
+
+    const clearTimers = () => {
+      window.clearTimeout(startupWarningTimer);
+      window.clearTimeout(startupTimeoutTimer);
+      window.clearTimeout(stallTimer);
+      window.clearTimeout(hardStopTimer);
+      window.clearInterval(progressInterval);
+    };
 
     const finish = (result) => {
       if (finishedRef.current || cancelled) return;
       finishedRef.current = true;
+      clearTimers();
 
       try {
         adsManagerRef.current?.destroy?.();
@@ -61,6 +79,45 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
         source,
       });
       onFinish?.(result);
+    };
+
+    const startProgressWatch = () => {
+      lastRemainingTime = null;
+      lastProgressAt = Date.now();
+
+      window.clearInterval(progressInterval);
+      progressInterval = window.setInterval(() => {
+        if (finishedRef.current || cancelled || !adsManagerRef.current) return;
+
+        let remaining;
+        try {
+          remaining = Number(adsManagerRef.current.getRemainingTime?.());
+        } catch {
+          remaining = Number.NaN;
+        }
+
+        if (Number.isFinite(remaining) && remaining >= 0) {
+          if (lastRemainingTime === null || remaining < lastRemainingTime - 0.05) {
+            lastRemainingTime = remaining;
+            lastProgressAt = Date.now();
+            setShowFallback(false);
+            return;
+          }
+
+          lastRemainingTime = remaining;
+        }
+
+        if (Date.now() - lastProgressAt >= AD_CONFIG.vast.stallTimeoutMs) {
+          window.clearInterval(progressInterval);
+          setShowFallback(true);
+          setStatus('Sponsor video could not continue. Opening your Squad…');
+          trackEvent('squadview_ad_stalled', {
+            provider: AD_CONFIG.vast.provider,
+            source,
+          });
+          stallTimer = window.setTimeout(() => finish('stalled'), AD_CONFIG.vast.stallGraceMs);
+        }
+      }, AD_CONFIG.vast.progressPollMs);
     };
 
     if (AD_CONFIG.testMode) {
@@ -84,12 +141,18 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
       };
     }
 
-    startupTimer = window.setTimeout(() => {
+    startupWarningTimer = window.setTimeout(() => {
       if (!finishedRef.current && !startedRef.current) {
         setShowFallback(true);
-        setStatus('The sponsor is taking longer than expected.');
+        setStatus('Still looking for a sponsor…');
       }
-    }, AD_CONFIG.vast.startupFallbackMs);
+    }, AD_CONFIG.vast.startupWarningMs);
+
+    startupTimeoutTimer = window.setTimeout(() => {
+      if (!finishedRef.current && !startedRef.current) {
+        finish('startup_timeout');
+      }
+    }, AD_CONFIG.vast.startupTimeoutMs);
 
     hardStopTimer = window.setTimeout(() => finish('hard_timeout'), AD_CONFIG.vast.hardTimeoutMs);
 
@@ -118,11 +181,13 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
             adsManagerRef.current = adsManager;
 
             adsManager.addEventListener(ima.AdEvent.Type.STARTED, () => {
-              window.clearTimeout(startupTimer);
+              window.clearTimeout(startupWarningTimer);
+              window.clearTimeout(startupTimeoutTimer);
               startedRef.current = true;
               setStarted(true);
               setShowFallback(false);
               setStatus('Advertisement');
+              startProgressWatch();
               trackEvent('squadview_ad_started', {
                 provider: AD_CONFIG.vast.provider,
                 source,
@@ -197,8 +262,7 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
 
     return () => {
       cancelled = true;
-      window.clearTimeout(startupTimer);
-      window.clearTimeout(hardStopTimer);
+      clearTimers();
       if (resizeHandler) window.removeEventListener('resize', resizeHandler);
       try {
         adsLoader?.destroy?.();
@@ -252,7 +316,7 @@ export default function VastLoadingAd({ source = 'viewer_start', onFinish }) {
           <small>Premium members skip SquadView supplied ads.</small>
         </div>
 
-        {showFallback && !started && (
+        {showFallback && (
           <button type="button" className="secondary-button loading-continue" onClick={manuallyContinue}>
             Continue to SquadView
           </button>

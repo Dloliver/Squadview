@@ -1,6 +1,6 @@
 export const AD_CONFIG = {
   enabled: import.meta.env.VITE_ADS_ENABLED !== 'false',
-  // Legacy AdSense display inventory stays off until a display provider is
+  // Legacy display inventory stays off until a display provider is
   // intentionally enabled. Loading-video ads are controlled separately.
   displayEnabled: import.meta.env.VITE_DISPLAY_ADS_ENABLED === 'true',
   // Development defaults to test mode unless explicitly disabled. This keeps
@@ -22,7 +22,14 @@ export const AD_CONFIG = {
   vast: {
     provider: 'hilltopads',
     url: String(import.meta.env.VITE_HILLTOPADS_VAST_URL || '').trim(),
-    startupFallbackMs: 8000,
+    // Do not make a user wait on an ad request that never becomes playable.
+    startupWarningMs: 5000,
+    startupTimeoutMs: 8000,
+    // STARTED is not enough: if ad progress stops, fail open quickly.
+    stallTimeoutMs: 8000,
+    stallGraceMs: 500,
+    progressPollMs: 1000,
+    // Final guardrail for malformed/very long SDK states.
     hardTimeoutMs: 45000,
     testDurationMs: 5000,
   },
