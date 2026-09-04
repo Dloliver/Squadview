@@ -1,8 +1,10 @@
-const CACHE_NAME = 'squadview-shell-v7';
+const CACHE_NAME = 'squadview-shell-v8';
 
+// Only cache resources that physically exist on GitHub Pages. `/watch` is an
+// SPA route, not a real file, and including it in cache.addAll() caused the
+// entire service-worker installation to fail.
 const APP_SHELL = [
   '/',
-  '/watch',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -10,7 +12,17 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)),
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // Cache each shell resource independently so one transient failure never
+      // prevents the service worker from installing.
+      await Promise.allSettled(
+        APP_SHELL.map(async (url) => {
+          const response = await fetch(url, { cache: 'no-store' });
+          if (!response.ok) return;
+          await cache.put(url, response.clone());
+        }),
+      );
+    }),
   );
 
   self.skipWaiting();
@@ -34,25 +46,35 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
-
   if (url.pathname.endsWith('/sw.js')) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request, { cache: 'no-store' })
-        .then((response) => {
+        .then(async (response) => {
           if (response.ok) {
             const copy = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(url.pathname, copy));
+            return response;
+          }
+
+          // GitHub Pages returns 404 for SPA routes such as /watch. Serve the
+          // app shell instead while preserving the requested browser URL.
+          const rootResponse = await fetch('/', { cache: 'no-store' });
+          if (rootResponse.ok) {
+            const copy = rootResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
+            return rootResponse;
           }
 
           return response;
         })
-        .catch(() => caches.match(url.pathname).then(
-          (match) => match || caches.match('/'),
+        .catch(async () => (
+          (await caches.match(url.pathname))
+          || (await caches.match('/'))
+          || Response.error()
         )),
     );
-
     return;
   }
 
@@ -65,7 +87,6 @@ self.addEventListener('fetch', (event) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
-
         return response;
       });
     }),
