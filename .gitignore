@@ -34,3 +34,7 @@ SQUADVIEW_NEW_THREAD_STARTER.md
 *.before-manage-streams
 *.before-responsive-manager
 *.before-chat-header-removal
+.env.local
+.env.production.local
+.env.*.local
+supabase/.temp/

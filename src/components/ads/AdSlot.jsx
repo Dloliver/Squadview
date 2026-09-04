@@ -10,7 +10,7 @@ export default function AdSlot({ placement, className = '' }) {
 
   // Request the ad once the visible slot is mounted.
   useEffect(() => {
-    if (!AD_CONFIG.enabled || AD_CONFIG.testMode || !slotId || pushedRef.current) return;
+    if (!AD_CONFIG.displayEnabled || AD_CONFIG.testMode || !slotId || pushedRef.current) return;
 
     try {
       (window.adsbygoogle = window.adsbygoogle || []).push({});
@@ -24,7 +24,7 @@ export default function AdSlot({ placement, className = '' }) {
   // no ad, collapse our wrapper too so its reserved min-height does not leave a
   // large blank bar on the page. Keep the slot visible while it is requesting.
   useEffect(() => {
-    if (!AD_CONFIG.enabled || AD_CONFIG.testMode || !slotId) return undefined;
+    if (!AD_CONFIG.displayEnabled || AD_CONFIG.testMode || !slotId) return undefined;
 
     const adElement = adElementRef.current;
     const wrapper = wrapperRef.current;
@@ -45,7 +45,7 @@ export default function AdSlot({ placement, className = '' }) {
     return () => observer.disconnect();
   }, [slotId]);
 
-  if (!AD_CONFIG.enabled) return null;
+  if (!AD_CONFIG.displayEnabled) return null;
 
   if (AD_CONFIG.testMode) {
     const labels = {

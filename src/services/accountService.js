@@ -1,4 +1,5 @@
 import { supabase, supabaseConfigured } from '../lib/supabase';
+import { syncTwitchConnectionFromSession } from './twitchConnectionService';
 
 export const isSquadViewAuthConfigured = supabaseConfigured;
 
@@ -7,6 +8,21 @@ function requireSupabase() {
     throw new Error('SquadView account sign in is not configured yet.');
   }
   return supabase;
+}
+
+function queueTwitchConnectionSync(session) {
+  if (!session?.provider_token) return;
+
+  const run = () => {
+    void syncTwitchConnectionFromSession(session).catch((error) => {
+      if (import.meta.env.DEV) {
+        console.info('[SquadView Twitch connection] secure grant sync unavailable', error);
+      }
+    });
+  };
+
+  if (typeof window !== 'undefined') window.setTimeout(run, 0);
+  else run();
 }
 
 function twitchIdentityData(user) {
@@ -25,13 +41,16 @@ export async function getCurrentAccountSession() {
   if (!supabase) return null;
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  return data.session || null;
+  const session = data.session || null;
+  queueTwitchConnectionSync(session);
+  return session;
 }
 
 export function subscribeToAccountChanges(callback) {
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((_event, session) => {
     callback(session || null);
+    queueTwitchConnectionSync(session);
   });
   return () => data.subscription.unsubscribe();
 }
@@ -41,7 +60,7 @@ export async function signInWithTwitch({ forceVerify = false } = {}) {
   const redirectTo = new URL('/watch', window.location.origin).toString();
   const options = {
     redirectTo,
-    scopes: 'user:read:follows',
+    scopes: 'user:read:follows user:read:chat user:write:chat user:read:emotes',
   };
   if (forceVerify) {
     options.queryParams = { force_verify: 'true' };

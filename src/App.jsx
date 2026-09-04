@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TwitchPlayer from './components/TwitchPlayer';
+import YouTubeCompanion from './components/YouTubeCompanion';
+import YouTubeCompanionModal from './components/YouTubeCompanionModal';
 import ChatPanel from './components/ChatPanel';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
@@ -7,6 +9,8 @@ import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
 import AboutPage from './pages/AboutPage';
 import HomePage from './pages/HomePage';
+import InstallSquadView from './components/InstallSquadView';
+import VastLoadingAd from './components/ads/VastLoadingAd';
 import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
 import {
   ensureSquadViewProfile,
@@ -20,6 +24,7 @@ import {
 } from './services/accountService';
 import { loadFollowedChannels, loadFollowedLiveStreams } from './services/twitchFollowingService';
 import { FREE_ENTITLEMENTS } from './config/plans';
+import { AD_CONFIG, isLoadingAdConfigured, markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 import { loadSquadViewEntitlements } from './services/premiumService';
 import { createSavedSquad, deleteSavedSquad, loadSavedSquads, updateSavedSquad } from './services/savedSquadService';
 
@@ -75,12 +80,49 @@ function cleanChannel(value) {
   return String(value || '').trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 }
 
-function getDesktopPageChannels(sourceChannels, leadChannel, page) {
+function getDesktopPageChannels(sourceChannels, leadChannel, page, visibleTwitchLimit = 4) {
   if (!sourceChannels.length) return [];
+  const safeVisibleLimit = Math.max(1, Math.min(4, Number(visibleTwitchLimit) || 4));
   const lead = sourceChannels.includes(leadChannel) ? leadChannel : sourceChannels[0];
   const otherChannels = sourceChannels.filter((channel) => channel !== lead);
-  const start = Math.max(0, page) * 3;
-  return [lead, ...otherChannels.slice(start, start + 3)].filter(Boolean);
+  const otherPerPage = Math.max(0, safeVisibleLimit - 1);
+  if (!otherPerPage) return [lead].filter(Boolean);
+  const start = Math.max(0, page) * otherPerPage;
+  return [lead, ...otherChannels.slice(start, start + otherPerPage)].filter(Boolean);
+}
+
+function readSharedViewerLink() {
+  try {
+    const url = new URL(window.location.href);
+    const rawChannels = url.searchParams.get('channels');
+    if (!rawChannels) return null;
+
+    const sharedChannels = [...new Set(
+      rawChannels
+        .split(',')
+        .map(cleanChannel)
+        .filter(Boolean),
+    )].slice(0, MAX_SUPPORTED_VIEWER_STREAMS);
+
+    if (!sharedChannels.length) return null;
+
+    const requestedActive = cleanChannel(url.searchParams.get('active'));
+    const activeChannel = sharedChannels.includes(requestedActive)
+      ? requestedActive
+      : sharedChannels[0];
+
+    return {
+      channels: sharedChannels,
+      activeChannel,
+      viewMode: 'dual',
+      slotChannels: sharedChannels.slice(0, 2),
+      desktopPage: 0,
+      desktopLeadChannel: activeChannel,
+      chatLayout: 'single',
+    };
+  } catch {
+    return null;
+  }
 }
 
 function readViewerSession() {
@@ -130,8 +172,30 @@ function readViewerSession() {
 }
 
 function SquadViewApp() {
-  const [restoredViewer] = useState(readViewerSession);
-  const [screen, setScreen] = useState(() => restoredViewer ? 'viewer' : 'home');
+  const [sharedViewer] = useState(readSharedViewerLink);
+  const [restoredViewer] = useState(() => sharedViewer ? null : readViewerSession());
+  const initialViewer = sharedViewer
+    ? (() => {
+      const freeLimit = Math.max(1, Math.min(
+        MAX_SUPPORTED_VIEWER_STREAMS,
+        FREE_ENTITLEMENTS.viewerMaxStreams || 8,
+      ));
+      const allowedChannels = sharedViewer.channels.slice(0, freeLimit);
+      const allowedActive = allowedChannels.includes(sharedViewer.activeChannel)
+        ? sharedViewer.activeChannel
+        : allowedChannels[0] || '';
+
+      return {
+        ...sharedViewer,
+        channels: allowedChannels,
+        activeChannel: allowedActive,
+        slotChannels: allowedChannels.slice(0, 2),
+        desktopPage: 0,
+        desktopLeadChannel: allowedActive || allowedChannels[0] || '',
+      };
+    })()
+    : restoredViewer;
+  const [screen, setScreen] = useState(() => sharedViewer ? 'shared_pending' : initialViewer ? 'viewer' : 'home');
   const [inputs, setInputs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
@@ -140,8 +204,10 @@ function SquadViewApp() {
       return ['', '', '', ''];
     }
   });
-  const [channels, setChannels] = useState(() => restoredViewer?.channels || []);
-  const [activeChannel, setActiveChannel] = useState(() => restoredViewer?.activeChannel || '');
+  const [channels, setChannels] = useState(() => initialViewer?.channels || []);
+  // activeChannel owns Focus + chat. listeningChannels independently owns audio.
+  const [activeChannel, setActiveChannel] = useState(() => initialViewer?.activeChannel || '');
+  const [listeningChannels, setListeningChannels] = useState(() => new Set());
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
   const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
   const [landingTab, setLandingTab] = useState('home');
@@ -152,10 +218,9 @@ function SquadViewApp() {
   const [manualManagerChannel, setManualManagerChannel] = useState('');
   const [pendingReplacement, setPendingReplacement] = useState('');
   const [draggedManagerChannel, setDraggedManagerChannel] = useState('');
-  const [installPrompt, setInstallPrompt] = useState(null);
-  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [accountSession, setAccountSession] = useState(null);
+  const [accountReady, setAccountReady] = useState(false);
   const [accountProfile, setAccountProfile] = useState(null);
   const [accountError, setAccountError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
@@ -183,17 +248,21 @@ function SquadViewApp() {
   const [editSquadManualChannel, setEditSquadManualChannel] = useState('');
   const [editSquadBusy, setEditSquadBusy] = useState(false);
   const [editSquadError, setEditSquadError] = useState('');
+  const [youtubeCompanion, setYoutubeCompanion] = useState(null);
+  const [showYoutubeCompanion, setShowYoutubeCompanion] = useState(false);
+  const [showSharedArrival, setShowSharedArrival] = useState(() => Boolean(sharedViewer?.channels?.length));
+  const [pendingAdLaunch, setPendingAdLaunch] = useState(null);
   const accountHydratedUserRef = useRef('');
-  const [viewMode, setViewMode] = useState(() => restoredViewer?.viewMode || 'dual');
+  const [viewMode, setViewMode] = useState(() => initialViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
   // audio after a hard refresh until the user interacts with the page again.
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [slotChannels, setSlotChannels] = useState(() => restoredViewer?.slotChannels || []);
-  const [desktopPage, setDesktopPage] = useState(() => restoredViewer?.desktopPage || 0);
+  const [slotChannels, setSlotChannels] = useState(() => initialViewer?.slotChannels || []);
+  const [desktopPage, setDesktopPage] = useState(() => initialViewer?.desktopPage || 0);
   // Keep the displayed desktop page independent from the stream that currently
   // owns audio. Focusing a stream should highlight it, not reshuffle the grid.
-  const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => restoredViewer?.desktopLeadChannel || restoredViewer?.channels?.[0] || '');
-  const [chatLayout, setChatLayout] = useState(() => restoredViewer?.chatLayout || 'single');
+  const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => initialViewer?.desktopLeadChannel || initialViewer?.channels?.[0] || '');
+  const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
 
@@ -203,8 +272,18 @@ function SquadViewApp() {
   // Twitch embed. A completely new viewer session resets this cache.
   const mountedPlayerChannelsRef = useRef(new Set());
 
-  const viewerSessionActiveRef = useRef(Boolean(restoredViewer));
+  const viewerSessionActiveRef = useRef(Boolean(initialViewer));
   const viewerStreamLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, entitlements.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
+
+  useEffect(() => {
+    if (!sharedViewer?.channels?.length) return;
+    trackEvent('shared_view_opened', {
+      stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+    });
+    trackEvent('shared_view_arrival_shown', {
+      stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+    });
+  }, [sharedViewer]);
 
   useEffect(() => {
     document.title = 'SquadView Viewer — Build Your Multi Stream View';
@@ -227,15 +306,22 @@ function SquadViewApp() {
     async function loadSession() {
       try {
         const session = await getCurrentAccountSession();
-        if (!cancelled) setAccountSession(session);
+        if (!cancelled) {
+          setAccountSession(session);
+          if (!session?.user?.id) setAccountReady(true);
+        }
       } catch (error) {
-        if (!cancelled) setAccountError(error?.message || 'Could not read the SquadView account session.');
+        if (!cancelled) {
+          setAccountError(error?.message || 'Could not read the SquadView account session.');
+          setAccountReady(true);
+        }
       }
     }
 
     void loadSession();
     const unsubscribe = subscribeToAccountChanges((session) => {
       setAccountSession(session);
+      setAccountReady(!session?.user?.id || accountHydratedUserRef.current === session?.user?.id);
       if (!session) {
         setAccountProfile(null);
         setDefaultLayout('smart');
@@ -273,6 +359,23 @@ function SquadViewApp() {
         setAccountProfile(profile);
         setEntitlements(access);
 
+        const accountViewerLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, access.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
+        if (sharedViewer?.channels?.length) {
+          const allowedSharedChannels = sharedViewer.channels.slice(0, accountViewerLimit);
+          const sharedActive = allowedSharedChannels.includes(sharedViewer.activeChannel)
+            ? sharedViewer.activeChannel
+            : allowedSharedChannels[0];
+
+          setChannels(allowedSharedChannels);
+          setActiveChannel(sharedActive || '');
+          setSlotChannels(allowedSharedChannels.slice(0, 2));
+          setDesktopPage(0);
+          setDesktopLeadChannel(sharedActive || allowedSharedChannels[0] || '');
+          setViewMode('dual');
+          setChatLayout('single');
+          viewerSessionActiveRef.current = Boolean(allowedSharedChannels.length);
+        }
+
         let localFavorites = [];
         let localLastChannels = [];
         try {
@@ -289,7 +392,6 @@ function SquadViewApp() {
           ...new Set([...remoteFavorites, ...localFavorites].map(cleanChannel).filter(Boolean)),
         ];
 
-        const accountViewerLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, access.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
         const remoteLastChannels = Array.isArray(cloudState?.last_channels)
           ? cloudState.last_channels.map(cleanChannel).filter(Boolean).slice(0, accountViewerLimit)
           : [];
@@ -330,6 +432,8 @@ function SquadViewApp() {
         if (!cancelled) {
           setAccountError(error?.message || 'Could not sync this SquadView account.');
         }
+      } finally {
+        if (!cancelled) setAccountReady(true);
       }
     }
 
@@ -344,7 +448,7 @@ function SquadViewApp() {
       try {
         const shouldPlayAudio =
           audioEnabled &&
-          channel === activeChannel &&
+          listeningChannels.has(channel) &&
           player.__squadViewState?.visible !== false;
         player.setMuted(!shouldPlayAudio);
         player.setVolume(shouldPlayAudio ? 1 : 0);
@@ -352,7 +456,31 @@ function SquadViewApp() {
         // A player may still be finishing initialization.
       }
     });
-  }, [activeChannel, audioEnabled]);
+  }, [listeningChannels, audioEnabled]);
+
+  useEffect(() => {
+    if (!channels.length) {
+      if (listeningChannels.size) setListeningChannels(new Set());
+      if (audioEnabled) setAudioEnabled(false);
+      return;
+    }
+
+    const allowed = new Set(channels);
+    const nextListening = new Set(
+      [...listeningChannels].filter((channel) => allowed.has(channel)),
+    );
+
+    if (
+      nextListening.size !== listeningChannels.size ||
+      [...nextListening].some((channel) => !listeningChannels.has(channel))
+    ) {
+      setListeningChannels(nextListening);
+    }
+
+    if (!nextListening.size && audioEnabled) {
+      setAudioEnabled(false);
+    }
+  }, [channels, listeningChannels, audioEnabled]);
 
   useEffect(() => {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
@@ -386,21 +514,6 @@ function SquadViewApp() {
     syncDesktopGrid();
     media.addEventListener?.('change', syncDesktopGrid);
     return () => media.removeEventListener?.('change', syncDesktopGrid);
-  }, []);
-
-  useEffect(() => {
-    const captureInstallPrompt = (event) => {
-      event.preventDefault();
-      setInstallPrompt(event);
-    };
-    const clearInstallPrompt = () => setInstallPrompt(null);
-
-    window.addEventListener('beforeinstallprompt', captureInstallPrompt);
-    window.addEventListener('appinstalled', clearInstallPrompt);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', captureInstallPrompt);
-      window.removeEventListener('appinstalled', clearInstallPrompt);
-    };
   }, []);
 
   useEffect(() => {
@@ -460,6 +573,10 @@ function SquadViewApp() {
   const followedLiveLogins = useMemo(
     () => new Set(followedLiveStreams.map((stream) => cleanChannel(stream.user_login)).filter(Boolean)),
     [followedLiveStreams],
+  );
+  const followedChannelLogins = useMemo(
+    () => new Set(followedChannels.map((item) => cleanChannel(item.broadcaster_login)).filter(Boolean)),
+    [followedChannels],
   );
   const managerFollowedChannels = useMemo(() => {
     const query = managerSearch.trim().toLowerCase();
@@ -713,6 +830,23 @@ function SquadViewApp() {
     return () => window.clearInterval(interval);
   }, [accountSession?.user?.id, refreshFollowedLiveStreams]);
 
+  useEffect(() => {
+    if (
+      screen !== 'viewer' ||
+      !accountSession?.user?.id ||
+      followedChannelsStatus !== 'idle'
+    ) {
+      return;
+    }
+
+    void refreshFollowedChannels();
+  }, [
+    screen,
+    accountSession?.user?.id,
+    followedChannelsStatus,
+    refreshFollowedChannels,
+  ]);
+
   async function handleReconnectTwitchFollows() {
     setAuthBusy(true);
     setFollowingError('');
@@ -736,14 +870,12 @@ function SquadViewApp() {
     });
   }
 
-  function beginWatching(selected = validInputs) {
-    const unique = [...new Set(selected)].slice(0, viewerStreamLimit);
-    if (!unique.length) return;
-
+  function commitViewerStart(unique) {
     mountedPlayerChannelsRef.current = new Set();
 
     setChannels(unique);
     setActiveChannel(unique[0]);
+    setListeningChannels(new Set());
     setAudioEnabled(false);
     const startWithGridChat = isDesktopGrid && unique.length === 3;
     const initialViewMode = defaultLayout === 'smart'
@@ -765,26 +897,96 @@ function SquadViewApp() {
     setScreen('viewer');
   }
 
+  function shouldGateViewerWithAd() {
+    // Do not guess a signed-in user's plan while entitlement hydration is still
+    // in flight. Skipping an ad is preferable to accidentally serving one to a
+    // Premium member.
+    return accountReady
+      && entitlements.squadViewAds
+      && isLoadingAdConfigured()
+      && shouldShowLoadingAd();
+  }
 
-  function selectChannel(channel) {
-    setActiveChannel(channel);
-    setAudioEnabled(true);
+  function queueLoadingAd(launch) {
+    markLoadingAdShown();
+    setPendingAdLaunch(launch);
+    trackEvent('squadview_ad_break_queued', {
+      provider: AD_CONFIG.vast.provider,
+      source: launch.source,
+      plan_key: entitlements.planKey,
+    });
+    setScreen('ad');
+  }
 
-    // Selecting audio never changes the desktop page order. The grid only gets
-    // a new lead stream when the user explicitly changes pages.
+  function beginWatching(selected = validInputs, source = 'builder') {
+    const unique = [...new Set(selected)].slice(0, viewerStreamLimit);
+    if (!unique.length) return;
+
+    if (shouldGateViewerWithAd()) {
+      queueLoadingAd({ kind: 'channels', channels: unique, source });
+      return;
+    }
+
+    commitViewerStart(unique);
+  }
+
+  function finishLoadingAd(result) {
+    const launch = pendingAdLaunch;
+    setPendingAdLaunch(null);
+
+    trackEvent('squadview_ad_break_exited', {
+      provider: AD_CONFIG.vast.provider,
+      result,
+      source: launch?.source || 'unknown',
+      plan_key: entitlements.planKey,
+    });
+
+    if (launch?.kind === 'existing_viewer') {
+      setScreen('viewer');
+      return;
+    }
+
+    if (launch?.kind === 'channels' && launch.channels?.length) {
+      commitViewerStart(launch.channels);
+      return;
+    }
+
+    setScreen(channels.length ? 'viewer' : 'home');
+  }
+
+
+  function listenToChannel(channel) {
+    const nextListening = new Set(listeningChannels);
+    const wasListening = nextListening.has(channel);
+
+    if (wasListening) {
+      nextListening.delete(channel);
+    } else {
+      nextListening.add(channel);
+    }
+
+    setListeningChannels(nextListening);
+    setAudioEnabled(nextListening.size > 0);
+
+    // Listen is an independent per-stream audio toggle. Focus/chat do not move.
     const visibleNow = viewMode === 'dual'
       ? (isDesktopGrid
-          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage)
+          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
           : slotChannels)
       : [channel];
 
     playersRef.current.forEach((player, playerChannel) => {
       try {
-        const visible = visibleNow.includes(playerChannel);
-        const selected = playerChannel === channel;
-        if (visible) player.play?.();
-        player.setMuted(!selected);
-        player.setVolume(selected ? 1 : 0);
+        const shouldListen =
+          nextListening.has(playerChannel) &&
+          visibleNow.includes(playerChannel);
+
+        if (!wasListening && playerChannel === channel && shouldListen) {
+          player.play?.();
+        }
+
+        player.setMuted(!shouldListen);
+        player.setVolume(shouldListen ? 1 : 0);
       } catch {
         // The React state effect will apply the same audio state once ready.
       }
@@ -846,22 +1048,6 @@ function SquadViewApp() {
     setManualManagerChannel('');
   }
 
-  async function installApp() {
-    trackEvent('install_app_clicked', {
-      current_screen: 'home',
-      install_prompt_available: Boolean(installPrompt),
-    });
-
-    if (installPrompt) {
-      installPrompt.prompt();
-      await installPrompt.userChoice;
-      setInstallPrompt(null);
-      return;
-    }
-
-    setShowInstallHelp(true);
-  }
-
 
   function exitViewer(exitMethod = 'back_button') {
     try {
@@ -877,6 +1063,8 @@ function SquadViewApp() {
         exit_method: exitMethod,
       });
     }
+    setYoutubeCompanion(null);
+    setShowYoutubeCompanion(false);
     setScreen('home');
   }
 
@@ -886,46 +1074,18 @@ function SquadViewApp() {
     const nextIndex = (currentIndex + direction + channels.length) % channels.length;
     const nextChannel = channels[nextIndex];
 
+    // Focus controls the stream linked to chat. Audio stays independent.
     setActiveChannel(nextChannel);
-    setAudioEnabled(true);
-
-    try {
-      playersRef.current.forEach((player, channel) => {
-        const selected = channel === nextChannel;
-        if (selected) player.play?.();
-        player.setMuted?.(!selected);
-        player.setVolume?.(selected ? 1 : 0);
-      });
-    } catch {
-      // State synchronization will apply once the player is ready.
-    }
   }
 
-  function focusChannelAudio(channel) {
+  function focusChannel(channel) {
+    // Focus controls chat/primary visual state only.
     setActiveChannel(channel);
-    setAudioEnabled(true);
-
-    playersRef.current.forEach((player, playerChannel) => {
-      try {
-        const selected = playerChannel === channel;
-        if (selected) player.play?.();
-        player.setMuted?.(!selected);
-        player.setVolume?.(selected ? 1 : 0);
-      } catch {
-        // State synchronization will apply once the player is ready.
-      }
-    });
   }
 
   function enterSolo(channel = activeChannel) {
     setActiveChannel(channel);
-    setAudioEnabled(true);
     setViewMode('solo');
-    try {
-      playersRef.current.get(channel)?.play?.();
-    } catch {
-      // Twitch's native controls remain available.
-    }
   }
 
   function enterChatMode() {
@@ -1180,7 +1340,7 @@ function SquadViewApp() {
       live_member_count_bucket: getStreamCountBucket(liveMembers.length),
       member_count_bucket: getStreamCountBucket(memberLogins.length),
     });
-    beginWatching(liveMembers);
+    beginWatching(liveMembers, 'saved_squad');
   }
 
   async function handleAccountSignOut() {
@@ -1243,6 +1403,7 @@ function SquadViewApp() {
       setChannels([]);
       setInputs(['', '', '', '', '', '', '', '']);
       setActiveChannel('');
+      setListeningChannels(new Set());
       setSlotChannels([]);
       setAudioEnabled(false);
       setDesktopPage(0);
@@ -1365,10 +1526,65 @@ function SquadViewApp() {
     setDraggedManagerChannel('');
   }
 
+  function openYouTubeCompanion() {
+    setShowYoutubeCompanion(true);
+    trackEvent('youtube_companion_picker_opened', {
+      plan_key: entitlements.planKey,
+      replacing_existing: Boolean(youtubeCompanion),
+    });
+  }
+
+  function selectYouTubeCompanion(video) {
+    if (!video?.videoId) return;
+    setYoutubeCompanion(video);
+    setShowYoutubeCompanion(false);
+    setViewMode('dual');
+    setChatLayout('single');
+    setDesktopLeadChannel(activeChannel);
+    setDesktopPage(0);
+    setAudioEnabled(false);
+    trackEvent('youtube_companion_selected', {
+      plan_key: entitlements.planKey,
+    });
+  }
+
+  function removeYouTubeCompanion() {
+    setYoutubeCompanion(null);
+    setDesktopPage(0);
+    trackEvent('youtube_companion_removed', {
+      plan_key: entitlements.planKey,
+    });
+  }
+
+  useEffect(() => {
+    if (screen !== 'shared_pending' || !sharedViewer?.channels?.length || !accountReady) return;
+
+    if (shouldGateViewerWithAd()) {
+      queueLoadingAd({ kind: 'existing_viewer', source: 'shared_view' });
+    } else {
+      setScreen('viewer');
+    }
+  }, [accountReady, entitlements.squadViewAds, screen, sharedViewer]);
+
   async function shareView() {
-    const url = new URL(window.location.href);
+    if (!channels.length) return;
+
+    const url = new URL('/watch', window.location.origin);
     url.searchParams.set('channels', channels.join(','));
-    const payload = { title: 'SquadView', text: `Watch ${channels.join(', ')} together`, url: url.toString() };
+    if (activeChannel && channels.includes(activeChannel)) {
+      url.searchParams.set('active', activeChannel);
+    }
+
+    const payload = {
+      title: 'SquadView',
+      text: `Watch ${channels.length} Twitch ${channels.length === 1 ? 'stream' : 'streams'} together on SquadView`,
+      url: url.toString(),
+    };
+
+    trackEvent('shared_view_created', {
+      stream_count_bucket: getStreamCountBucket(channels.length),
+    });
+
     try {
       if (navigator.share) await navigator.share(payload);
       else await navigator.clipboard.writeText(url.toString());
@@ -1378,24 +1594,66 @@ function SquadViewApp() {
   }
 
 
+  if (screen === 'shared_pending') {
+    return (
+      <main className="loading-screen shared-loading-screen" aria-live="polite">
+        <a className="loading-brand" href="/">SquadView</a>
+        <section className="loading-card">
+          <div className="loading-copy">
+            <span>Shared SquadView</span>
+            <h1>Preparing this shared view.</h1>
+            <p>SquadView is checking this session before the streams open.</p>
+          </div>
+          <div className="shared-loading-pulse" aria-hidden="true" />
+        </section>
+      </main>
+    );
+  }
+
+  if (screen === 'ad') {
+    return (
+      <VastLoadingAd
+        source={pendingAdLaunch?.source || 'viewer_start'}
+        onFinish={finishLoadingAd}
+      />
+    );
+  }
+
+
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
 
     // Desktop page order is anchored separately from activeChannel. Focusing a
     // stream only changes audio/highlighting. When the user changes pages, the
     // currently focused stream becomes the first tile on the destination page.
-    const desktopOtherCount = Math.max(0, channels.length - 1);
-    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherCount / 3));
-    const desktopChannels = getDesktopPageChannels(channels, desktopLeadChannel, desktopPage);
     const desktopGridChat = viewMode === 'chat' && isDesktopGrid && chatLayout === 'grid';
     const desktopSingleChat = viewMode === 'chat' && isDesktopGrid && !desktopGridChat;
-    const desktopChatChannels = desktopGridChat
-      ? (desktopChannels.length === 3
-          ? desktopChannels
-          : desktopChannels.slice(0, Math.max(1, desktopChannels.length - 1)))
-      : [activeChannel];
+    // Keep the Companion mounted across viewer modes. Desktop Grid + Chat
+    // shows it as a pinned tile. On mobile, Dual becomes a deliberate two-panel
+    // workspace: focused Twitch on top and YouTube Companion below. Entering
+    // Chat temporarily hides/pauses YouTube and gives that lower panel to chat.
+    const mobileYoutubeDual = Boolean(youtubeCompanion) && !isDesktopGrid && viewMode === 'dual';
+    const youtubeVisible = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
+    const desktopVisibleTwitchLimit = desktopGridChat
+      ? (youtubeVisible ? 2 : 3)
+      : (youtubeVisible ? 3 : 4);
+    const desktopOtherPerPage = Math.max(1, desktopVisibleTwitchLimit - 1);
+    const desktopOtherCount = Math.max(0, channels.length - 1);
+    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherCount / desktopOtherPerPage));
+    const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
+    const desktopChannels = getDesktopPageChannels(
+      channels,
+      desktopLeadChannel,
+      desktopPageForRender,
+      desktopVisibleTwitchLimit,
+    );
+    const desktopChatChannels = desktopGridChat ? desktopChannels : [activeChannel];
     const visibleChannels = viewMode === 'dual'
-      ? (isDesktopGrid ? desktopChannels : dualChannels)
+      ? (isDesktopGrid
+          ? desktopChannels
+          : mobileYoutubeDual
+            ? [activeChannel]
+            : dualChannels)
       : viewMode === 'chat'
         ? (isDesktopGrid ? desktopChatChannels : [activeChannel])
         : [activeChannel];
@@ -1412,10 +1670,23 @@ function SquadViewApp() {
     );
 
     const desktopTileCount = desktopGridChat
-      ? visibleChannels.length + 1
+      ? visibleChannels.length + 1 + (youtubeVisible ? 1 : 0)
       : desktopSingleChat
         ? 2
-        : visibleChannels.length;
+        : visibleChannels.length + (youtubeVisible ? 1 : 0);
+
+    // In the YouTube Companion desktop grid, slot 1 is always the pinned Twitch
+    // lead/focused stream, slot 2 is always YouTube, and only slots 3-4 rotate
+    // as the user pages through the remaining Twitch roster. Hidden mounted
+    // players keep their lifecycle but do not influence visible tile order.
+    const twitchTileOrder = (channel) => {
+      if (!isDesktopGrid || !visibleChannels.includes(channel)) return undefined;
+      if (viewMode !== 'dual' && !desktopGridChat) return undefined;
+      const visibleIndex = visibleChannels.indexOf(channel);
+      if (youtubeVisible) return visibleIndex === 0 ? 1 : visibleIndex + 2;
+      return visibleIndex + 1;
+    };
+
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
     const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
@@ -1428,7 +1699,7 @@ function SquadViewApp() {
     const nextDesktopPage = () => moveDesktopPage(1);
 
     return (
-      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
@@ -1436,6 +1707,15 @@ function SquadViewApp() {
             <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Solo focus'}</span>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className={`youtube-header-button ${youtubeCompanion ? 'has-companion' : ''}`}
+              onClick={openYouTubeCompanion}
+              title={youtubeCompanion ? 'Replace YouTube Companion' : 'Add one YouTube Companion video'}
+            >
+              <span aria-hidden="true">▶</span>
+              <b>{youtubeCompanion ? 'YouTube added' : '+ YouTube'}</b>
+            </button>
             <button className="edit-group-button" onClick={() => openEditGroup()}>Manage streams</button>
             <button className="icon-button" onClick={() => openSaveSquadModal(channels)} aria-label="Save current view as a Squad" title="Save Squad"><Save /></button>
             <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
@@ -1461,17 +1741,34 @@ function SquadViewApp() {
                     visible={visibleChannels.includes(channel)}
                     visibleCount={visibleChannels.length}
                     active={activeChannel === channel}
+                    audioSelected={listeningChannels.has(channel)}
                     audioEnabled={audioEnabled}
-                    onSelect={() => selectChannel(channel)}
-                    onFocus={() => focusChannelAudio(channel)}
+                    onListen={() => listenToChannel(channel)}
+                    onFocus={() => focusChannel(channel)}
+                    isTwitchFollowed={
+                      followedLiveLogins.has(channel) ||
+                      followedChannelLogins.has(channel)
+                    }
                     isFavorite={favoriteStreamers.includes(channel)}
                     onToggleFavorite={() => toggleFavoriteStreamer(channel)}
                     onRemove={() => removeChannelFromGroup(channel)}
                     registerPlayer={registerPlayer}
+                    tileOrder={twitchTileOrder(channel)}
                   />
                 ))}
 
-                {isDesktopGrid && viewMode === 'dual' && channels.length < viewerStreamLimit && visibleChannels.length < 4 && (
+                {youtubeCompanion && (
+                  <YouTubeCompanion
+                    video={youtubeCompanion}
+                    visible={youtubeVisible}
+                    isPremium={entitlements.isPremium}
+                    onReplace={openYouTubeCompanion}
+                    onRemove={removeYouTubeCompanion}
+                    tileOrder={youtubeVisible && isDesktopGrid ? 2 : undefined}
+                  />
+                )}
+
+                {isDesktopGrid && viewMode === 'dual' && channels.length < viewerStreamLimit && visibleChannels.length < (youtubeVisible ? 3 : 4) && (
                   <button
                     type="button"
                     className="stream-add-tile"
@@ -1495,15 +1792,29 @@ function SquadViewApp() {
                   </section>
                 )}
 
-                {viewMode === 'chat' && !isDesktopGrid && (
-                  <section className="mobile-chat-tile">
+                {!isDesktopGrid && activeChannel && (
+                  <section
+                    className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' ? 'is-active' : 'is-parked'}`}
+                    aria-hidden={viewMode !== 'chat'}
+                  >
                     <ChatPanel channel={activeChannel} />
                   </section>
                 )}
               </div>
             </section>
 
-            {!isDesktopGrid && viewMode === 'dual' && channels.length === 2 && dualChannels.length > 1 && (
+            {!isDesktopGrid && mobileYoutubeDual && channels.length > 1 && (
+              <div className="mobile-stream-pager youtube-mobile-stream-pager" aria-label="Change the Twitch stream above YouTube">
+                <button onClick={() => cycleFocused(-1)} aria-label="Previous Twitch stream">←</button>
+                <div>
+                  <span>Focused Twitch</span>
+                  <strong>{channels.indexOf(activeChannel) + 1} of {channels.length}</strong>
+                </div>
+                <button onClick={() => cycleFocused(1)} aria-label="Next Twitch stream">→</button>
+              </div>
+            )}
+
+            {!isDesktopGrid && !mobileYoutubeDual && viewMode === 'dual' && channels.length === 2 && dualChannels.length > 1 && (
               <div className="mix-controls" aria-label="Change the secondary stream">
                 <button onClick={previousOther} aria-label="Previous secondary stream">←</button>
                 <div>
@@ -1514,7 +1825,7 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length > 2 && (
+            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && (
               <div className="mobile-stream-pager" aria-label="Move through streams">
                 <button
                   onClick={viewMode === 'dual' ? previousOther : () => cycleFocused(-1)}
@@ -1569,7 +1880,7 @@ function SquadViewApp() {
             {isDesktopGrid && desktopPageCount > 1 && desktopPagedMode && (
               <div className="toolbar-page-controls" aria-label="Change visible stream page">
                 <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
-                <span>Page {desktopPage + 1} of {desktopPageCount}</span>
+                <span>Page {desktopPageForRender + 1} of {desktopPageCount}</span>
                 <button type="button" onClick={nextDesktopPage} aria-label="Next stream page">→</button>
               </div>
             )}
@@ -1854,6 +2165,92 @@ function SquadViewApp() {
             </aside>
           </div>
         )}
+
+        {showSharedArrival && sharedViewer?.channels?.length > 0 && (
+          <div
+            className="shared-arrival-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setShowSharedArrival(false);
+                trackEvent('shared_view_arrival_dismissed', {
+                  stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+                });
+              }
+            }}
+          >
+            <section
+              className="shared-arrival-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="shared-arrival-title"
+            >
+              <button
+                type="button"
+                className="shared-arrival-close"
+                onClick={() => {
+                  setShowSharedArrival(false);
+                  trackEvent('shared_view_arrival_dismissed', {
+                    stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+                  });
+                }}
+                aria-label="Close shared view message"
+              >
+                ×
+              </button>
+
+              <span className="shared-arrival-eyebrow">Shared SquadView</span>
+              <h2 id="shared-arrival-title">
+                {sharedViewer.channels.length > viewerStreamLimit
+                  ? `${viewerStreamLimit} of ${sharedViewer.channels.length} streams loaded`
+                  : `${sharedViewer.channels.length} ${sharedViewer.channels.length === 1 ? 'stream is' : 'streams are'} ready`}
+              </h2>
+              <p>
+                Someone shared this Twitch view with you. The streams are already loaded, so you can start watching right away.
+              </p>
+
+              {sharedViewer.channels.length > viewerStreamLimit && (
+                <div className="shared-arrival-limit">
+                  <strong>Your current plan supports {viewerStreamLimit} streams at once.</strong>
+                  <span>SquadView loaded the first {viewerStreamLimit} from this shared view. Premium supports up to 16.</span>
+                </div>
+              )}
+
+              <div className="shared-arrival-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => {
+                    setShowSharedArrival(false);
+                    trackEvent('shared_view_arrival_continue', {
+                      stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+                    });
+                  }}
+                >
+                  Start watching
+                </button>
+                <InstallSquadView
+                  className="secondary-button shared-arrival-install"
+                  label="Install SquadView"
+                  source="shared_view_arrival"
+                />
+              </div>
+
+              <small className="shared-arrival-footnote">
+                Install SquadView to keep it one tap away on your phone or computer. No app store required.
+              </small>
+            </section>
+          </div>
+        )}
+
+        {showYoutubeCompanion && (
+          <YouTubeCompanionModal
+            existingVideo={youtubeCompanion}
+            isPremium={entitlements.isPremium}
+            onClose={() => setShowYoutubeCompanion(false)}
+            onSelect={selectYouTubeCompanion}
+          />
+        )}
       </div>
     );
   }
@@ -1906,7 +2303,7 @@ function SquadViewApp() {
         </nav>
 
         <div className="topbar-actions">
-          <button className="install-button" onClick={installApp}>Install app</button>
+          <InstallSquadView className="install-button" label="Install app" source="viewer_header" />
           <button
             type="button"
             className={`account-button ${accountSession ? 'is-signed-in' : ''}`}
@@ -1959,6 +2356,18 @@ function SquadViewApp() {
                   <span>Favorites</span>
                 </label>
               </div>
+
+              {validInputs.length > 0 && (
+                <div className="builder-quick-watch-dock">
+                  <button
+                    type="button"
+                    className="primary-button builder-quick-watch-button"
+                    onClick={() => beginWatching()}
+                  >
+                    Start watching {validInputs.length} <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              )}
 
               {builderMode === 'manual' ? (
                 <div className="channel-list">
@@ -2133,8 +2542,8 @@ function SquadViewApp() {
               <span>Simple by design</span>
               <h2>Tap. Listen. Focus.</h2>
               <div className="steps">
-                <article><b>01</b><strong>Tap</strong><p>Switch the active audio and chat.</p></article>
-                <article><b>02</b><strong>Rotate</strong><p>Swap the other visible stream without losing your active one.</p></article>
+                <article><b>01</b><strong>Focus</strong><p>Choose which stream is linked to chat.</p></article>
+                <article><b>02</b><strong>Listen</strong><p>Choose which visible Twitch stream you want to hear.</p></article>
                 <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and build future views in one tap.</p></article>
               </div>
             </section>
@@ -2181,7 +2590,7 @@ function SquadViewApp() {
               <div className="following-state-card">
                 <div className="twitch-account-mark">T</div>
                 <strong>Sign in with Twitch to see who is live</strong>
-                <p>SquadView only asks for permission to read the channels you follow. Your Twitch follows stay separate from SquadView Favorites.</p>
+                <p>SquadView requests the Twitch permissions needed for Following Live and connected chat. It never changes who you follow, and Twitch follows stay separate from SquadView Favorites.</p>
                 <button type="button" className="twitch-login-button" onClick={() => setShowAccount(true)}>
                   Sign in with Twitch
                 </button>
@@ -2246,10 +2655,11 @@ function SquadViewApp() {
                           <button
                             type="button"
                             className="favorite-add-button following-add-button"
-                            onClick={() => addFollowedToGroup(channel)}
-                            disabled={alreadyAdded || groupIsFull}
+                            onClick={() => alreadyAdded ? removeFromBuildList(channel) : addFollowedToGroup(channel)}
+                            disabled={!alreadyAdded && groupIsFull}
+                            data-action={alreadyAdded ? 'remove' : 'add'}
                           >
-                            {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add to view'}
+                            {alreadyAdded ? '− Remove from view' : groupIsFull ? 'View full' : '+ Add to view'}
                           </button>
                         </div>
                       </article>
@@ -2765,16 +3175,6 @@ function SquadViewApp() {
         </div>
       )}
       <SiteFooter />
-      {showInstallHelp && (
-        <div className="modal-backdrop" onClick={() => setShowInstallHelp(false)}>
-          <section className="modal" onClick={(event) => event.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowInstallHelp(false)}><X /></button>
-            <h2>Add SquadView to your home screen</h2>
-            <p>On iPhone, open the Share menu in Safari and choose <strong>Add to Home Screen</strong>. On Android or desktop Chrome, open the browser menu and choose <strong>Install app</strong>.</p>
-            <button className="primary-button" onClick={() => setShowInstallHelp(false)}>Got it</button>
-          </section>
-        </div>
-      )}
     </div>
   );
 }

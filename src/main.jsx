@@ -22,8 +22,28 @@ try {
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  let squadViewWorkerReloading = false;
+  const workerReloadKey = 'squadview-controller-refresh-v1';
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (squadViewWorkerReloading) return;
+
+    try {
+      if (window.sessionStorage.getItem(workerReloadKey) === '1') return;
+      window.sessionStorage.setItem(workerReloadKey, '1');
+    } catch {
+      // A page-local guard still prevents duplicate reloads if storage is blocked.
+    }
+
+    squadViewWorkerReloading = true;
+    window.location.reload();
+  });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: 'none' }).then((registration) => {
+      // Safari/PWA hardening: explicitly check for a newer worker whenever
+      // SquadView starts instead of waiting for the browser's update cadence.
+      void registration.update();
+    }).catch(() => {
       // SquadView still works normally if service-worker registration is blocked.
     });
   });

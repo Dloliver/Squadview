@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import HomeAdSlot from '../components/ads/HomeAdSlot';
 import FooterAdSlot from '../components/ads/FooterAdSlot';
 import SiteFooter from '../components/legal/SiteFooter';
+import InstallSquadView from '../components/InstallSquadView';
 
 const features = [
   {
@@ -214,6 +215,7 @@ export default function HomePage() {
             <p>SquadView organizes multiple Twitch channels into one responsive viewing workspace. Keep several perspectives visible, choose the stream you want to hear, and bring the relevant Twitch chat into focus when you need it.</p>
             <div className="marketing-hero-actions">
               <a className="marketing-primary-cta" href="/watch">Open SquadView <span aria-hidden="true">→</span></a>
+              <InstallSquadView className="marketing-secondary-cta marketing-install-cta" label="Install SquadView" source="homepage_hero" />
               <button className="marketing-secondary-cta" type="button" onClick={() => setModal('how')}>See how it works</button>
             </div>
             <ul className="marketing-hero-facts" aria-label="SquadView highlights">

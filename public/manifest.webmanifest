@@ -1,7 +1,7 @@
 {
   "name": "SquadView",
   "short_name": "SquadView",
-  "description": "Build a responsive multi stream Twitch view with grid, chat, solo viewing, audio focus, and favorites.",
+  "description": "Watch and manage multiple Twitch streams in one SquadView workspace with Saved Squads, Twitch chat, audio focus, and a YouTube Companion.",
   "start_url": "/watch",
   "scope": "/",
   "display": "standalone",
@@ -20,6 +20,27 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    }
+  ],
+  "id": "/watch",
+  "categories": [
+    "entertainment",
+    "utilities"
+  ],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Open SquadView",
+      "short_name": "Open viewer",
+      "description": "Open the SquadView multi-stream viewer.",
+      "url": "/watch",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }

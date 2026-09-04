@@ -3086,6 +3086,7 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 }
 
 .stream-add-tile {
+  order: 99;
   min-height: 0;
   display: grid;
   place-items: center;
@@ -3452,5 +3453,1303 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 
   .stream-manager-source-row > div small {
     font-size: 8px;
+  }
+}
+
+/* SquadView monetization and Saved Squads foundation v1 */
+.save-squad-button {
+  width: 100%;
+  margin-top: 10px;
+  justify-content: center;
+  gap: 8px;
+}
+
+.saved-squads-page {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0 80px;
+}
+
+.saved-squads-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+
+.saved-squads-heading > div:first-child > span,
+.modal-eyebrow,
+.premium-preview-card > div > span {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent, #a970ff);
+}
+
+.saved-squads-heading h1,
+.saved-squad-card h2,
+.premium-preview-card h2 {
+  margin: 0;
+}
+
+.saved-squads-heading p {
+  max-width: 720px;
+  margin: 10px 0 0;
+  color: var(--muted, #a9a9b2);
+  line-height: 1.6;
+}
+
+.plan-chip {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 2px;
+  min-width: 128px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.04);
+  text-align: right;
+}
+
+.plan-chip strong { font-size: 0.95rem; }
+.plan-chip span { color: var(--muted, #a9a9b2); font-size: 0.76rem; }
+.plan-chip.is-premium { border-color: rgba(169,112,255,0.5); }
+
+.saved-squads-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.saved-squad-card,
+.saved-squads-empty,
+.premium-preview-card {
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px;
+  background: rgba(255,255,255,0.035);
+}
+
+.saved-squad-card { padding: 20px; }
+
+.saved-squad-card-heading,
+.saved-squad-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.saved-squad-card-heading > div > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted, #a9a9b2);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.saved-squad-card h2 { font-size: 1.18rem; }
+
+.saved-squad-members,
+.save-squad-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.saved-squad-members > span,
+.save-squad-preview > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.055);
+  color: #d7d7dc;
+  font-size: 0.78rem;
+}
+
+.saved-squad-members > span.is-live {
+  background: rgba(0, 210, 106, 0.1);
+  color: #dffff0;
+}
+
+.saved-squad-card-footer small { color: var(--muted, #a9a9b2); }
+.saved-squad-card-footer .primary-button { width: auto; }
+
+.saved-squads-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.saved-squads-empty .text-icon { font-size: 2rem; }
+.saved-squads-empty p { max-width: 520px; margin: 0; color: var(--muted, #a9a9b2); }
+.saved-squads-empty .secondary-button { width: auto; margin-top: 6px; }
+
+.saved-squads-error { margin-bottom: 18px; }
+
+.premium-preview-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 26px;
+  margin-top: 24px;
+  padding: 24px;
+  background: linear-gradient(135deg, rgba(169,112,255,0.11), rgba(255,255,255,0.035));
+}
+
+.premium-preview-card p { margin: 10px 0 0; color: var(--muted, #a9a9b2); line-height: 1.6; }
+.premium-preview-card ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.premium-preview-card li { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.premium-preview-card li:last-child { border-bottom: 0; }
+.premium-preview-card li strong { font-size: 1rem; }
+.premium-preview-card li span { color: var(--muted, #a9a9b2); text-align: right; font-size: 0.82rem; }
+
+.save-squad-modal form { display: grid; gap: 14px; margin-top: 20px; }
+.save-squad-modal label { display: grid; gap: 7px; }
+.save-squad-modal label > span { font-size: 0.8rem; font-weight: 700; }
+.save-squad-modal input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  color: inherit;
+  padding: 12px 13px;
+  font: inherit;
+}
+.save-squad-modal form > small { color: var(--muted, #a9a9b2); line-height: 1.45; }
+
+.account-plan-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.035);
+}
+.account-plan-summary > div { display: grid; gap: 2px; }
+.account-plan-summary small,
+.account-plan-summary span { color: var(--muted, #a9a9b2); }
+.account-plan-summary strong { font-size: 1rem; }
+.account-plan-summary span { font-size: 0.78rem; line-height: 1.45; }
+.account-plan-summary.is-premium { border-color: rgba(169,112,255,0.5); }
+
+@media (max-width: 760px) {
+  .saved-squads-page { width: min(100% - 22px, 1120px); padding-top: 28px; }
+  .saved-squads-heading { align-items: stretch; flex-direction: column; }
+  .plan-chip { text-align: left; width: fit-content; }
+  .saved-squads-grid { grid-template-columns: 1fr; }
+  .premium-preview-card { grid-template-columns: 1fr; }
+  .account-plan-summary { grid-template-columns: 1fr; gap: 8px; }
+}
+
+/* Saved Squad editor + live-only launch (Premium Phase 2) */
+.saved-squad-card-footer {
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.saved-squad-card-meta {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.saved-squad-card-meta small:last-child { color: var(--muted, #a9a9b2); }
+.saved-squad-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.saved-squad-card-actions .primary-button,
+.saved-squad-card-actions .secondary-button {
+  width: auto;
+  min-height: 44px;
+  margin: 0;
+}
+.saved-squad-card-actions .primary-button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.saved-squad-edit-button { padding-inline: 16px; }
+
+.saved-squad-editor-backdrop {
+  align-items: center;
+  overflow-y: auto;
+}
+.saved-squad-editor-modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  text-align: left;
+  padding: 30px 26px 24px;
+}
+.saved-squad-editor-header { padding-right: 40px; }
+.saved-squad-editor-header h2 {
+  margin: 7px 0 7px;
+  font: 650 clamp(24px, 4vw, 31px)/1.05 'Space Grotesk';
+  letter-spacing: -.035em;
+}
+.saved-squad-editor-header p {
+  max-width: 650px;
+  margin: 0;
+  color: var(--muted, #a9a9b2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.saved-squad-editor-form {
+  display: grid;
+  gap: 18px;
+  margin-top: 22px;
+}
+.saved-squad-editor-name,
+.saved-squad-editor-add {
+  display: grid;
+  gap: 7px;
+}
+.saved-squad-editor-name > span,
+.saved-squad-editor-add > strong,
+.saved-squad-editor-member-heading strong {
+  color: #ecfff8;
+  font-size: .82rem;
+  font-weight: 750;
+}
+.saved-squad-editor-name input,
+.saved-squad-editor-manual input,
+.saved-squad-editor-search {
+  width: 100%;
+  min-height: 46px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #071310;
+  color: #fff;
+  padding: 0 13px;
+}
+.saved-squad-editor-member-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.saved-squad-editor-member-heading > div { display: grid; gap: 3px; }
+.saved-squad-editor-member-heading small { color: var(--muted, #a9a9b2); }
+.premium-mini-pill {
+  padding: 6px 9px;
+  border: 1px solid rgba(180, 100, 255, .45);
+  border-radius: 999px;
+  color: #d8adff;
+  font-size: .68rem;
+  font-weight: 750;
+}
+.saved-squad-editor-members {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(3, 18, 14, .38);
+}
+.saved-squad-editor-members > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 6px 5px 11px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  color: #d9ebe5;
+  font-size: .78rem;
+}
+.saved-squad-editor-members > span.is-live {
+  border: 1px solid rgba(69,224,181,.32);
+  background: rgba(69,224,181,.08);
+}
+.saved-squad-editor-members button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255,255,255,.07);
+  color: #b9cbc5;
+  cursor: pointer;
+}
+.saved-squad-editor-manual {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.saved-squad-editor-manual .secondary-button {
+  width: auto;
+  min-width: 90px;
+  min-height: 46px;
+  margin: 0;
+}
+.saved-squad-editor-sources {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: rgba(3, 18, 14, .28);
+}
+.saved-squad-editor-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  border-bottom: 1px solid var(--border);
+}
+.saved-squad-editor-tabs button {
+  min-height: 43px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted, #a9a9b2);
+  font-weight: 700;
+  cursor: pointer;
+}
+.saved-squad-editor-tabs button:last-child { border-right: 0; }
+.saved-squad-editor-tabs button.is-current {
+  background: rgba(69,224,181,.08);
+  color: var(--mint);
+}
+.saved-squad-editor-search {
+  width: calc(100% - 24px);
+  margin: 12px;
+}
+.saved-squad-editor-candidates {
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 8px;
+}
+.saved-squad-editor-candidate {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #eafff7;
+  text-align: left;
+  cursor: pointer;
+}
+.saved-squad-editor-candidate:hover:not(:disabled) { background: rgba(255,255,255,.05); }
+.saved-squad-editor-candidate:disabled { opacity: .45; cursor: not-allowed; }
+.saved-squad-editor-candidate > span { min-width: 0; display: grid; gap: 3px; }
+.saved-squad-editor-candidate strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-squad-editor-candidate small {
+  color: var(--muted, #a9a9b2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.saved-squad-editor-candidate b {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(69,224,181,.10);
+  color: var(--mint);
+  font-size: 1.1rem;
+}
+.saved-squad-editor-empty {
+  padding: 28px 16px;
+  color: var(--muted, #a9a9b2);
+  font-size: .8rem;
+  text-align: center;
+}
+.saved-squad-editor-actions {
+  display: grid;
+  grid-template-columns: minmax(120px, .7fr) minmax(180px, 1.3fr);
+  gap: 9px;
+}
+.saved-squad-editor-actions .primary-button,
+.saved-squad-editor-actions .secondary-button {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .saved-squad-card-actions { width: 100%; }
+  .saved-squad-card-actions .primary-button,
+  .saved-squad-card-actions .secondary-button { flex: 1; }
+  .saved-squad-editor-backdrop { align-items: end; padding: 8px; }
+  .saved-squad-editor-modal {
+    max-height: calc(100vh - 16px);
+    border-radius: 22px 22px 10px 10px;
+    padding: 26px 16px 18px;
+  }
+  .saved-squad-editor-tabs button { font-size: .75rem; }
+  .saved-squad-editor-actions { grid-template-columns: 1fr 1.3fr; }
+}
+
+/* YouTube Companion — one supplemental YouTube video beside the Twitch workspace. */
+.youtube-header-button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #3d3535;
+  border-radius: 999px;
+  background: #151111;
+  color: #f0dede;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.youtube-header-button > span { color: #ff4f45; font-size: 11px; }
+.youtube-header-button > b { font-size: 10px; }
+.youtube-header-button:hover,
+.youtube-header-button.has-companion { border-color: #ff6258; color: #fff; }
+.youtube-header-button.has-companion { background: rgba(255,79,69,.08); }
+
+.youtube-companion-card {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 2px solid #342323;
+  border-radius: 12px;
+  background: #080505;
+  display: flex;
+  flex-direction: column;
+}
+.youtube-companion-card.is-hidden {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 400px;
+  height: 342px;
+  visibility: hidden;
+  pointer-events: none;
+}
+.youtube-companion-header {
+  flex: 0 0 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #342323;
+  background: #120d0d;
+}
+.youtube-companion-brand { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.youtube-companion-brand > div { min-width: 0; }
+.youtube-companion-brand strong,
+.youtube-companion-brand small { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.youtube-companion-brand strong { color: #fff5f4; font-size: 11px; }
+.youtube-companion-brand small { margin-top: 1px; color: #a98d8a; font-size: 8px; }
+.youtube-play-mark {
+  width: 24px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #ff0033;
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+}
+.youtube-play-mark.large { width: 40px; height: 30px; border-radius: 9px; font-size: 13px; }
+.youtube-companion-actions { display: flex; align-items: center; gap: 5px; }
+.youtube-companion-actions button {
+  min-height: 27px;
+  padding: 0 9px;
+  border: 1px solid #5a3a38;
+  border-radius: 999px;
+  background: #17100f;
+  color: #e5c5c1;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.youtube-companion-actions .youtube-companion-remove { width: 27px; padding: 0; font-size: 17px; }
+.youtube-companion-meta {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #261919;
+  background: #0b0808;
+}
+.youtube-companion-meta strong,
+.youtube-companion-meta span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-companion-meta strong { color: #f4e8e6; font-size: 10px; }
+.youtube-companion-meta span { margin-top: 2px; color: #9e8581; font-size: 8px; }
+.youtube-companion-player { position: relative; flex: 1 1 auto; min-height: 0; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.youtube-companion-player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+
+.youtube-companion-modal { width: min(720px, 100%); max-height: min(88dvh, 820px); overflow: auto; text-align: left; }
+.youtube-modal-heading { display: flex; align-items: center; gap: 12px; padding-right: 38px; }
+.youtube-modal-heading h2 { margin: 2px 0 0; }
+.youtube-modal-heading .modal-eyebrow { display: block; color: #b39490; font-size: 9px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+.youtube-companion-modal > p { margin: 14px 0 16px; }
+.youtube-premium-note,
+.youtube-config-note {
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.youtube-premium-note { border: 1px solid rgba(159,92,246,.36); background: rgba(159,92,246,.08); }
+.youtube-premium-note strong,
+.youtube-premium-note span { display: block; }
+.youtube-premium-note strong { color: #dcbfff; }
+.youtube-premium-note span { margin-top: 2px; color: #a990bc; }
+.youtube-config-note { border: 1px solid rgba(255,159,67,.35); background: rgba(255,159,67,.08); color: #d8b58f; }
+.youtube-search-form > label,
+.youtube-url-form > label { display: block; margin-bottom: 6px; color: #bba8a5; font-size: 10px; font-weight: 800; }
+.youtube-search-form > div,
+.youtube-url-form > div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; }
+.youtube-companion-modal .youtube-search-form input,
+.youtube-companion-modal .youtube-url-form input { margin: 0; min-height: 46px; }
+.youtube-search-form .primary-button,
+.youtube-url-form .secondary-button { width: auto; min-width: 96px; min-height: 46px; padding-inline: 15px; border-radius: 12px; }
+.youtube-or { display: flex; align-items: center; gap: 10px; margin: 12px 0; color: #806a67; font-size: 9px; text-transform: uppercase; }
+.youtube-or::before,
+.youtube-or::after { content: ''; height: 1px; flex: 1; background: #332724; }
+.youtube-companion-error { margin-top: 14px; }
+.youtube-search-results { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin-top: 16px; }
+.youtube-search-result {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 112px minmax(0,1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #392c29;
+  border-radius: 12px;
+  background: #0c0908;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.youtube-search-result:hover { border-color: #ff6258; background: #120c0b; }
+.youtube-search-result img { width: 112px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #000; }
+.youtube-search-result > span { min-width: 0; }
+.youtube-search-result small,
+.youtube-search-result strong,
+.youtube-search-result em { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.youtube-search-result small { color: #ff7168; font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.youtube-search-result strong { margin-top: 3px; color: #f6ecea; font-size: 10px; line-height: 1.3; max-height: 2.6em; }
+.youtube-search-result em { margin-top: 4px; color: #9b817d; font-size: 8px; font-style: normal; white-space: nowrap; }
+.youtube-policy-links { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #332724; color: #856e6a; font-size: 9px; }
+.youtube-policy-links a { color: #caa7a2; }
+
+@media (min-width: 1100px) {
+  .stream-stage.mode-dual .youtube-companion-card.is-visible { height: 100%; min-height: 0; }
+  .stream-stage.mode-dual .youtube-companion-player { aspect-ratio: auto; }
+}
+
+@media (max-width: 720px) {
+  .youtube-header-button { width: 32px; padding: 0; justify-content: center; }
+  .youtube-header-button > b { display: none; }
+  .youtube-companion-card.is-visible { min-height: 320px; }
+  .youtube-search-results { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 520px) {
+  .youtube-companion-modal { padding-inline: 16px; }
+  .youtube-search-form > div,
+  .youtube-url-form > div { grid-template-columns: 1fr; }
+  .youtube-search-form .primary-button,
+  .youtube-url-form .secondary-button { width: 100%; }
+  .youtube-search-result { grid-template-columns: 96px minmax(0,1fr); }
+  .youtube-search-result img { width: 96px; }
+}
+
+/* Following Live cards are roster toggles: users can add and remove from the
+   same page instead of opening View List solely to trim the current view. */
+.following-add-button[data-action="remove"] {
+  border-color: rgba(255, 120, 112, .35);
+  background: rgba(255, 92, 82, .08);
+  color: #ffc2bd;
+}
+.following-add-button[data-action="remove"]:hover {
+  border-color: rgba(255, 120, 112, .65);
+  background: rgba(255, 92, 82, .14);
+}
+
+@media (min-width: 1100px) {
+  .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat .youtube-companion-card.is-visible {
+    height: 100%;
+    min-height: 0;
+  }
+  .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat .youtube-companion-player {
+    aspect-ratio: auto;
+  }
+  .viewer-shell.mode-chat.chat-layout-grid .desktop-grid-chat-tile {
+    order: 4;
+  }
+}
+
+/* Phase 1.4 — intentional mobile Twitch + YouTube workspace.
+   With a Companion active, phones show only the focused Twitch stream plus
+   YouTube. Chat temporarily takes YouTube's lower panel; the Companion remains
+   mounted off-screen so its selection and playback position are preserved. */
+@media (max-width: 1099px) {
+  .viewer-shell.mobile-youtube-dual .stream-stage-players {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    align-items: start;
+  }
+
+  .viewer-shell.mobile-youtube-dual .stream-card.is-visible,
+  .viewer-shell.mobile-youtube-dual .youtube-companion-card.is-visible {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .viewer-shell.mobile-youtube-dual .youtube-companion-card.is-visible {
+    min-height: 0;
+  }
+
+  .viewer-shell.mobile-youtube-dual .youtube-companion-player {
+    aspect-ratio: 16 / 9;
+  }
+
+  .youtube-mobile-stream-pager {
+    margin-top: 0;
+  }
+}
+
+/* Phase 1.8: benefit-first PWA installation experience. */
+.marketing-install-cta {
+  cursor: pointer;
+}
+
+.pwa-install-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 6, 5, .78);
+  backdrop-filter: blur(12px);
+}
+
+.pwa-install-modal {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100dvh - 40px));
+  overflow-y: auto;
+  padding: 30px;
+  border: 1px solid rgba(69,224,181,.22);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(10,27,23,.99), rgba(5,15,13,.99));
+  box-shadow: 0 28px 80px rgba(0,0,0,.48);
+}
+
+.pwa-install-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(4,16,13,.82);
+  color: #b8cdc5;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.pwa-install-eyebrow {
+  color: var(--mint);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.pwa-install-modal h2 {
+  margin: 10px 42px 10px 0;
+  color: #f2fff9;
+  font: 700 clamp(25px, 5vw, 34px) 'Space Grotesk';
+  letter-spacing: -.035em;
+}
+
+.pwa-install-intro {
+  margin: 0;
+  color: #a8bdb6;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.pwa-install-benefits {
+  display: grid;
+  gap: 10px;
+  margin: 22px 0 18px;
+}
+
+.pwa-install-benefit {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 14px;
+  background: rgba(255,255,255,.025);
+}
+
+.pwa-install-benefit-mark {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(69,224,181,.12);
+  color: var(--mint-soft);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.pwa-install-benefit > div {
+  display: grid;
+  gap: 4px;
+}
+
+.pwa-install-benefit strong {
+  color: #e7fff6;
+  font-size: 13px;
+}
+
+.pwa-install-benefit span:last-child {
+  color: #93aaa2;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pwa-install-status,
+.pwa-install-ios-panel {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  background: rgba(255,255,255,.025);
+  color: #9fb5ad;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pwa-install-status.is-ready {
+  border-color: rgba(69,224,181,.2);
+  background: rgba(69,224,181,.07);
+}
+
+.pwa-install-status.is-unavailable {
+  border-color: rgba(255,255,255,.1);
+}
+
+.pwa-install-status strong,
+.pwa-install-ios-panel strong {
+  color: #e7fff6;
+}
+
+.pwa-install-ios-panel > p {
+  margin: 0;
+}
+
+.pwa-install-steps {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: pwa-step;
+}
+
+.pwa-install-steps li {
+  counter-increment: pwa-step;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 9px 12px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px;
+  background: rgba(255,255,255,.02);
+  color: #d6e7e1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pwa-install-steps li::before {
+  content: counter(pwa-step);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(69,224,181,.12);
+  color: var(--mint-soft);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.pwa-install-actions {
+  display: grid;
+  gap: 9px;
+}
+
+.pwa-install-actions > .primary-button {
+  width: 100%;
+}
+
+.pwa-install-actions > .primary-button:disabled {
+  cursor: not-allowed;
+  opacity: .56;
+}
+
+.pwa-install-secondary {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  background: transparent;
+  color: #9fb5ad;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pwa-install-secondary:hover {
+  border-color: rgba(69,224,181,.2);
+  color: #dffaf0;
+}
+
+.pwa-install-footnote {
+  display: block;
+  margin-top: 12px;
+  color: #657d75;
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .pwa-install-backdrop { padding: 12px; }
+  .pwa-install-modal {
+    max-height: calc(100dvh - 24px);
+    padding: 24px 18px 18px;
+    border-radius: 20px;
+  }
+  .pwa-install-modal h2 { margin-right: 36px; }
+}
+
+/* Phase 1.7: shared-view arrival and install discovery. */
+.shared-arrival-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2400;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 6, 5, .72);
+  backdrop-filter: blur(10px);
+}
+
+.shared-arrival-modal {
+  position: relative;
+  width: min(540px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(69,224,181,.22);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(10,27,23,.99), rgba(5,15,13,.99));
+  box-shadow: 0 28px 80px rgba(0,0,0,.48);
+}
+
+.shared-arrival-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(4,16,13,.82);
+  color: #b8cdc5;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.shared-arrival-eyebrow {
+  color: var(--mint);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.shared-arrival-modal h2 {
+  margin: 10px 42px 10px 0;
+  color: #f2fff9;
+  font: 700 clamp(25px, 5vw, 34px) 'Space Grotesk';
+  letter-spacing: -.035em;
+}
+
+.shared-arrival-modal > p {
+  margin: 0;
+  color: #a8bdb6;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.shared-arrival-limit {
+  display: grid;
+  gap: 5px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(69,224,181,.16);
+  border-radius: 14px;
+  background: rgba(69,224,181,.07);
+  color: #9fb5ad;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shared-arrival-limit strong {
+  color: #e7fff6;
+}
+
+.shared-arrival-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.shared-arrival-actions > button {
+  width: 100%;
+  min-height: 44px;
+}
+
+.shared-arrival-install {
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.shared-arrival-footnote {
+  display: block;
+  margin-top: 14px;
+  color: #728b82;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .shared-arrival-backdrop { padding: 12px; }
+  .shared-arrival-modal { padding: 24px 18px 18px; border-radius: 20px; }
+  .shared-arrival-modal h2 { margin-right: 36px; }
+  .shared-arrival-actions { grid-template-columns: 1fr; }
+}
+
+/* Phase 1.9 — mobile viewport-fit control dock.
+   Twitch requires embedded video windows to remain at least 400x300, so phones
+   should not shrink the actual Twitch iframe below that requirement just to
+   force every card into a short Safari viewport. Instead, keep the controls
+   permanently reachable and let only the stream workspace scroll when the
+   browser chrome leaves too little vertical room. Installed PWAs generally
+   regain enough vertical space for the complete mobile dual layout. */
+@media (max-width: 899px) {
+  .viewer-workspace {
+    position: relative;
+    overscroll-behavior-y: contain;
+    scrollbar-width: none;
+  }
+
+  .viewer-workspace::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Reserve room for whichever mobile stream navigator is currently active so
+     the last player never becomes permanently hidden underneath the dock. */
+  .viewer-workspace:has(> .mobile-stream-pager),
+  .viewer-workspace:has(> .mix-controls),
+  .viewer-workspace:has(> .focus-carousel) {
+    padding-bottom: 62px;
+  }
+
+  .viewer-workspace > .mobile-stream-pager,
+  .viewer-workspace > .mix-controls,
+  .viewer-workspace > .focus-carousel {
+    position: fixed;
+    left: 6px;
+    right: 6px;
+    bottom: calc(54px + max(env(safe-area-inset-bottom), 8px));
+    z-index: 34;
+    margin: 0;
+    min-height: 52px;
+    padding: 5px 6px;
+    border-radius: 13px;
+    background: rgba(7, 22, 18, .98);
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, .28);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .viewer-workspace > .mobile-stream-pager {
+    grid-template-columns: 56px minmax(0, 1fr) 56px;
+    gap: 6px;
+  }
+
+  .viewer-workspace > .mobile-stream-pager > button,
+  .viewer-workspace > .mix-controls > button,
+  .viewer-workspace > .focus-carousel > button {
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .viewer-workspace > .mobile-stream-pager span,
+  .viewer-workspace > .mix-controls span,
+  .viewer-workspace > .focus-carousel span {
+    font-size: 8px;
+  }
+
+  .viewer-workspace > .mobile-stream-pager strong,
+  .viewer-workspace > .mix-controls strong,
+  .viewer-workspace > .focus-carousel strong {
+    font-size: 12px;
+  }
+
+  /* Use the available vertical space efficiently without changing Twitch's
+     required player dimensions. */
+  .stream-stage {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .stream-stage-players {
+    gap: 4px;
+  }
+}
+
+/* Standalone mode has no Safari address bar, so keep the dock close to the app
+   toolbar while respecting the device's real home-indicator safe area. */
+@media (display-mode: standalone) and (max-width: 899px) {
+  .viewer-workspace > .mobile-stream-pager,
+  .viewer-workspace > .mix-controls,
+  .viewer-workspace > .focus-carousel {
+    bottom: calc(50px + max(env(safe-area-inset-bottom), 8px));
+  }
+}
+
+
+/* Phase 2.0 — persistent mobile Twitch chat session.
+   On iOS/WebKit, destroying and recreating the cross-origin Twitch chat iframe
+   can cause the embedded login state to be requested again. Keep one mobile
+   ChatPanel mounted for the viewer and park it outside layout whenever Chat is
+   not the active mode. Changing activeChannel then navigates the same iframe
+   browsing context instead of constructing a fresh one. */
+@media (max-width: 1099px) {
+  .persistent-mobile-chat.is-parked {
+    display: none !important;
+  }
+
+  .viewer-shell.mode-chat .persistent-mobile-chat.is-active {
+    display: block;
+  }
+}
+
+/* SquadView Phase 2.1.2a — simplified immediate Start Watching CTA */
+.builder-quick-watch-dock {
+  margin: 14px 0 16px;
+  display: flex;
+  width: 100%;
+}
+
+.builder-quick-watch-dock .builder-quick-watch-button {
+  width: 100%;
+  min-height: 48px;
+  justify-content: center;
+}
+
+@media (max-width: 760px) {
+  .builder-card {
+    padding-bottom: 88px;
+  }
+
+  .builder-quick-watch-dock {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: 40;
+    width: auto;
+    margin: 0;
+  }
+
+  .builder-quick-watch-dock .builder-quick-watch-button {
+    width: 100%;
+    min-height: 54px;
+    font-weight: 800;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+  }
+}
+
+
+/* SquadView Phase 2.3 — Focus, Listen, Twitch follow state */
+.twitch-follow-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid rgba(145, 71, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(145, 71, 255, 0.14);
+  color: #cdb3ff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.focus-chip.is-focused {
+  border-color: rgba(145, 71, 255, 0.72);
+  background: rgba(145, 71, 255, 0.22);
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .twitch-follow-state {
+    max-width: 132px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* SquadView Ads Phase 1 — dedicated VAST loading break */
+.vast-loading-screen {
+  align-content: center;
+}
+.vast-loading-card {
+  width: min(760px, 100%);
+}
+.vast-ad-frame {
+  position: relative;
+  width: min(680px, 100%);
+  aspect-ratio: 16 / 9;
+  min-height: 180px;
+  margin: 18px auto 0;
+  overflow: hidden;
+  border: 1px solid #24483d;
+  border-radius: 18px;
+  background: #020604;
+}
+.vast-ad-frame > div:not(.vast-ad-waiting),
+.vast-ad-frame iframe {
+  max-width: 100%;
+}
+.vast-content-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.vast-ad-waiting {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 35%, rgba(69, 224, 181, .12), transparent 45%), #030a08;
+  text-align: center;
+  pointer-events: none;
+}
+.vast-ad-waiting strong {
+  color: #e8f5f0;
+  font: 700 15px 'Space Grotesk', sans-serif;
+}
+.vast-ad-waiting small,
+.vast-loading-status small {
+  color: #78958c;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.vast-ad-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(69, 224, 181, .18);
+  border-top-color: var(--mint);
+  border-radius: 50%;
+  animation: squadview-ad-spin .9s linear infinite;
+}
+.vast-loading-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 12px;
+  color: #b9d0c8;
+  font-size: 11px;
+}
+.vast-loading-status small {
+  text-align: right;
+}
+.shared-loading-pulse {
+  width: 56px;
+  height: 5px;
+  margin: 28px auto 0;
+  border-radius: 999px;
+  background: var(--mint);
+  animation: squadview-shared-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes squadview-ad-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes squadview-shared-pulse {
+  from { opacity: .3; transform: scaleX(.55); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+@media (max-width: 700px) {
+  .vast-loading-screen {
+    padding: max(18px, env(safe-area-inset-top)) 12px max(18px, env(safe-area-inset-bottom));
+  }
+  .vast-loading-card {
+    padding: 18px 12px;
+    border-radius: 18px;
+  }
+  .vast-ad-frame {
+    width: 100%;
+    border-radius: 12px;
+  }
+  .vast-loading-status {
+    display: grid;
+    gap: 4px;
+    text-align: center;
+  }
+  .vast-loading-status small {
+    text-align: center;
   }
 }

@@ -532,6 +532,7 @@ function applyPlayerState(
   const {
     channel,
     active,
+    audioSelected,
     audioEnabled,
     visible,
     visibleCount = 1,
@@ -540,7 +541,7 @@ function applyPlayerState(
   const audible =
     Boolean(
       visible &&
-      active &&
+      audioSelected &&
       audioEnabled,
     );
 
@@ -590,6 +591,7 @@ function applyPlayerState(
     player.__squadViewState = {
       channel,
       active,
+      audioSelected,
       audioEnabled,
       visible,
       visibleCount,
@@ -658,6 +660,7 @@ function applyPlayerState(
   player.__squadViewState = {
     channel,
     active,
+    audioSelected,
     audioEnabled,
     visible,
     visibleCount,
@@ -769,13 +772,16 @@ export default function TwitchPlayer({
   visible,
   visibleCount = 1,
   active,
+  audioSelected,
   audioEnabled,
-  onSelect,
+  onListen,
   onFocus,
+  isTwitchFollowed = false,
   isFavorite = false,
   onToggleFavorite,
   onRemove,
   registerPlayer,
+  tileOrder,
 }) {
   const mountRef = useRef(null);
   const playerRef = useRef(null);
@@ -783,6 +789,7 @@ export default function TwitchPlayer({
   const stateRef = useRef({
     channel,
     active,
+    audioSelected,
     audioEnabled,
     visible,
     visibleCount,
@@ -795,6 +802,7 @@ export default function TwitchPlayer({
     stateRef.current = {
       channel,
       active,
+      audioSelected,
       audioEnabled,
       visible,
       visibleCount,
@@ -807,6 +815,7 @@ export default function TwitchPlayer({
   }, [
     channel,
     active,
+    audioSelected,
     audioEnabled,
     visible,
     visibleCount,
@@ -1035,13 +1044,13 @@ export default function TwitchPlayer({
 
   const listening =
     visible &&
-    active &&
+    audioSelected &&
     audioEnabled;
 
   function handleListen() {
     /*
-     * Explicit viewer interaction is allowed to start
-     * playback even if they manually paused this stream.
+     * Listen is a per-stream toggle. Explicit viewer interaction may start
+     * playback for a stream being added to the audible mix.
      */
     try {
       playerRef.current?.setMuted?.(
@@ -1053,7 +1062,7 @@ export default function TwitchPlayer({
       // Native Twitch play remains available.
     }
 
-    onSelect();
+    onListen();
   }
 
   return (
@@ -1068,11 +1077,21 @@ export default function TwitchPlayer({
           : ''
       }`}
       aria-label={`${channel} Twitch stream`}
+      style={Number.isFinite(tileOrder) ? { order: tileOrder } : undefined}
     >
       <header className="stream-card-header">
         <span className="live-dot" />
 
         <strong>{channel}</strong>
+
+        {isTwitchFollowed && (
+          <span
+            className="twitch-follow-state"
+            title="Confirmed from your connected Twitch account"
+          >
+            ✓ Following on Twitch
+          </span>
+        )}
 
         <small>{status}</small>
 
@@ -1100,15 +1119,17 @@ export default function TwitchPlayer({
           >
             {listening
               ? 'Listening'
-              : 'Play & listen'}
+              : 'Listen'}
           </button>
 
           <button
             type="button"
-            className="focus-chip"
+            className={`focus-chip ${active ? 'is-focused' : ''}`}
             onClick={onFocus}
+            aria-pressed={active}
+            title="Link this stream to SquadView chat"
           >
-            Focus
+            {active ? 'Focused' : 'Focus'}
           </button>
 
           <button

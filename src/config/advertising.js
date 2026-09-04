@@ -1,6 +1,12 @@
 export const AD_CONFIG = {
   enabled: import.meta.env.VITE_ADS_ENABLED !== 'false',
-  testMode: import.meta.env.VITE_ADS_TEST_MODE === 'true',
+  // Legacy AdSense display inventory stays off until a display provider is
+  // intentionally enabled. Loading-video ads are controlled separately.
+  displayEnabled: import.meta.env.VITE_DISPLAY_ADS_ENABLED === 'true',
+  // Development defaults to test mode unless explicitly disabled. This keeps
+  // localhost from requesting live publisher inventory by accident.
+  testMode: import.meta.env.VITE_ADS_TEST_MODE === 'true'
+    || (import.meta.env.DEV && import.meta.env.VITE_ADS_TEST_MODE !== 'false'),
   clientId: 'ca-pub-2542993681900296',
   slots: {
     home: '7156528726',
@@ -12,19 +18,28 @@ export const AD_CONFIG = {
     loading: 'vertical',
     footer: 'horizontal',
   },
-  loadingMinimumSeconds: 5,
-  loadingMaximumSeconds: 15,
-  loadingCooldownMinutes: 20,
+  loadingCooldownMinutes: Number(import.meta.env.VITE_LOADING_AD_COOLDOWN_MINUTES || 20),
+  vast: {
+    provider: 'hilltopads',
+    url: String(import.meta.env.VITE_HILLTOPADS_VAST_URL || '').trim(),
+    startupFallbackMs: 8000,
+    hardTimeoutMs: 45000,
+    testDurationMs: 5000,
+  },
 };
 
-const LOADING_AD_KEY = 'squadview:last-loading-ad:v1';
+const LOADING_AD_KEY = 'squadview:last-loading-ad:v2';
+
+export function isLoadingAdConfigured() {
+  return AD_CONFIG.enabled && (AD_CONFIG.testMode || Boolean(AD_CONFIG.vast.url));
+}
 
 export function shouldShowLoadingAd() {
-  if (!AD_CONFIG.enabled) return false;
+  if (!isLoadingAdConfigured()) return false;
 
   try {
-    const lastShown = Number(sessionStorage.getItem(LOADING_AD_KEY) || 0);
-    const cooldownMs = AD_CONFIG.loadingCooldownMinutes * 60 * 1000;
+    const lastShown = Number(localStorage.getItem(LOADING_AD_KEY) || 0);
+    const cooldownMs = Math.max(1, AD_CONFIG.loadingCooldownMinutes) * 60 * 1000;
     return !lastShown || Date.now() - lastShown >= cooldownMs;
   } catch {
     return true;
@@ -33,8 +48,8 @@ export function shouldShowLoadingAd() {
 
 export function markLoadingAdShown() {
   try {
-    sessionStorage.setItem(LOADING_AD_KEY, String(Date.now()));
+    localStorage.setItem(LOADING_AD_KEY, String(Date.now()));
   } catch {
-    // The transition still works when sessionStorage is unavailable.
+    // The viewer transition still works when browser storage is unavailable.
   }
 }

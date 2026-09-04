@@ -1,10 +1,18 @@
-const CACHE_NAME = 'squadview-shell-v4';
-const APP_SHELL = ['/', '/watch', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE_NAME = 'squadview-shell-v7';
+
+const APP_SHELL = [
+  '/',
+  '/watch',
+  '/manifest.webmanifest',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)),
   );
+
   self.skipWaiting();
 });
 
@@ -27,18 +35,24 @@ self.addEventListener('fetch', (event) => {
 
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
+  if (url.pathname.endsWith('/sw.js')) return;
+
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: 'no-store' })
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(url.pathname, copy));
           }
+
           return response;
         })
-        .catch(() => caches.match(url.pathname).then((match) => match || caches.match('/'))),
+        .catch(() => caches.match(url.pathname).then(
+          (match) => match || caches.match('/'),
+        )),
     );
+
     return;
   }
 
@@ -51,6 +65,7 @@ self.addEventListener('fetch', (event) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
+
         return response;
       });
     }),
