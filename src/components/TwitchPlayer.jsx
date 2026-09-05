@@ -782,6 +782,9 @@ export default function TwitchPlayer({
   onRemove,
   registerPlayer,
   tileOrder,
+  gridColumn,
+  gridRow,
+  chatCovered = false,
 }) {
   const mountRef = useRef(null);
   const playerRef = useRef(null);
@@ -1075,9 +1078,14 @@ export default function TwitchPlayer({
         active
           ? 'is-active'
           : ''
-      }`}
+      } ${chatCovered ? 'is-chat-covered' : ''}`}
       aria-label={`${channel} Twitch stream`}
-      style={Number.isFinite(tileOrder) ? { order: tileOrder } : undefined}
+      aria-hidden={chatCovered ? 'true' : undefined}
+      style={{
+        ...(Number.isFinite(tileOrder) ? { order: tileOrder } : {}),
+        ...(Number.isFinite(gridColumn) ? { gridColumn } : {}),
+        ...(Number.isFinite(gridRow) ? { gridRow } : {}),
+      }}
     >
       <header className="stream-card-header">
         <span className="live-dot" />

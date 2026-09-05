@@ -56,6 +56,13 @@ function padViewerInputs(values, limit) {
   return [...source, ...Array(Math.max(0, safeLimit - source.length)).fill('')].slice(0, safeLimit);
 }
 
+function compactViewerInputs(values, limit) {
+  const compacted = Array.isArray(values)
+    ? values.filter((value) => String(value || '').trim())
+    : [];
+  return padViewerInputs(compacted, limit);
+}
+
 function readFavoriteStreamers() {
   try {
     const saved = JSON.parse(localStorage.getItem(FAVORITE_STREAMERS_KEY) || '[]');
@@ -252,6 +259,8 @@ function SquadViewApp() {
   const [showYoutubeCompanion, setShowYoutubeCompanion] = useState(false);
   const [showSharedArrival, setShowSharedArrival] = useState(() => Boolean(sharedViewer?.channels?.length));
   const [pendingAdLaunch, setPendingAdLaunch] = useState(null);
+  const pendingAdLaunchRef = useRef(null);
+  const loadingAdRef = useRef(null);
   const accountHydratedUserRef = useRef('');
   const [viewMode, setViewMode] = useState(() => initialViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
@@ -550,6 +559,17 @@ function SquadViewApp() {
     () => [...new Set(inputs.map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit),
     [inputs, viewerStreamLimit],
   );
+  const shouldPreloadLoadingAd = screen === 'home'
+    && accountReady
+    && entitlements.squadViewAds
+    && isLoadingAdConfigured()
+    && (
+      Boolean(pendingAdLaunch)
+      || (
+        shouldShowLoadingAd()
+        && (validInputs.length > 0 || liveSavedSquadStreamers.size > 0)
+      )
+    );
   const sortedFavoriteStreamers = useMemo(
     () => [...favoriteStreamers].sort((first, second) => {
       const liveDifference =
@@ -907,15 +927,48 @@ function SquadViewApp() {
       && shouldShowLoadingAd();
   }
 
-  function queueLoadingAd(launch) {
-    markLoadingAdShown();
+  function queueLoadingAd(launch, { userGesture = false } = {}) {
+    pendingAdLaunchRef.current = launch;
     setPendingAdLaunch(launch);
+
+    if (userGesture) {
+      // The home-screen VAST component is already mounted and has parsed the
+      // sponsor response. Borrow this exact Start Squad click to initialize IMA
+      // so mobile browsers do not require a second "Play sponsor" tap.
+      const preparedStarted = loadingAdRef.current?.startPreparedAd?.(launch.source) === true;
+
+      if (preparedStarted) {
+        markLoadingAdShown();
+        trackEvent('squadview_ad_break_queued', {
+          provider: AD_CONFIG.vast.provider,
+          source: launch.source,
+          plan_key: entitlements.planKey,
+          start_mode: 'prepared_gesture',
+        });
+        return true;
+      }
+
+      // If the SDK/tag was not ready in time, protect the viewing experience.
+      // Do not make the user click again just to satisfy an ad player.
+      pendingAdLaunchRef.current = null;
+      setPendingAdLaunch(null);
+      trackEvent('squadview_ad_preload_missed', {
+        provider: AD_CONFIG.vast.provider,
+        source: launch.source,
+        plan_key: entitlements.planKey,
+      });
+      return false;
+    }
+
+    markLoadingAdShown();
     trackEvent('squadview_ad_break_queued', {
       provider: AD_CONFIG.vast.provider,
       source: launch.source,
       plan_key: entitlements.planKey,
+      start_mode: 'standalone_autoplay',
     });
     setScreen('ad');
+    return true;
   }
 
   function beginWatching(selected = validInputs, source = 'builder') {
@@ -923,15 +976,19 @@ function SquadViewApp() {
     if (!unique.length) return;
 
     if (shouldGateViewerWithAd()) {
-      queueLoadingAd({ kind: 'channels', channels: unique, source });
-      return;
+      const adStarted = queueLoadingAd(
+        { kind: 'channels', channels: unique, source },
+        { userGesture: true },
+      );
+      if (adStarted) return;
     }
 
     commitViewerStart(unique);
   }
 
   function finishLoadingAd(result) {
-    const launch = pendingAdLaunch;
+    const launch = pendingAdLaunchRef.current || pendingAdLaunch;
+    pendingAdLaunchRef.current = null;
     setPendingAdLaunch(null);
 
     trackEvent('squadview_ad_break_exited', {
@@ -1099,6 +1156,29 @@ function SquadViewApp() {
   }
 
   function returnToDual() {
+    // Returning from Chat is an explicit viewer gesture. Resume the streams that
+    // are about to be visible before React changes the layout so Twitch does not
+    // leave them waiting for a second manual Play click.
+    const desktopResumeLimit = youtubeCompanion ? 3 : 4;
+    const resumeChannels = isDesktopGrid
+      ? getDesktopPageChannels(
+          channels,
+          desktopLeadChannel,
+          desktopPage,
+          desktopResumeLimit,
+        )
+      : youtubeCompanion
+        ? [activeChannel].filter(Boolean)
+        : (slotChannels.length ? slotChannels : channels.slice(0, 2));
+
+    resumeChannels.forEach((channel) => {
+      try {
+        playersRef.current.get(channel)?.play?.();
+      } catch {
+        // Twitch's native controls remain available if the browser rejects play.
+      }
+    });
+
     setViewMode('dual');
     setSlotChannels((current) => {
       const nextSlots = current.includes(activeChannel)
@@ -1383,9 +1463,17 @@ function SquadViewApp() {
   function removeFromBuildList(channel) {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
-    setInputs((current) =>
-      current.map((item) => cleanChannel(item) === cleaned ? '' : item),
-    );
+    setInputs((current) => compactViewerInputs(
+      current.filter((item) => cleanChannel(item) !== cleaned),
+      viewerStreamLimit,
+    ));
+  }
+
+  function removeBuildInputAt(indexToRemove) {
+    setInputs((current) => compactViewerInputs(
+      current.filter((_, index) => index !== indexToRemove),
+      viewerStreamLimit,
+    ));
   }
 
   function openLandingTab(tab) {
@@ -1395,7 +1483,14 @@ function SquadViewApp() {
     });
   }
 
-  function commitViewerChannels(nextChannels, { preferredActive = activeChannel } = {}) {
+  function commitViewerChannels(
+    nextChannels,
+    {
+      preferredActive = activeChannel,
+      preserveDesktopPage = false,
+      preferredDesktopLead = desktopLeadChannel,
+    } = {},
+  ) {
     const unique = [...new Set((nextChannels || []).map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit);
     const previousCount = channels.length;
 
@@ -1427,8 +1522,29 @@ function SquadViewApp() {
     setInputs(padViewerInputs(unique, viewerStreamLimit));
     setActiveChannel(nextActive);
     setSlotChannels(nextSlots);
-    setDesktopPage(0);
-    setDesktopLeadChannel(unique[0]);
+
+    if (preserveDesktopPage && isDesktopGrid) {
+      const desktopGridChat = viewMode === 'chat' && chatLayout === 'grid';
+      const youtubeVisibleForPaging = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
+      const visibleTwitchLimit = youtubeVisibleForPaging ? 3 : 4;
+      const otherPerPage = Math.max(1, visibleTwitchLimit - 1);
+      const otherCount = Math.max(0, unique.length - 1);
+      const nextPageCount = Math.max(1, Math.ceil(otherCount / otherPerPage));
+      const requestedLead = cleanChannel(preferredDesktopLead);
+      const nextLead = unique.includes(requestedLead)
+        ? requestedLead
+        : nextActive || unique[0];
+
+      // Removing a stream should not throw the viewer back to page one. Keep
+      // the current page whenever it still exists; if the removal collapses
+      // the final page, move only as far back as the new last valid page.
+      setDesktopPage((current) => Math.min(current, nextPageCount - 1));
+      setDesktopLeadChannel(nextLead);
+    } else {
+      setDesktopPage(0);
+      setDesktopLeadChannel(unique[0]);
+    }
+
     saveLastChannels(unique);
 
     // Four desktop streams edited down to three should not leave a dead tile.
@@ -1456,6 +1572,22 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channelToRemove);
     const remaining = channels.filter((channel) => channel !== cleaned);
 
+    const desktopGridChat = viewMode === 'chat' && isDesktopGrid && chatLayout === 'grid';
+    const youtubeVisibleForPaging = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
+    const visibleTwitchLimit = youtubeVisibleForPaging ? 3 : 4;
+    const currentDesktopPageChannels = isDesktopGrid
+      ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, visibleTwitchLimit)
+      : [];
+    const remainingOnCurrentPage = currentDesktopPageChannels.filter(
+      (channel) => channel !== cleaned && remaining.includes(channel),
+    );
+    const nextActive = cleaned === activeChannel
+      ? remainingOnCurrentPage[0] || remaining[0]
+      : activeChannel;
+    const nextDesktopLead = cleaned === desktopLeadChannel
+      ? remainingOnCurrentPage[0] || nextActive || remaining[0]
+      : desktopLeadChannel;
+
     try {
       playersRef.current.get(cleaned)?.setMuted?.(true);
       playersRef.current.get(cleaned)?.setVolume?.(0);
@@ -1464,7 +1596,9 @@ function SquadViewApp() {
     }
 
     commitViewerChannels(remaining, {
-      preferredActive: cleaned === activeChannel ? remaining[0] : activeChannel,
+      preferredActive: nextActive,
+      preserveDesktopPage: true,
+      preferredDesktopLead: nextDesktopLead,
     });
   }
 
@@ -1634,9 +1768,11 @@ function SquadViewApp() {
     // Chat temporarily hides/pauses YouTube and gives that lower panel to chat.
     const mobileYoutubeDual = Boolean(youtubeCompanion) && !isDesktopGrid && viewMode === 'dual';
     const youtubeVisible = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
-    const desktopVisibleTwitchLimit = desktopGridChat
-      ? (youtubeVisible ? 2 : 3)
-      : (youtubeVisible ? 3 : 4);
+    // Grid + Chat visually replaces quadrant four, but the displaced Twitch
+    // player stays live underneath the chat tile. Keeping the same Twitch page
+    // size as Dual prevents a layout toggle from pausing embeds and forcing the
+    // viewer to press Play again when Chat closes.
+    const desktopVisibleTwitchLimit = youtubeVisible ? 3 : 4;
     const desktopOtherPerPage = Math.max(1, desktopVisibleTwitchLimit - 1);
     const desktopOtherCount = Math.max(0, channels.length - 1);
     const desktopPageCount = Math.max(1, Math.ceil(desktopOtherCount / desktopOtherPerPage));
@@ -1670,21 +1806,46 @@ function SquadViewApp() {
     );
 
     const desktopTileCount = desktopGridChat
-      ? visibleChannels.length + 1 + (youtubeVisible ? 1 : 0)
+      ? 4
       : desktopSingleChat
         ? 2
         : visibleChannels.length + (youtubeVisible ? 1 : 0);
 
     // In the YouTube Companion desktop grid, slot 1 is always the pinned Twitch
     // lead/focused stream, slot 2 is always YouTube, and only slots 3-4 rotate
-    // as the user pages through the remaining Twitch roster. Hidden mounted
-    // players keep their lifecycle but do not influence visible tile order.
-    const twitchTileOrder = (channel) => {
+    // as the user pages through the remaining Twitch roster. Grid + Chat keeps
+    // the fourth Twitch player alive behind chat. If the focused stream was in
+    // quadrant four, swap it into quadrant three so the viewer can still see and
+    // interact with the streamer whose chat they opened.
+    const baseTwitchTileOrder = (channel) => {
       if (!isDesktopGrid || !visibleChannels.includes(channel)) return undefined;
       if (viewMode !== 'dual' && !desktopGridChat) return undefined;
       const visibleIndex = visibleChannels.indexOf(channel);
       if (youtubeVisible) return visibleIndex === 0 ? 1 : visibleIndex + 2;
       return visibleIndex + 1;
+    };
+
+    const activeBaseTile = desktopGridChat
+      ? baseTwitchTileOrder(activeChannel)
+      : undefined;
+
+    const twitchTileOrder = (channel) => {
+      const baseTile = baseTwitchTileOrder(channel);
+      if (!desktopGridChat || activeBaseTile !== 4) return baseTile;
+      if (channel === activeChannel) return 3;
+      if (baseTile === 3) return 4;
+      return baseTile;
+    };
+
+    const twitchGridPosition = (channel) => {
+      if (!desktopGridChat) return {};
+      const tile = twitchTileOrder(channel);
+      if (!Number.isFinite(tile)) return {};
+      return {
+        gridColumn: tile % 2 === 0 ? 2 : 1,
+        gridRow: tile <= 2 ? 1 : 2,
+        chatCovered: tile === 4,
+      };
     };
 
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
@@ -1754,6 +1915,9 @@ function SquadViewApp() {
                     onRemove={() => removeChannelFromGroup(channel)}
                     registerPlayer={registerPlayer}
                     tileOrder={twitchTileOrder(channel)}
+                    gridColumn={twitchGridPosition(channel).gridColumn}
+                    gridRow={twitchGridPosition(channel).gridRow}
+                    chatCovered={twitchGridPosition(channel).chatCovered}
                   />
                 ))}
 
@@ -2257,6 +2421,15 @@ function SquadViewApp() {
 
   return (
     <div className="app-shell">
+      {shouldPreloadLoadingAd && (
+        <VastLoadingAd
+          ref={loadingAdRef}
+          preload
+          source="preload"
+          onFinish={finishLoadingAd}
+        />
+      )}
+
       <header className="topbar">
         <a className="brand" href="#top" onClick={() => setLandingTab('home')}>
           <span><Radio /></span>SquadView
@@ -2384,7 +2557,7 @@ function SquadViewApp() {
                       {value && (
                         <button
                           type="button"
-                          onClick={() => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? '' : item))}
+                          onClick={() => removeBuildInputAt(index)}
                           aria-label="Clear"
                         >
                           <X />

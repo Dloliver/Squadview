@@ -4095,12 +4095,28 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat .youtube-companion-card.is-visible {
     height: 100%;
     min-height: 0;
+    grid-column: 2;
+    grid-row: 1;
   }
   .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat .youtube-companion-player {
     aspect-ratio: auto;
   }
+
+  /* Chat owns quadrant four visually, while the Twitch player assigned to that
+     quadrant remains mounted and playing underneath it. This preserves Twitch
+     playback through Chat on/off transitions instead of creating a second Play
+     requirement when the grid returns. */
+  .viewer-shell.mode-chat.chat-layout-grid .stream-card.is-chat-covered {
+    pointer-events: none;
+    z-index: 0;
+  }
+
   .viewer-shell.mode-chat.chat-layout-grid .desktop-grid-chat-tile {
     order: 4;
+    grid-column: 2;
+    grid-row: 2;
+    position: relative;
+    z-index: 5;
   }
 }
 
@@ -4751,5 +4767,167 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
   .vast-loading-status small {
     text-align: center;
+  }
+}
+
+/* SquadView Ads Phase 1.2 — IMA playback/rendering hardening */
+.vast-ad-frame {
+  isolation: isolate;
+}
+.vast-content-video {
+  z-index: 0;
+  pointer-events: none;
+}
+.vast-ima-container {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.vast-ima-container > div,
+.vast-ima-container iframe,
+.vast-ima-container video {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100%;
+}
+.vast-ad-waiting {
+  z-index: 3;
+}
+.vast-ad-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 40px;
+  margin-top: 12px;
+}
+.loading-play-ad,
+.loading-sound,
+.loading-continue {
+  min-width: 132px;
+}
+@media (max-width: 700px) {
+  .vast-ad-actions {
+    margin-top: 8px;
+  }
+  .loading-play-ad,
+  .loading-sound,
+  .loading-continue {
+    width: min(100%, 240px);
+  }
+}
+
+/* SquadView Ads Phase 1.4 — seamless prepared playback + immersive mobile ad */
+.vast-preloaded-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  width: 100vw;
+  min-height: 100dvh;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .12s ease;
+}
+.vast-preloaded-shell.is-active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+@media (max-width: 700px) {
+  /* Once the sponsor actually starts, give the ad the full device viewport.
+     IMA still owns the creative layout, CTA, countdown and Skip Ad controls;
+     SquadView only enlarges the available stage and never crops the creative. */
+  .vast-loading-screen.is-ad-started {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    width: 100vw;
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 0 !important;
+    gap: 0;
+    display: block;
+    overflow: hidden;
+    background: #000;
+  }
+
+  .vast-loading-screen.is-ad-started .loading-brand,
+  .vast-loading-screen.is-ad-started .loading-copy,
+  .vast-loading-screen.is-ad-started .vast-loading-status,
+  .vast-loading-screen.is-ad-started .vast-ad-actions {
+    display: none !important;
+  }
+
+  .vast-loading-screen.is-ad-started .vast-loading-card {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: #000;
+    overflow: hidden;
+  }
+
+  .vast-loading-screen.is-ad-started .vast-ad-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    aspect-ratio: auto;
+    border: 0;
+    border-radius: 0;
+    background: #000;
+  }
+
+  .vast-loading-screen.is-ad-started .vast-ima-container,
+  .vast-loading-screen.is-ad-started .vast-ima-container > div,
+  .vast-loading-screen.is-ad-started .vast-ima-container iframe,
+  .vast-loading-screen.is-ad-started .vast-ima-container video {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    max-height: none !important;
+  }
+
+  .vast-loading-screen.is-ad-started .vast-ima-container video {
+    object-fit: contain !important;
+    background: #000;
+  }
+}
+
+/* SquadView QOL — desktop immediate Start Watching CTA.
+   Match mobile behavior by keeping the CTA visible as soon as the builder has
+   at least one valid Twitch channel. The React component already mounts this
+   dock only when validInputs.length > 0, so desktop only needs positioning. */
+@media (min-width: 761px) {
+  .builder-quick-watch-dock {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    z-index: 40;
+    width: min(640px, calc(100vw - 48px));
+    margin: 0;
+    transform: translateX(-50%);
+  }
+
+  .builder-quick-watch-dock .builder-quick-watch-button {
+    width: 100%;
+    min-height: 56px;
+    font-weight: 800;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
   }
 }

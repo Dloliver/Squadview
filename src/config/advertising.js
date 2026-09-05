@@ -29,8 +29,8 @@ export const AD_CONFIG = {
     stallTimeoutMs: 8000,
     stallGraceMs: 500,
     progressPollMs: 1000,
-    // Final guardrail for malformed/very long SDK states.
-    hardTimeoutMs: 45000,
+    // Final guardrail only. Healthy ads use the provider's normal skip/end flow.
+    hardTimeoutMs: 90000,
     testDurationMs: 5000,
   },
 };
