@@ -540,9 +540,9 @@ function applyPlayerState(
 
   const audible =
     Boolean(
-      visible &&
       audioSelected &&
-      audioEnabled,
+      audioEnabled &&
+      (visible || active),
     );
 
   const wasVisible =
@@ -566,6 +566,49 @@ function applyPlayerState(
 
   if (!visible) {
     clearLiveEdgeTimers(player);
+
+    if (active && audible) {
+      /*
+       * The focused stream owns the viewer's primary audio. When the user
+       * pages through another group, keep that focused stream playing in the
+       * background so its audio is continuous. Other off-page streams still
+       * use the normal scheduler pause/mute behavior below.
+       */
+      try {
+        if (player.isPaused?.() === true) {
+          player.play?.();
+        }
+        player.setMuted?.(false);
+        player.setVolume?.(1);
+      } catch {
+        // Twitch may still be applying the page transition.
+      }
+
+      player.__squadViewPausedByScheduler =
+        false;
+
+      player.__squadViewWasVisible = false;
+
+      player.__squadViewAwaitingLiveEdge =
+        false;
+
+      player.__squadViewLiveEdgeStatus =
+        'focused_audio_background';
+
+      player.__squadViewState = {
+        channel,
+        active,
+        audioSelected,
+        audioEnabled,
+        visible,
+        visibleCount,
+        targetQuality:
+          player.__squadViewQualityTarget ||
+          '',
+      };
+
+      return;
+    }
 
     try {
       if (

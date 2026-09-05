@@ -212,7 +212,8 @@ function SquadViewApp() {
     }
   });
   const [channels, setChannels] = useState(() => initialViewer?.channels || []);
-  // activeChannel owns Focus + chat. listeningChannels independently owns audio.
+  // activeChannel owns Focus + chat. listeningChannels tracks extra streams
+  // the viewer explicitly chose to hear alongside the focused stream.
   const [activeChannel, setActiveChannel] = useState(() => initialViewer?.activeChannel || '');
   const [listeningChannels, setListeningChannels] = useState(() => new Set());
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
@@ -268,8 +269,8 @@ function SquadViewApp() {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState(() => initialViewer?.slotChannels || []);
   const [desktopPage, setDesktopPage] = useState(() => initialViewer?.desktopPage || 0);
-  // Keep the displayed desktop page independent from the stream that currently
-  // owns audio. Focusing a stream should highlight it, not reshuffle the grid.
+  // Keep the displayed desktop page independent from the stream that is focused.
+  // Focusing a stream can enable its audio without reshuffling the grid.
   const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => initialViewer?.desktopLeadChannel || initialViewer?.channels?.[0] || '');
   const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
@@ -455,17 +456,18 @@ function SquadViewApp() {
   useEffect(() => {
     playersRef.current.forEach((player, channel) => {
       try {
+        const isFocusedChannel = channel === activeChannel;
+        const isVisibleChannel = player.__squadViewState?.visible !== false;
         const shouldPlayAudio =
           audioEnabled &&
-          listeningChannels.has(channel) &&
-          player.__squadViewState?.visible !== false;
+          (isFocusedChannel || (listeningChannels.has(channel) && isVisibleChannel));
         player.setMuted(!shouldPlayAudio);
         player.setVolume(shouldPlayAudio ? 1 : 0);
       } catch {
         // A player may still be finishing initialization.
       }
     });
-  }, [listeningChannels, audioEnabled]);
+  }, [listeningChannels, audioEnabled, activeChannel]);
 
   useEffect(() => {
     if (!channels.length) {
@@ -486,10 +488,12 @@ function SquadViewApp() {
       setListeningChannels(nextListening);
     }
 
-    if (!nextListening.size && audioEnabled) {
+    const focusedChannelStillAvailable = channels.includes(activeChannel);
+
+    if (!nextListening.size && !focusedChannelStillAvailable && audioEnabled) {
       setAudioEnabled(false);
     }
-  }, [channels, listeningChannels, audioEnabled]);
+  }, [channels, listeningChannels, audioEnabled, activeChannel]);
 
   useEffect(() => {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
@@ -1013,6 +1017,21 @@ function SquadViewApp() {
 
 
   function listenToChannel(channel) {
+    if (channel === activeChannel) {
+      // Focus already owns this stream's audio. Keep the focused stream audible
+      // instead of requiring a second Listen click or turning Focus into a mute.
+      setAudioEnabled(true);
+      try {
+        const player = playersRef.current.get(channel);
+        player?.play?.();
+        player?.setMuted?.(false);
+        player?.setVolume?.(1);
+      } catch {
+        // Twitch's native controls remain available if the player is still loading.
+      }
+      return;
+    }
+
     const nextListening = new Set(listeningChannels);
     const wasListening = nextListening.has(channel);
 
@@ -1025,7 +1044,7 @@ function SquadViewApp() {
     setListeningChannels(nextListening);
     setAudioEnabled(nextListening.size > 0);
 
-    // Listen is an independent per-stream audio toggle. Focus/chat do not move.
+    // Listen remains an independent per-stream audio toggle for non-focused streams.
     const visibleNow = viewMode === 'dual'
       ? (isDesktopGrid
           ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
@@ -1131,13 +1150,41 @@ function SquadViewApp() {
     const nextIndex = (currentIndex + direction + channels.length) % channels.length;
     const nextChannel = channels[nextIndex];
 
-    // Focus controls the stream linked to chat. Audio stays independent.
-    setActiveChannel(nextChannel);
+    focusChannel(nextChannel);
   }
 
   function focusChannel(channel) {
-    // Focus controls chat/primary visual state only.
-    setActiveChannel(channel);
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
+
+    setActiveChannel(cleaned);
+    setAudioEnabled(true);
+
+    // The Focus click is already a viewer gesture, so use it to start/unmute the
+    // newly focused stream immediately. Extra streams only remain audible when
+    // their individual Listen toggle is enabled.
+    const visibleNow = viewMode === 'dual'
+      ? (isDesktopGrid
+          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
+          : slotChannels)
+      : [cleaned];
+
+    playersRef.current.forEach((player, playerChannel) => {
+      try {
+        const shouldListen =
+          visibleNow.includes(playerChannel) &&
+          (playerChannel === cleaned || listeningChannels.has(playerChannel));
+
+        if (playerChannel === cleaned && shouldListen) {
+          player.play?.();
+        }
+
+        player.setMuted(!shouldListen);
+        player.setVolume(shouldListen ? 1 : 0);
+      } catch {
+        // The React state effect will apply the same audio state once ready.
+      }
+    });
   }
 
   function enterSolo(channel = activeChannel) {
@@ -1902,7 +1949,7 @@ function SquadViewApp() {
                     visible={visibleChannels.includes(channel)}
                     visibleCount={visibleChannels.length}
                     active={activeChannel === channel}
-                    audioSelected={listeningChannels.has(channel)}
+                    audioSelected={activeChannel === channel || listeningChannels.has(channel)}
                     audioEnabled={audioEnabled}
                     onListen={() => listenToChannel(channel)}
                     onFocus={() => focusChannel(channel)}
