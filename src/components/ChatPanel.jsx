@@ -11,53 +11,7 @@ import {
 
 const MAX_NATIVE_MESSAGES = 250;
 const emoteCache = new Map();
-const NATIVE_CHAT_TEXT_SIZE_KEY = 'squadview:native-chat-text-size:v1';
-const NATIVE_CHAT_TEXT_SIZE_ORDER = ['default', 'large', 'xlarge'];
-// Phase 2.4: persistent native chat text-size control.
-
-function readNativeChatTextSize() {
-  if (typeof window === 'undefined') return 'default';
-
-  try {
-    const saved = window.localStorage.getItem(NATIVE_CHAT_TEXT_SIZE_KEY);
-    return NATIVE_CHAT_TEXT_SIZE_ORDER.includes(saved) ? saved : 'default';
-  } catch {
-    return 'default';
-  }
-}
-
-function nativeChatTextScale(sizeKey, compact) {
-  if (sizeKey === 'xlarge') {
-    return {
-      key: 'xlarge',
-      label: 'Extra large',
-      shortLabel: 'Aa++',
-      messageFontSize: compact ? 16 : 18,
-      composerFontSize: 20,
-      lineHeight: 1.5,
-    };
-  }
-
-  if (sizeKey === 'large') {
-    return {
-      key: 'large',
-      label: 'Large',
-      shortLabel: 'Aa+',
-      messageFontSize: compact ? 13 : 15,
-      composerFontSize: 18,
-      lineHeight: 1.48,
-    };
-  }
-
-  return {
-    key: 'default',
-    label: 'Default',
-    shortLabel: 'Aa',
-    messageFontSize: compact ? 11 : 12,
-    composerFontSize: 16,
-    lineHeight: 1.45,
-  };
-}
+// Native chat bottom composer QOL: keep live messages above the message composer.
 
 const TWITCH_EMOTE_TEMPLATE = 'https://static-cdn.jtvnw.net/emoticons/v2';
 
@@ -261,7 +215,6 @@ export default function ChatPanel({ channel, compact = false }) {
   const [emoteErrorCode, setEmoteErrorCode] = useState('');
   const [emotes, setEmotes] = useState([]);
   const [emoteSearch, setEmoteSearch] = useState('');
-  const [nativeChatTextSize, setNativeChatTextSize] = useState(readNativeChatTextSize);
   const composerRef = useRef(null);
   const endRef = useRef(null);
 
@@ -269,29 +222,6 @@ export default function ChatPanel({ channel, compact = false }) {
     () => String(channel || '').trim().toLowerCase(),
     [channel],
   );
-
-  const textScale = useMemo(
-    () => nativeChatTextScale(nativeChatTextSize, compact),
-    [nativeChatTextSize, compact],
-  );
-
-  function cycleNativeChatTextSize() {
-    setNativeChatTextSize((current) => {
-      const currentIndex = Math.max(0, NATIVE_CHAT_TEXT_SIZE_ORDER.indexOf(current));
-      const next =
-        NATIVE_CHAT_TEXT_SIZE_ORDER[
-          (currentIndex + 1) % NATIVE_CHAT_TEXT_SIZE_ORDER.length
-        ];
-
-      try {
-        window.localStorage.setItem(NATIVE_CHAT_TEXT_SIZE_KEY, next);
-      } catch {
-        // Restricted storage should not block text-size changes.
-      }
-
-      return next;
-    });
-  }
 
   useEffect(() => {
     let cancelled = false;
@@ -619,28 +549,6 @@ export default function ChatPanel({ channel, compact = false }) {
         >
           #{normalizedChannel}
         </span>
-        <button
-          type="button"
-          onClick={cycleNativeChatTextSize}
-          aria-label={`Native chat text size: ${textScale.label}. Change text size`}
-          title={`Chat text: ${textScale.label}`}
-          style={{
-            minHeight: 32,
-            minWidth: 38,
-            border: '1px solid rgba(255,255,255,0.16)',
-            background: '#26262c',
-            color: '#efeff1',
-            borderRadius: 6,
-            padding: '5px 7px',
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
-          }}
-        >
-          {textScale.shortLabel}
-        </button>
         <ChatModeSwitch
           mode="native"
           onUseNative={() => {}}
@@ -649,166 +557,90 @@ export default function ChatPanel({ channel, compact = false }) {
       </header>
 
       <div
-        className="native-chat-composer"
+        role="log"
+        aria-live="polite"
+        aria-label={`${normalizedChannel} live Twitch chat`}
         style={{
-          padding: '9px 10px 8px',
-          flexShrink: 0,
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
-          background: '#18181b',
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflowY: 'auto',
+          padding: '9px 10px 12px',
+          fontSize: compact ? 11 : 12,
+          lineHeight: 1.45,
+          overscrollBehavior: 'contain',
         }}
       >
-        <form
-          onSubmit={async (event) => {
-            event.preventDefault();
-
-            const message = draft.trim();
-            if (!message || sendBusy) return;
-
-            setSendBusy(true);
-            setSendError('');
-
-            try {
-              await sendNativeTwitchChatMessage({
-                broadcasterUserId: broadcaster?.id,
-                message,
-              });
-              setDraft('');
-            } catch (nextError) {
-              setSendError(nextError?.message || 'Twitch could not send that message.');
-            } finally {
-              setSendBusy(false);
-            }
-          }}
-          style={{
-            display: 'flex',
-            gap: 7,
-            alignItems: 'flex-end',
-          }}
-        >
-          <textarea
-            ref={composerRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
-            onFocus={(event) => {
-              // iOS Safari can scroll/zoom the whole page to reveal a small
-              // bottom input. Keeping the composer at the top of the chat
-              // panel plus a 16px font avoids the automatic zoom path.
-              window.setTimeout(() => {
-                event.currentTarget?.scrollIntoView?.({
-                  block: 'nearest',
-                  inline: 'nearest',
-                  behavior: 'auto',
-                });
-              }, 50);
-            }}
-            onKeyDown={(event) => {
-              if (
-                event.key === 'Enter' &&
-                !event.shiftKey &&
-                !event.nativeEvent?.isComposing
-              ) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder={
-              broadcaster?.id
-                ? `Chat as your Twitch account`
-                : 'Connecting to Twitch chat…'
-            }
-            disabled={!broadcaster?.id || sendBusy || status !== 'ready'}
-            rows={2}
-            maxLength={500}
-            aria-label="Send a Twitch chat message"
+        {error ? (
+          <div
             style={{
-              flex: '1 1 auto',
-              minWidth: 0,
-              minHeight: 50,
-              maxHeight: 96,
-              resize: 'none',
-              border: '1px solid rgba(255,255,255,0.16)',
-              borderRadius: 6,
-              background: '#0e0e10',
-              color: '#efeff1',
-              padding: '8px 9px',
-              font: 'inherit',
-              fontSize: textScale.composerFontSize,
-              lineHeight: 1.35,
-              WebkitTextSizeAdjust: '100%',
-              scrollMarginTop: 12,
-            }}
-          />
-          <button
-            type="button"
-            aria-label="Open Twitch emote picker"
-            aria-expanded={emotePickerOpen}
-            title="Twitch emotes"
-            disabled={!broadcaster?.id || status !== 'ready'}
-            onClick={() => setEmotePickerOpen((open) => !open)}
-            style={{
-              width: 44,
-              minWidth: 44,
-              height: 44,
-              border: '1px solid rgba(255,255,255,0.16)',
-              borderRadius: 6,
-              background: emotePickerOpen ? '#3b2066' : '#26262c',
-              color: '#efeff1',
-              fontSize: 20,
-              lineHeight: 1,
-              cursor: 'pointer',
-              opacity:
-                !broadcaster?.id || status !== 'ready'
-                  ? 0.5
-                  : 1,
+              padding: 10,
+              borderRadius: 8,
+              background: 'rgba(255,255,255,0.06)',
+              color: '#dedee3',
             }}
           >
-            ☺
-          </button>
+            <strong style={{ display: 'block', marginBottom: 5 }}>
+              Native chat could not connect
+            </strong>
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={useIframeFallback}
+              style={{
+                display: 'block',
+                marginTop: 10,
+                border: 0,
+                borderRadius: 6,
+                padding: '7px 9px',
+                background: '#9147ff',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Use Twitch chat instead
+            </button>
+          </div>
+        ) : (
+          <>
+            {!messages.length && (
+              <div
+                style={{
+                  padding: '12px 4px',
+                  color: '#adadb8',
+                  textAlign: 'center',
+                }}
+              >
+                {statusCopy(status)}
+                <div style={{ marginTop: 5, fontSize: 10 }}>
+                  Native chat starts live and does not load earlier messages.
+                </div>
+              </div>
+            )}
 
-          <button
-            type="submit"
-            disabled={
-              !broadcaster?.id ||
-              status !== 'ready' ||
-              sendBusy ||
-              !draft.trim()
-            }
-            style={{
-              minHeight: 36,
-              border: 0,
-              borderRadius: 6,
-              padding: '0 12px',
-              background: '#9147ff',
-              color: '#fff',
-              fontWeight: 700,
-              cursor: 'pointer',
-              opacity:
-                !broadcaster?.id ||
-                status !== 'ready' ||
-                sendBusy ||
-                !draft.trim()
-                  ? 0.55
-                  : 1,
-            }}
-          >
-            {sendBusy ? 'Sending…' : 'Chat'}
-          </button>
-        </form>
-
-        <div
-          style={{
-            minHeight: 16,
-            marginTop: 4,
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 8,
-            color: sendError ? '#ff8280' : '#adadb8',
-            fontSize: 10,
-          }}
-        >
-          <span>{sendError || 'Enter to send · Shift+Enter for a new line'}</span>
-          <span>{draft.length}/500</span>
-        </div>
+            {messages.map((message) => (
+              <div
+                key={message.id || `${message.chatterLogin}:${message.sentAt}:${message.text}`}
+                style={{
+                  padding: '2px 0',
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 700,
+                    color: message.color || '#bf94ff',
+                  }}
+                >
+                  {message.chatterName || message.chatterLogin || 'viewer'}
+                </span>
+                <span style={{ color: '#adadb8' }}>:</span>{' '}
+                <span><ChatMessageBody message={message} /></span>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </>
+        )}
       </div>
 
       {emotePickerOpen && (
@@ -995,92 +827,171 @@ export default function ChatPanel({ channel, compact = false }) {
         </section>
       )}
 
+
+
       <div
-        role="log"
-        aria-live="polite"
-        aria-label={`${normalizedChannel} live Twitch chat`}
+        className="native-chat-composer"
         style={{
-          flex: '1 1 auto',
-          minHeight: 0,
-          overflowY: 'auto',
-          padding: '9px 10px 88px',
-          fontSize: textScale.messageFontSize,
-          lineHeight: textScale.lineHeight,
-          overscrollBehavior: 'contain',
+          padding: '9px 10px 8px',
+          flexShrink: 0,
+          borderTop: '1px solid rgba(255,255,255,0.08)',
+          background: '#18181b',
         }}
       >
-        {error ? (
-          <div
+        <form
+          onSubmit={async (event) => {
+            event.preventDefault();
+
+            const message = draft.trim();
+            if (!message || sendBusy) return;
+
+            setSendBusy(true);
+            setSendError('');
+
+            try {
+              await sendNativeTwitchChatMessage({
+                broadcasterUserId: broadcaster?.id,
+                message,
+              });
+              setDraft('');
+            } catch (nextError) {
+              setSendError(nextError?.message || 'Twitch could not send that message.');
+            } finally {
+              setSendBusy(false);
+            }
+          }}
+          style={{
+            display: 'flex',
+            gap: 7,
+            alignItems: 'flex-end',
+          }}
+        >
+          <textarea
+            ref={composerRef}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
+            onFocus={(event) => {
+              // Keep the bottom composer visible when the software keyboard
+              // opens. The 16px font also avoids iOS Safari input zoom.
+              window.setTimeout(() => {
+                event.currentTarget?.scrollIntoView?.({
+                  block: 'nearest',
+                  inline: 'nearest',
+                  behavior: 'auto',
+                });
+              }, 50);
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                !event.nativeEvent?.isComposing
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={
+              broadcaster?.id
+                ? `Chat as your Twitch account`
+                : 'Connecting to Twitch chat…'
+            }
+            disabled={!broadcaster?.id || sendBusy || status !== 'ready'}
+            rows={2}
+            maxLength={500}
+            aria-label="Send a Twitch chat message"
             style={{
-              padding: 10,
-              borderRadius: 8,
-              background: 'rgba(255,255,255,0.06)',
-              color: '#dedee3',
+              flex: '1 1 auto',
+              minWidth: 0,
+              minHeight: 50,
+              maxHeight: 96,
+              resize: 'none',
+              border: '1px solid rgba(255,255,255,0.16)',
+              borderRadius: 6,
+              background: '#0e0e10',
+              color: '#efeff1',
+              padding: '8px 9px',
+              font: 'inherit',
+              fontSize: 16,
+              lineHeight: 1.35,
+              WebkitTextSizeAdjust: '100%',
+              scrollMarginTop: 12,
+            }}
+          />
+          <button
+            type="button"
+            aria-label="Open Twitch emote picker"
+            aria-expanded={emotePickerOpen}
+            title="Twitch emotes"
+            disabled={!broadcaster?.id || status !== 'ready'}
+            onClick={() => setEmotePickerOpen((open) => !open)}
+            style={{
+              width: 44,
+              minWidth: 44,
+              height: 44,
+              border: '1px solid rgba(255,255,255,0.16)',
+              borderRadius: 6,
+              background: emotePickerOpen ? '#3b2066' : '#26262c',
+              color: '#efeff1',
+              fontSize: 20,
+              lineHeight: 1,
+              cursor: 'pointer',
+              opacity:
+                !broadcaster?.id || status !== 'ready'
+                  ? 0.5
+                  : 1,
             }}
           >
-            <strong style={{ display: 'block', marginBottom: 5 }}>
-              Native chat could not connect
-            </strong>
-            <span>{error}</span>
-            <button
-              type="button"
-              onClick={useIframeFallback}
-              style={{
-                display: 'block',
-                marginTop: 10,
-                border: 0,
-                borderRadius: 6,
-                padding: '7px 9px',
-                background: '#9147ff',
-                color: '#fff',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Use Twitch chat instead
-            </button>
-          </div>
-        ) : (
-          <>
-            {!messages.length && (
-              <div
-                style={{
-                  padding: '12px 4px',
-                  color: '#adadb8',
-                  textAlign: 'center',
-                }}
-              >
-                {statusCopy(status)}
-                <div style={{ marginTop: 5, fontSize: 10 }}>
-                  Native chat starts live and does not load earlier messages.
-                </div>
-              </div>
-            )}
+            ☺
+          </button>
 
-            {messages.map((message) => (
-              <div
-                key={message.id || `${message.chatterLogin}:${message.sentAt}:${message.text}`}
-                style={{
-                  padding: '2px 0',
-                  overflowWrap: 'anywhere',
-                }}
-              >
-                <span
-                  style={{
-                    fontWeight: 700,
-                    color: message.color || '#bf94ff',
-                  }}
-                >
-                  {message.chatterName || message.chatterLogin || 'viewer'}
-                </span>
-                <span style={{ color: '#adadb8' }}>:</span>{' '}
-                <span><ChatMessageBody message={message} /></span>
-              </div>
-            ))}
-            <div ref={endRef} />
-          </>
-        )}
+          <button
+            type="submit"
+            disabled={
+              !broadcaster?.id ||
+              status !== 'ready' ||
+              sendBusy ||
+              !draft.trim()
+            }
+            style={{
+              minHeight: 36,
+              border: 0,
+              borderRadius: 6,
+              padding: '0 12px',
+              background: '#9147ff',
+              color: '#fff',
+              fontWeight: 700,
+              cursor: 'pointer',
+              opacity:
+                !broadcaster?.id ||
+                status !== 'ready' ||
+                sendBusy ||
+                !draft.trim()
+                  ? 0.55
+                  : 1,
+            }}
+          >
+            {sendBusy ? 'Sending…' : 'Chat'}
+          </button>
+        </form>
+
+        <div
+          style={{
+            minHeight: 16,
+            marginTop: 4,
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 8,
+            color: sendError ? '#ff8280' : '#adadb8',
+            fontSize: 10,
+          }}
+        >
+          <span>{sendError || 'Enter to send · Shift+Enter for a new line'}</span>
+          <span>{draft.length}/500</span>
+        </div>
       </div>
+
+
 
     </section>
   );

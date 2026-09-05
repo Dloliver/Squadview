@@ -4931,3 +4931,13 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
   }
 }
+
+/* SquadView Native Chat Bottom Composer QOL
+   Keep live messages above the composer. On mobile chat views, reserve the
+   fixed stream pager's footprint so it never covers the message box. */
+@media (max-width: 899px) {
+  .viewer-workspace:has(> .mobile-stream-pager) .native-twitch-chat .native-chat-composer,
+  .viewer-workspace:has(> .focus-carousel) .native-twitch-chat .native-chat-composer {
+    margin-bottom: 64px;
+  }
+}
