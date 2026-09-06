@@ -624,15 +624,13 @@ function applyPlayerState(
   }
 
   /*
-   * Always mute before any programmatic playback.
-   * This avoids unmuted autoplay restrictions.
+   * Focused mobile audio restore fix:
+   * Do not blanket-mute every player during ordinary state reconciliation.
+   * On mobile, a setMuted(true) followed by a later programmatic unmute can
+   * be treated as a fresh autoplay attempt and leave the focused player stuck
+   * muted. Twitch embeds already initialize muted, and the scheduler still
+   * mutes explicitly when it truly has to restart a paused/hidden stream.
    */
-  try {
-    player.setMuted?.(true);
-    player.setVolume?.(0);
-  } catch {
-    // Twitch may still be initializing.
-  }
 
   if (!visible) {
     clearLiveEdgeTimers(player);
@@ -648,9 +646,11 @@ function applyPlayerState(
         if (player.isPaused?.() === true) {
           player.play?.();
         }
-        player.setMuted?.(false);
         player.setVolume?.(
           preferredFocusedVolume,
+        );
+        player.setMuted?.(
+          preferredFocusedVolume <= 0,
         );
       } catch {
         // Twitch may still be applying the page transition.
@@ -725,29 +725,41 @@ function applyPlayerState(
     schedulerPaused;
 
   if (returningFromHiddenPage) {
-    /*
-     * This pause was caused by SquadView paging, not
-     * by the viewer pressing Twitch's pause control.
-     * Resume and allow Twitch to catch back up to live.
-     */
-    try {
-      player.setMuted?.(true);
-      player.setVolume?.(0);
-      player.play?.();
-    } catch {
-      // Native Twitch play remains available.
+    if (active && audible && !schedulerPaused) {
+      /*
+       * A focused stream that stayed audible off page was never paused.
+       * Do not mute/restart it just because its tile became visible again;
+       * preserving the existing media session is what keeps mobile audio alive.
+       */
+      player.__squadViewAwaitingLiveEdge =
+        false;
+
+      player.__squadViewLiveEdgeStatus =
+        'focused_audio_returned';
+    } else {
+      /*
+       * This pause was caused by SquadView paging, not by the viewer pressing
+       * Twitch's pause control. Mute only for the actual restart operation.
+       */
+      try {
+        player.setMuted?.(true);
+        player.setVolume?.(0);
+        player.play?.();
+      } catch {
+        // Native Twitch play remains available.
+      }
+
+      player.__squadViewAwaitingLiveEdge =
+        true;
+
+      player.__squadViewLiveEdgeStatus =
+        'syncing_to_live';
+
+      scheduleLiveEdgeCheck(
+        player,
+        player.__squadViewStateRef,
+      );
     }
-
-    player.__squadViewAwaitingLiveEdge =
-      true;
-
-    player.__squadViewLiveEdgeStatus =
-      'syncing_to_live';
-
-    scheduleLiveEdgeCheck(
-      player,
-      player.__squadViewStateRef,
-    );
   }
 
   applyQualityPolicy(
@@ -761,12 +773,12 @@ function applyPlayerState(
    * has been handled.
    */
   try {
-    player.setMuted?.(!audible);
-    player.setVolume?.(
-      audible
-        ? (active ? preferredFocusedVolume : preferredManualVolume)
-        : 0,
-    );
+    const targetVolume = audible
+      ? (active ? preferredFocusedVolume : preferredManualVolume)
+      : 0;
+
+    player.setVolume?.(targetVolume);
+    player.setMuted?.(!(audible && targetVolume > 0));
   } catch {
     // Player may still be starting.
   }
@@ -1244,6 +1256,8 @@ export default function TwitchPlayer({
     setShowVolumeControl((current) => !current);
   }
 
+  // A 0% SquadView slider is an explicit mute. Restoring any positive
+  // value unmutes only when this stream is selected for audio.
   function changeMobileVolume(event) {
     const nextPercent = Math.max(
       0,
@@ -1255,8 +1269,8 @@ export default function TwitchPlayer({
 
     try {
       playerRef.current?.play?.();
-      playerRef.current?.setMuted?.(false);
       playerRef.current?.setVolume?.(nextVolume);
+      playerRef.current?.setMuted?.(nextVolume <= 0);
 
       if (playerRef.current) {
         if (active) {

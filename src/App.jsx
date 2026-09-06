@@ -524,8 +524,10 @@ function SquadViewApp() {
               1,
             );
 
-        player.setMuted(!shouldPlayAudio);
+        const shouldUnmute = shouldPlayAudio && targetVolume > 0;
+
         player.setVolume(shouldPlayAudio ? targetVolume : 0);
+        player.setMuted(!shouldUnmute);
       } catch {
         // A player may still be finishing initialization.
       }
@@ -1079,6 +1081,8 @@ function SquadViewApp() {
   }
 
 
+  // Mobile audio sync: volume 0 is a true mute, while Focus remains the
+  // primary audio source when extra Listen streams are toggled on or off.
   function setStreamVolume(channel, value) {
     const cleaned = cleanChannel(channel);
     const nextVolume = clampFocusedAudioVolume(value, 1);
@@ -1104,8 +1108,8 @@ function SquadViewApp() {
 
       try {
         player?.play?.();
-        player?.setMuted?.(false);
         player?.setVolume?.(nextVolume);
+        player?.setMuted?.(nextVolume <= 0);
       } catch {
         // Twitch's native controls remain available if the player is still loading.
       }
@@ -1121,8 +1125,8 @@ function SquadViewApp() {
         const player = playersRef.current.get(channel);
         const focusedVolume = rememberFocusedAudioVolume(channel);
         player?.play?.();
-        player?.setMuted?.(false);
         player?.setVolume?.(focusedVolume);
+        player?.setMuted?.(focusedVolume <= 0);
       } catch {
         // Twitch's native controls remain available if the player is still loading.
       }
@@ -1139,7 +1143,10 @@ function SquadViewApp() {
     }
 
     setListeningChannels(nextListening);
-    setAudioEnabled(nextListening.size > 0);
+    setAudioEnabled(
+      Boolean(activeChannel && channels.includes(activeChannel)) ||
+      nextListening.size > 0,
+    );
 
     // Listen remains an independent per-stream audio toggle for non-focused streams.
     const visibleNow = viewMode === 'dual'
@@ -1150,11 +1157,13 @@ function SquadViewApp() {
 
     playersRef.current.forEach((player, playerChannel) => {
       try {
-        const shouldListen =
+        const isFocusedPlayer = playerChannel === activeChannel;
+        const isManualListening =
           nextListening.has(playerChannel) &&
           visibleNow.includes(playerChannel);
+        const shouldListen = isFocusedPlayer || isManualListening;
 
-        if (!wasListening && playerChannel === channel && shouldListen) {
+        if (!wasListening && playerChannel === channel && isManualListening) {
           player.play?.();
         }
 
@@ -1162,9 +1171,15 @@ function SquadViewApp() {
           player.__squadViewManualVolume,
           1,
         );
+        const targetVolume = isFocusedPlayer
+          ? clampFocusedAudioVolume(
+              player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
+              1,
+            )
+          : manualVolume;
 
-        player.setMuted(!shouldListen);
-        player.setVolume(shouldListen ? manualVolume : 0);
+        player.setVolume(shouldListen ? targetVolume : 0);
+        player.setMuted(!(shouldListen && targetVolume > 0));
       } catch {
         // The React state effect will apply the same audio state once ready.
       }
@@ -1300,12 +1315,12 @@ function SquadViewApp() {
           1,
         );
 
-        player.setMuted(!shouldListen);
-        player.setVolume(
-          shouldListen
-            ? (isFocusedPlayer ? inheritedFocusedVolume : manualVolume)
-            : 0,
-        );
+        const targetVolume = shouldListen
+          ? (isFocusedPlayer ? inheritedFocusedVolume : manualVolume)
+          : 0;
+
+        player.setVolume(targetVolume);
+        player.setMuted(!(shouldListen && targetVolume > 0));
       } catch {
         // The React state effect will apply the same audio state once ready.
       }
