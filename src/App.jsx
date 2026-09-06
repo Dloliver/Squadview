@@ -965,7 +965,9 @@ function SquadViewApp() {
     setChannels(unique);
     setActiveChannel(unique[0]);
     setListeningChannels(new Set());
-    setAudioEnabled(false);
+    // Focus implies Listen: the lead stream is the primary audio source as soon
+    // as the viewer starts. Other streams remain silent until Listen is chosen.
+    setAudioEnabled(Boolean(unique[0]));
     const startWithGridChat = isDesktopGrid && unique.length === 3;
     const initialViewMode = defaultLayout === 'smart'
       ? (startWithGridChat ? 'chat' : 'dual')
