@@ -4942,11 +4942,14 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 
-/* SquadView Mobile Home Header Safe Area v1
-   Keep the landing/home header below phone status bars and Dynamic Island
-   without changing desktop or Android spacing. */
+/* SquadView Mobile Home Header Safe Area v2
+   Normal mobile browsers keep the stronger fallback needed to remain below
+   the iPhone status bar. Installed PWAs use the device reported safe area
+   without the additional browser fallback. */
 @media (max-width: 760px) {
   .topbar {
+    height: auto;
+    min-height: 72px;
     padding-left: max(16px, env(safe-area-inset-left));
     padding-right: max(16px, env(safe-area-inset-right));
     padding-top: calc(10px + env(safe-area-inset-top));
@@ -4954,8 +4957,7 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 
-/* iOS/WebKit can occasionally report a zero top inset in fullscreen or
-   standalone contexts. Keep a conservative fallback only on WebKit phones. */
+/* Safari / WebKit browser fallback. */
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 760px) {
     .topbar {
@@ -4965,4 +4967,15 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     }
   }
 }
-/* End SquadView Mobile Home Header Safe Area v1 */
+
+/* Installed PWA.
+   Override the browser fallback and rely only on the real device inset. */
+@media (display-mode: standalone) and (max-width: 760px) {
+  .topbar {
+    height: auto;
+    min-height: 64px;
+    padding-top: max(4px, env(safe-area-inset-top));
+    padding-bottom: 6px;
+  }
+}
+/* End SquadView Mobile Home Header Safe Area v2 */
