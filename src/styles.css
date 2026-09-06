@@ -4941,3 +4941,28 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     margin-bottom: 64px;
   }
 }
+
+/* SquadView Mobile Home Header Safe Area v1
+   Keep the landing/home header below phone status bars and Dynamic Island
+   without changing desktop or Android spacing. */
+@media (max-width: 760px) {
+  .topbar {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-bottom: 10px;
+  }
+}
+
+/* iOS/WebKit can occasionally report a zero top inset in fullscreen or
+   standalone contexts. Keep a conservative fallback only on WebKit phones. */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 760px) {
+    .topbar {
+      padding-top: calc(
+        10px + max(env(safe-area-inset-top), 44px)
+      );
+    }
+  }
+}
+/* End SquadView Mobile Home Header Safe Area v1 */
