@@ -1119,13 +1119,16 @@ function SquadViewApp() {
   }
 
   function listenToChannel(channel) {
-    if (channel === activeChannel) {
-      // Focus already owns this stream's audio. Keep the focused stream audible
-      // instead of requiring a second Listen click or turning Focus into a mute.
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+
+    if (cleaned === activeChannel) {
+      // Focus always implies Listen. A Listen tap on the focused stream should
+      // never toggle it off or disturb any other stream already in the mix.
       setAudioEnabled(true);
       try {
-        const player = playersRef.current.get(channel);
-        const focusedVolume = rememberFocusedAudioVolume(channel);
+        const player = playersRef.current.get(cleaned);
+        const focusedVolume = rememberFocusedAudioVolume(cleaned);
         player?.play?.();
         player?.setVolume?.(focusedVolume);
         player?.setMuted?.(focusedVolume <= 0);
@@ -1136,56 +1139,46 @@ function SquadViewApp() {
     }
 
     const nextListening = new Set(listeningChannels);
-    const wasListening = nextListening.has(channel);
+    const wasListening = nextListening.has(cleaned);
 
     if (wasListening) {
-      nextListening.delete(channel);
+      nextListening.delete(cleaned);
     } else {
-      nextListening.add(channel);
+      nextListening.add(cleaned);
     }
 
     setListeningChannels(nextListening);
-    setAudioEnabled(
-      Boolean(activeChannel && channels.includes(activeChannel)) ||
-      nextListening.size > 0,
-    );
+    setAudioEnabled(true);
 
-    // Listen remains an independent per-stream audio toggle for non-focused streams.
-    const visibleNow = viewMode === 'dual'
-      ? (isDesktopGrid
-          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
-          : slotChannels)
-      : [channel];
+    /*
+     * Multi-stream Listen is additive. The user gesture should affect only the
+     * stream whose Listen control was pressed. Do not reconcile, mute, pause,
+     * or restart the focused player (or any other manually-listened player) here.
+     * React's normal audio-state effect will keep the rest of the current mix.
+     */
+    const player = playersRef.current.get(cleaned);
 
-    playersRef.current.forEach((player, playerChannel) => {
-      try {
-        const isFocusedPlayer = playerChannel === activeChannel;
-        const isManualListening =
-          nextListening.has(playerChannel) &&
-          visibleNow.includes(playerChannel);
-        const shouldListen = isFocusedPlayer || isManualListening;
-
-        if (!wasListening && playerChannel === channel && isManualListening) {
-          player.play?.();
-        }
-
+    try {
+      if (wasListening) {
+        player?.setVolume?.(0);
+        player?.setMuted?.(true);
+      } else {
         const manualVolume = clampFocusedAudioVolume(
-          player.__squadViewManualVolume,
+          player?.__squadViewManualVolume,
           1,
         );
-        const targetVolume = isFocusedPlayer
-          ? clampFocusedAudioVolume(
-              player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
-              1,
-            )
-          : manualVolume;
 
-        player.setVolume(shouldListen ? targetVolume : 0);
-        player.setMuted(!(shouldListen && targetVolume > 0));
-      } catch {
-        // The React state effect will apply the same audio state once ready.
+        if (player) {
+          player.__squadViewManualVolume = manualVolume;
+        }
+
+        player?.play?.();
+        player?.setVolume?.(manualVolume);
+        player?.setMuted?.(manualVolume <= 0);
       }
-    });
+    } catch {
+      // The React state effect will apply the same audio state once ready.
+    }
   }
 
   function rotateOther(direction) {

@@ -1221,19 +1221,11 @@ export default function TwitchPlayer({
 
   function handleListen() {
     /*
-     * Listen is a per-stream toggle. Explicit viewer interaction may start
-     * playback for a stream being added to the audible mix.
+     * The parent owns the complete audio mix. Keep this click as a direct user
+     * gesture, but do not pre-mute or otherwise rewrite Twitch audio here.
+     * That lets Listen add/remove this stream without disrupting focused audio
+     * or another stream the viewer is already listening to.
      */
-    try {
-      playerRef.current?.setMuted?.(
-        true,
-      );
-
-      playerRef.current?.play?.();
-    } catch {
-      // Native Twitch play remains available.
-    }
-
     onListen();
   }
 
