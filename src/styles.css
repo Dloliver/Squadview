@@ -4942,40 +4942,108 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 
-/* SquadView Mobile Home Header Safe Area v2
-   Normal mobile browsers keep the stronger fallback needed to remain below
-   the iPhone status bar. Installed PWAs use the device reported safe area
-   without the additional browser fallback. */
+/* SquadView mobile stream volume control */
+.stream-card {
+  position: relative;
+}
+
+.volume-chip,
+.stream-volume-popover {
+  display: none;
+}
+
 @media (max-width: 760px) {
-  .topbar {
-    height: auto;
-    min-height: 72px;
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
-    padding-top: calc(10px + env(safe-area-inset-top));
-    padding-bottom: 10px;
+  .volume-chip {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    padding: 0;
+    border: 1px solid #315248;
+    border-radius: 999px;
+    background: #071713;
+    color: #d6eee7;
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .volume-chip.is-open {
+    border-color: var(--mint);
+    background: rgba(69, 224, 181, .12);
+    color: var(--mint-soft);
+  }
+
+  .stream-volume-popover {
+    position: absolute;
+    z-index: 18;
+    top: 42px;
+    left: 8px;
+    right: 8px;
+    min-height: 54px;
+    padding: 8px 10px;
+    border: 1px solid rgba(69, 224, 181, .5);
+    border-radius: 12px;
+    background: rgba(4, 18, 15, .96);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) 42px 32px;
+    align-items: center;
+    gap: 9px;
+    backdrop-filter: blur(10px);
+  }
+
+  .stream-volume-popover > span {
+    color: #b8d1c9;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .stream-volume-popover > strong {
+    color: #fff;
+    font-size: 11px;
+    text-align: right;
+  }
+
+  .stream-volume-popover input[type="range"] {
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    margin: 0;
+    accent-color: var(--mint);
+    touch-action: pan-x;
+  }
+
+  .stream-volume-close {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid #315248;
+    border-radius: 999px;
+    background: #0b1b16;
+    color: #c5d9d3;
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+    line-height: 1;
   }
 }
 
-/* Safari / WebKit browser fallback. */
-@supports (-webkit-touch-callout: none) {
-  @media (max-width: 760px) {
-    .topbar {
-      padding-top: calc(
-        10px + max(env(safe-area-inset-top), 44px)
-      );
-    }
+@media (max-width: 520px) {
+  .volume-chip {
+    width: 25px;
+    height: 25px;
+    flex-basis: 25px;
+    font-size: 12px;
   }
-}
 
-/* Installed PWA.
-   Override the browser fallback and rely only on the real device inset. */
-@media (display-mode: standalone) and (max-width: 760px) {
-  .topbar {
-    height: auto;
-    min-height: 64px;
-    padding-top: max(4px, env(safe-area-inset-top));
-    padding-bottom: 6px;
+  .stream-volume-popover {
+    top: 38px;
+    left: 6px;
+    right: 6px;
+    grid-template-columns: auto minmax(0, 1fr) 38px 30px;
+    gap: 7px;
+    padding: 7px 8px;
   }
 }
-/* End SquadView Mobile Home Header Safe Area v2 */

@@ -534,6 +534,8 @@ function applyPlayerState(
     active,
     audioSelected,
     audioEnabled,
+    focusVolume = 1,
+    audioVolume = 1,
     visible,
     visibleCount = 1,
   } = state;
@@ -552,6 +554,74 @@ function applyPlayerState(
     Boolean(
       player.__squadViewPausedByScheduler,
     );
+
+  const currentMuted = safeRead(
+    () => player.getMuted?.(),
+    true,
+  );
+
+  const currentVolume = Number(
+    safeRead(
+      () => player.getVolume?.(),
+      NaN,
+    ),
+  );
+
+  if (
+    active &&
+    audioSelected &&
+    audioEnabled &&
+    currentMuted === false &&
+    Number.isFinite(currentVolume) &&
+    currentVolume >= 0
+  ) {
+    player.__squadViewPreferredVolume =
+      Math.max(
+        0,
+        Math.min(1, currentVolume),
+      );
+  }
+
+  const preferredFocusedVolume =
+    Math.max(
+      0,
+      Math.min(
+        1,
+        Number.isFinite(
+          Number(
+            player.__squadViewPreferredVolume,
+          ),
+        )
+          ? Number(
+              player.__squadViewPreferredVolume,
+            )
+          : Number.isFinite(Number(focusVolume))
+            ? Number(focusVolume)
+            : 1,
+      ),
+    );
+
+  if (active) {
+    player.__squadViewPreferredVolume =
+      preferredFocusedVolume;
+  }
+
+  const preferredManualVolume =
+    Math.max(
+      0,
+      Math.min(
+        1,
+        Number.isFinite(Number(player.__squadViewManualVolume))
+          ? Number(player.__squadViewManualVolume)
+          : Number.isFinite(Number(audioVolume))
+            ? Number(audioVolume)
+            : 1,
+      ),
+    );
+
+  if (!active) {
+    player.__squadViewManualVolume = preferredManualVolume;
+  }
 
   /*
    * Always mute before any programmatic playback.
@@ -579,7 +649,9 @@ function applyPlayerState(
           player.play?.();
         }
         player.setMuted?.(false);
-        player.setVolume?.(1);
+        player.setVolume?.(
+          preferredFocusedVolume,
+        );
       } catch {
         // Twitch may still be applying the page transition.
       }
@@ -600,6 +672,7 @@ function applyPlayerState(
         active,
         audioSelected,
         audioEnabled,
+        focusVolume: preferredFocusedVolume,
         visible,
         visibleCount,
         targetQuality:
@@ -636,6 +709,7 @@ function applyPlayerState(
       active,
       audioSelected,
       audioEnabled,
+      focusVolume: preferredFocusedVolume,
       visible,
       visibleCount,
       targetQuality:
@@ -689,7 +763,9 @@ function applyPlayerState(
   try {
     player.setMuted?.(!audible);
     player.setVolume?.(
-      audible ? 1 : 0,
+      audible
+        ? (active ? preferredFocusedVolume : preferredManualVolume)
+        : 0,
     );
   } catch {
     // Player may still be starting.
@@ -705,6 +781,7 @@ function applyPlayerState(
     active,
     audioSelected,
     audioEnabled,
+    focusVolume: preferredFocusedVolume,
     visible,
     visibleCount,
     targetQuality:
@@ -817,6 +894,9 @@ export default function TwitchPlayer({
   active,
   audioSelected,
   audioEnabled,
+  focusVolume = 1,
+  audioVolume = 1,
+  onVolumeChange,
   onListen,
   onFocus,
   isTwitchFollowed = false,
@@ -837,12 +917,29 @@ export default function TwitchPlayer({
     active,
     audioSelected,
     audioEnabled,
+    focusVolume,
+    audioVolume,
     visible,
     visibleCount,
   });
 
   const [status, setStatus] =
     useState('Loading');
+  const [showVolumeControl, setShowVolumeControl] =
+    useState(false);
+  const [mobileVolumePercent, setMobileVolumePercent] =
+    useState(() => Math.round(Math.max(0, Math.min(1, Number(audioVolume) || 0)) * 100));
+
+  useEffect(() => {
+    const sourceVolume = active ? focusVolume : audioVolume;
+    const numeric = Number(sourceVolume);
+    if (!Number.isFinite(numeric)) return;
+
+    setMobileVolumePercent(
+      Math.round(Math.max(0, Math.min(1, numeric)) * 100),
+    );
+  }, [active, focusVolume, audioVolume]);
+
 
   useEffect(() => {
     stateRef.current = {
@@ -850,6 +947,8 @@ export default function TwitchPlayer({
       active,
       audioSelected,
       audioEnabled,
+      focusVolume,
+      audioVolume,
       visible,
       visibleCount,
     };
@@ -863,6 +962,8 @@ export default function TwitchPlayer({
     active,
     audioSelected,
     audioEnabled,
+    focusVolume,
+    audioVolume,
     visible,
     visibleCount,
   ]);
@@ -905,6 +1006,19 @@ export default function TwitchPlayer({
 
         player.__squadViewStateRef =
           stateRef;
+
+        player.__squadViewPreferredVolume =
+          Math.max(
+            0,
+            Math.min(
+              1,
+              Number.isFinite(
+                Number(stateRef.current.focusVolume),
+              )
+                ? Number(stateRef.current.focusVolume)
+                : 1,
+            ),
+          );
 
         player.__squadViewWasVisible =
           Boolean(
@@ -1111,6 +1225,53 @@ export default function TwitchPlayer({
     onListen();
   }
 
+  function openMobileVolumeControl() {
+    const player = playerRef.current;
+    let nextPercent = mobileVolumePercent;
+
+    try {
+      const current = Number(player?.getVolume?.());
+      if (Number.isFinite(current)) {
+        nextPercent = Math.round(
+          Math.max(0, Math.min(1, current)) * 100,
+        );
+      }
+    } catch {
+      // Fall back to the last SquadView volume level.
+    }
+
+    setMobileVolumePercent(nextPercent);
+    setShowVolumeControl((current) => !current);
+  }
+
+  function changeMobileVolume(event) {
+    const nextPercent = Math.max(
+      0,
+      Math.min(100, Number(event.target.value) || 0),
+    );
+    const nextVolume = nextPercent / 100;
+
+    setMobileVolumePercent(nextPercent);
+
+    try {
+      playerRef.current?.play?.();
+      playerRef.current?.setMuted?.(false);
+      playerRef.current?.setVolume?.(nextVolume);
+
+      if (playerRef.current) {
+        if (active) {
+          playerRef.current.__squadViewPreferredVolume = nextVolume;
+        } else {
+          playerRef.current.__squadViewManualVolume = nextVolume;
+        }
+      }
+    } catch {
+      // App state will reapply the level once Twitch is ready.
+    }
+
+    onVolumeChange?.(nextVolume);
+  }
+
   return (
     <article
       className={`stream-card ${
@@ -1159,6 +1320,19 @@ export default function TwitchPlayer({
         </button>
 
         <div className="stream-card-actions">
+          {(active || listening) && (
+            <button
+              type="button"
+              className={`volume-chip ${showVolumeControl ? 'is-open' : ''}`}
+              onClick={openMobileVolumeControl}
+              aria-label={`Adjust ${channel} volume`}
+              aria-expanded={showVolumeControl}
+              title="Adjust volume"
+            >
+              <span aria-hidden="true">🔊</span>
+            </button>
+          )}
+
           <button
             type="button"
             className={`listen-chip ${
@@ -1212,6 +1386,30 @@ export default function TwitchPlayer({
           </button>
         </div>
       </header>
+
+      {(active || listening) && showVolumeControl && (
+        <div className="stream-volume-popover">
+          <span>Volume</span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={mobileVolumePercent}
+            onChange={changeMobileVolume}
+            aria-label={`${channel} volume`}
+          />
+          <strong>{mobileVolumePercent}%</strong>
+          <button
+            type="button"
+            className="stream-volume-close"
+            onClick={() => setShowVolumeControl(false)}
+            aria-label="Close volume control"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="player-viewport">
         <div
