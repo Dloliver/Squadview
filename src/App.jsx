@@ -275,6 +275,42 @@ function SquadViewApp() {
   const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const playersRef = useRef(new Map());
+  // The focused stream owns the primary audio level. Keep that level stable
+  // while paging, opening/closing chat, or moving focus to another stream.
+  const focusedAudioVolumeRef = useRef(1);
+
+  function clampFocusedAudioVolume(value, fallback = 1) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  function rememberFocusedAudioVolume(channel = activeChannel) {
+    const player = playersRef.current.get(channel);
+
+    if (!player) {
+      return clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1);
+    }
+
+    try {
+      const muted = player.getMuted?.();
+      const currentVolume = Number(player.getVolume?.());
+
+      if (
+        muted === false &&
+        Number.isFinite(currentVolume) &&
+        currentVolume >= 0
+      ) {
+        const remembered = clampFocusedAudioVolume(currentVolume, 1);
+        focusedAudioVolumeRef.current = remembered;
+        player.__squadViewPreferredVolume = remembered;
+      }
+    } catch {
+      // Keep the last known focused volume while Twitch is initializing.
+    }
+
+    return clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1);
+  }
 
   // Twitch players are created lazily. The initial page creates only its
   // visible players. Once a channel has been visited, its player stays mounted
@@ -458,11 +494,38 @@ function SquadViewApp() {
       try {
         const isFocusedChannel = channel === activeChannel;
         const isVisibleChannel = player.__squadViewState?.visible !== false;
+
+        if (isFocusedChannel && audioEnabled) {
+          const muted = player.getMuted?.();
+          const currentVolume = Number(player.getVolume?.());
+
+          if (
+            muted === false &&
+            Number.isFinite(currentVolume) &&
+            currentVolume >= 0
+          ) {
+            const remembered = clampFocusedAudioVolume(currentVolume, 1);
+            focusedAudioVolumeRef.current = remembered;
+            player.__squadViewPreferredVolume = remembered;
+          }
+        }
+
         const shouldPlayAudio =
           audioEnabled &&
           (isFocusedChannel || (listeningChannels.has(channel) && isVisibleChannel));
+
+        const targetVolume = isFocusedChannel
+          ? clampFocusedAudioVolume(
+              player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
+              1,
+            )
+          : clampFocusedAudioVolume(
+              player.__squadViewManualVolume,
+              1,
+            );
+
         player.setMuted(!shouldPlayAudio);
-        player.setVolume(shouldPlayAudio ? 1 : 0);
+        player.setVolume(shouldPlayAudio ? targetVolume : 0);
       } catch {
         // A player may still be finishing initialization.
       }
@@ -1016,6 +1079,39 @@ function SquadViewApp() {
   }
 
 
+  function setStreamVolume(channel, value) {
+    const cleaned = cleanChannel(channel);
+    const nextVolume = clampFocusedAudioVolume(value, 1);
+    const player = playersRef.current.get(cleaned);
+
+    if (cleaned === activeChannel) {
+      focusedAudioVolumeRef.current = nextVolume;
+
+      if (player) {
+        player.__squadViewPreferredVolume = nextVolume;
+      }
+
+      setAudioEnabled(true);
+    } else if (player) {
+      player.__squadViewManualVolume = nextVolume;
+    }
+
+    if (
+      cleaned === activeChannel ||
+      listeningChannels.has(cleaned)
+    ) {
+      setAudioEnabled(true);
+
+      try {
+        player?.play?.();
+        player?.setMuted?.(false);
+        player?.setVolume?.(nextVolume);
+      } catch {
+        // Twitch's native controls remain available if the player is still loading.
+      }
+    }
+  }
+
   function listenToChannel(channel) {
     if (channel === activeChannel) {
       // Focus already owns this stream's audio. Keep the focused stream audible
@@ -1023,9 +1119,10 @@ function SquadViewApp() {
       setAudioEnabled(true);
       try {
         const player = playersRef.current.get(channel);
+        const focusedVolume = rememberFocusedAudioVolume(channel);
         player?.play?.();
         player?.setMuted?.(false);
-        player?.setVolume?.(1);
+        player?.setVolume?.(focusedVolume);
       } catch {
         // Twitch's native controls remain available if the player is still loading.
       }
@@ -1061,8 +1158,13 @@ function SquadViewApp() {
           player.play?.();
         }
 
+        const manualVolume = clampFocusedAudioVolume(
+          player.__squadViewManualVolume,
+          1,
+        );
+
         player.setMuted(!shouldListen);
-        player.setVolume(shouldListen ? 1 : 0);
+        player.setVolume(shouldListen ? manualVolume : 0);
       } catch {
         // The React state effect will apply the same audio state once ready.
       }
@@ -1157,12 +1259,21 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
 
+    const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+    const nextFocusedPlayer = playersRef.current.get(cleaned);
+
+    if (nextFocusedPlayer) {
+      nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+    }
+
+    focusedAudioVolumeRef.current = inheritedFocusedVolume;
     setActiveChannel(cleaned);
     setAudioEnabled(true);
 
     // The Focus click is already a viewer gesture, so use it to start/unmute the
-    // newly focused stream immediately. Extra streams only remain audible when
-    // their individual Listen toggle is enabled.
+    // newly focused stream immediately. The primary focus volume follows Focus
+    // instead of resetting to 100%. Extra streams only remain audible when their
+    // individual Listen toggle is enabled.
     const visibleNow = viewMode === 'dual'
       ? (isDesktopGrid
           ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
@@ -1171,16 +1282,30 @@ function SquadViewApp() {
 
     playersRef.current.forEach((player, playerChannel) => {
       try {
+        const isFocusedPlayer = playerChannel === cleaned;
         const shouldListen =
-          visibleNow.includes(playerChannel) &&
-          (playerChannel === cleaned || listeningChannels.has(playerChannel));
+          isFocusedPlayer ||
+          (
+            visibleNow.includes(playerChannel) &&
+            listeningChannels.has(playerChannel)
+          );
 
-        if (playerChannel === cleaned && shouldListen) {
+        if (isFocusedPlayer) {
+          player.__squadViewPreferredVolume = inheritedFocusedVolume;
           player.play?.();
         }
 
+        const manualVolume = clampFocusedAudioVolume(
+          player.__squadViewManualVolume,
+          1,
+        );
+
         player.setMuted(!shouldListen);
-        player.setVolume(shouldListen ? 1 : 0);
+        player.setVolume(
+          shouldListen
+            ? (isFocusedPlayer ? inheritedFocusedVolume : manualVolume)
+            : 0,
+        );
       } catch {
         // The React state effect will apply the same audio state once ready.
       }
@@ -1188,12 +1313,27 @@ function SquadViewApp() {
   }
 
   function enterSolo(channel = activeChannel) {
-    setActiveChannel(channel);
+    const cleaned = cleanChannel(channel);
+
+    if (cleaned && cleaned !== activeChannel) {
+      const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+      const nextFocusedPlayer = playersRef.current.get(cleaned);
+
+      if (nextFocusedPlayer) {
+        nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+      }
+
+      focusedAudioVolumeRef.current = inheritedFocusedVolume;
+    }
+
+    setActiveChannel(cleaned || activeChannel);
     setViewMode('solo');
   }
 
   function enterChatMode() {
     if (viewMode === 'chat') return;
+
+    rememberFocusedAudioVolume(activeChannel);
 
     // Desktop grid chat keeps the current page in place and replaces its fourth
     // tile with chat. Solo -> Chat (and all mobile Chat views) stays one stream
@@ -1203,6 +1343,8 @@ function SquadViewApp() {
   }
 
   function returnToDual() {
+    rememberFocusedAudioVolume(activeChannel);
+
     // Returning from Chat is an explicit viewer gesture. Resume the streams that
     // are about to be visible before React changes the layout so Twitch does not
     // leave them waiting for a second manual Play click.
@@ -1558,6 +1700,18 @@ function SquadViewApp() {
 
     const requestedActive = cleanChannel(preferredActive);
     const nextActive = unique.includes(requestedActive) ? requestedActive : unique[0];
+
+    if (activeChannel && nextActive !== activeChannel) {
+      const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+      const nextFocusedPlayer = playersRef.current.get(nextActive);
+
+      if (nextFocusedPlayer) {
+        nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+      }
+
+      focusedAudioVolumeRef.current = inheritedFocusedVolume;
+    }
+
     const retainedSlots = slotChannels.filter((channel) => unique.includes(channel));
     const nextSlots = [
       nextActive,
@@ -1900,6 +2054,7 @@ function SquadViewApp() {
     const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
     const moveDesktopPage = (direction) => {
       if (desktopPageCount <= 1) return;
+      rememberFocusedAudioVolume(activeChannel);
       setDesktopLeadChannel(activeChannel);
       setDesktopPage((current) => (current + direction + desktopPageCount) % desktopPageCount);
     };
@@ -1951,6 +2106,16 @@ function SquadViewApp() {
                     active={activeChannel === channel}
                     audioSelected={activeChannel === channel || listeningChannels.has(channel)}
                     audioEnabled={audioEnabled}
+                    focusVolume={focusedAudioVolumeRef.current}
+                    audioVolume={
+                      activeChannel === channel
+                        ? clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1)
+                        : clampFocusedAudioVolume(
+                            playersRef.current.get(channel)?.__squadViewManualVolume,
+                            1,
+                          )
+                    }
+                    onVolumeChange={(value) => setStreamVolume(channel, value)}
                     onListen={() => listenToChannel(channel)}
                     onFocus={() => focusChannel(channel)}
                     isTwitchFollowed={
