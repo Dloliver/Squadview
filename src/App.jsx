@@ -1109,7 +1109,10 @@ function SquadViewApp() {
       setAudioEnabled(true);
 
       try {
-        player?.play?.();
+        // Audio controls must not issue play(). On mobile Safari, starting one
+        // Twitch iframe can pause another iframe that is already playing.
+        // Focus/Listen/Volume only change the audio mix; TwitchPlayer owns
+        // playback recovery when a scheduler-paused stream becomes visible.
         player?.setVolume?.(nextVolume);
         player?.setMuted?.(nextVolume <= 0);
       } catch {
@@ -1129,7 +1132,7 @@ function SquadViewApp() {
       try {
         const player = playersRef.current.get(cleaned);
         const focusedVolume = rememberFocusedAudioVolume(cleaned);
-        player?.play?.();
+        // Never restart video from an audio-only action.
         player?.setVolume?.(focusedVolume);
         player?.setMuted?.(focusedVolume <= 0);
       } catch {
@@ -1172,7 +1175,9 @@ function SquadViewApp() {
           player.__squadViewManualVolume = manualVolume;
         }
 
-        player?.play?.();
+        // Listen is additive audio only. Do not call play() here because
+        // mobile browsers may pause another Twitch iframe when a second media
+        // element is explicitly started.
         player?.setVolume?.(manualVolume);
         player?.setMuted?.(manualVolume <= 0);
       }
@@ -1302,7 +1307,8 @@ function SquadViewApp() {
 
         if (isFocusedPlayer) {
           player.__squadViewPreferredVolume = inheritedFocusedVolume;
-          player.play?.();
+          // Focus changes audio ownership only. Playback state is preserved so
+          // both visible Twitch embeds can continue playing on mobile.
         }
 
         const manualVolume = clampFocusedAudioVolume(
