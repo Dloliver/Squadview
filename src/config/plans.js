@@ -9,6 +9,8 @@ export const FREE_ENTITLEMENTS = Object.freeze({
   multiWindow: false,
   liveSquadAlerts: false,
   persistentSharedSquads: false,
+  promoPremiumUntil: null,
+  lifetimePremium: false,
 });
 
 export const PREMIUM_FEATURES = [
@@ -58,26 +60,41 @@ export function normalizeEntitlements(row) {
   const planKey = typeof row.plan_key === 'string' && row.plan_key.trim()
     ? row.plan_key.trim()
     : 'free';
-  const isPremium = planKey !== 'free';
+  const lifetimePremium = Boolean(row.lifetime_premium);
+  const promoPremiumUntil = row.promo_premium_until || null;
+  const promoPremiumActive = Boolean(
+    promoPremiumUntil && Number.isFinite(Date.parse(promoPremiumUntil)) && Date.parse(promoPremiumUntil) > Date.now(),
+  );
+  const paidPremium = planKey !== 'free';
+  const isPremium = paidPremium || lifetimePremium || promoPremiumActive;
+  const promotionalPremium = lifetimePremium || promoPremiumActive;
 
   return {
     planKey,
     isPremium,
-    squadViewAds: booleanOrDefault(row.squadview_ads, !isPremium),
-    savedSquadLimit: row.saved_squad_limit === null
+    squadViewAds: promotionalPremium ? false : booleanOrDefault(row.squadview_ads, !isPremium),
+    savedSquadLimit: promotionalPremium
       ? null
-      : integerOrDefault(row.saved_squad_limit, FREE_ENTITLEMENTS.savedSquadLimit),
-    maxSquadMembers: integerOrDefault(
-      row.max_squad_members,
-      isPremium ? 16 : FREE_ENTITLEMENTS.maxSquadMembers,
-    ),
-    viewerMaxStreams: integerOrDefault(
-      row.viewer_max_streams,
-      isPremium ? 16 : FREE_ENTITLEMENTS.viewerMaxStreams,
-    ),
-    youtubeCompanion: booleanOrDefault(row.youtube_companion, isPremium),
-    multiWindow: booleanOrDefault(row.multi_window, isPremium),
-    liveSquadAlerts: booleanOrDefault(row.live_squad_alerts, isPremium),
-    persistentSharedSquads: booleanOrDefault(row.persistent_shared_squads, isPremium),
+      : row.saved_squad_limit === null
+        ? null
+        : integerOrDefault(row.saved_squad_limit, FREE_ENTITLEMENTS.savedSquadLimit),
+    maxSquadMembers: promotionalPremium
+      ? 16
+      : integerOrDefault(
+        row.max_squad_members,
+        isPremium ? 16 : FREE_ENTITLEMENTS.maxSquadMembers,
+      ),
+    viewerMaxStreams: promotionalPremium
+      ? 16
+      : integerOrDefault(
+        row.viewer_max_streams,
+        isPremium ? 16 : FREE_ENTITLEMENTS.viewerMaxStreams,
+      ),
+    youtubeCompanion: promotionalPremium ? true : booleanOrDefault(row.youtube_companion, isPremium),
+    multiWindow: promotionalPremium ? true : booleanOrDefault(row.multi_window, isPremium),
+    liveSquadAlerts: promotionalPremium ? true : booleanOrDefault(row.live_squad_alerts, isPremium),
+    persistentSharedSquads: promotionalPremium ? true : booleanOrDefault(row.persistent_shared_squads, isPremium),
+    promoPremiumUntil,
+    lifetimePremium,
   };
 }

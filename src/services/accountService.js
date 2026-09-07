@@ -57,7 +57,9 @@ export function subscribeToAccountChanges(callback) {
 
 export async function signInWithTwitch({ forceVerify = false } = {}) {
   const client = requireSupabase();
-  const redirectTo = new URL('/watch', window.location.origin).toString();
+  const redirectUrl = new URL(window.location.href);
+  redirectUrl.hash = '';
+  const redirectTo = redirectUrl.toString();
   const options = {
     redirectTo,
     scopes: 'user:read:follows user:read:chat user:write:chat user:read:emotes',

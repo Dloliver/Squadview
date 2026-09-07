@@ -5063,3 +5063,463 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 /* SQUADVIEW_STANDALONE_HOME_SAFE_AREA_END */
+
+/* SquadView Growth Phase 1 — explicit sharing + referral rewards. */
+.share-squad-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid rgba(69,224,181,.34);
+  border-radius: 999px;
+  background: rgba(69,224,181,.08);
+  color: #dffaf1;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 900;
+}
+.share-squad-button:hover,
+.share-squad-button:focus-visible {
+  border-color: var(--mint);
+  background: rgba(69,224,181,.14);
+  color: var(--mint-soft);
+}
+.share-squad-button .text-icon { color: var(--mint); font-size: 14px; }
+.viewer-header .share-squad-button span { color: inherit; }
+.share-label-short { display: none; }
+
+.share-squad-backdrop { z-index: 2600; place-items: center; }
+.share-squad-modal {
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100dvh - 28px));
+  overflow-y: auto;
+  padding: 30px 26px 24px;
+  text-align: left;
+  border-color: rgba(69,224,181,.24);
+  background: linear-gradient(180deg, rgba(10,27,23,.995), rgba(5,15,13,.995));
+  box-shadow: 0 28px 80px rgba(0,0,0,.48);
+}
+.share-squad-modal > .modal-eyebrow {
+  color: var(--mint);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.share-squad-modal h2 { margin: 8px 42px 8px 0; color: #f3fff9; font-size: 28px; }
+.share-squad-modal > p { margin: 0; color: #9db5ad; }
+.share-squad-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 16px 0 18px;
+}
+.share-squad-preview span {
+  padding: 6px 9px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 999px;
+  background: rgba(255,255,255,.04);
+  color: #cfe2dc;
+  font-size: 10px;
+  font-weight: 800;
+}
+.share-squad-actions {
+  display: grid;
+  grid-template-columns: minmax(0,1.5fr) minmax(0,1fr);
+  gap: 9px;
+}
+.share-squad-actions > button {
+  min-height: 46px;
+  border-radius: 13px;
+}
+.share-squad-actions .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.share-squad-feedback {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid rgba(69,224,181,.2);
+  border-radius: 10px;
+  background: rgba(69,224,181,.07);
+  color: #cffff0;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+.share-rewards-card,
+.account-rewards-summary {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+  padding: 15px;
+  border: 1px solid rgba(169,112,255,.34);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(145,70,255,.11), rgba(69,224,181,.055));
+}
+.share-rewards-heading,
+.account-rewards-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.share-rewards-heading > div,
+.account-rewards-heading > div { display: grid; gap: 3px; }
+.share-rewards-heading span,
+.account-rewards-heading small {
+  color: #b99ae4;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+.share-rewards-heading strong,
+.account-rewards-heading strong { color: #f4edff; font-size: 14px; }
+.share-rewards-heading > small,
+.account-rewards-heading > span { color: #9589a8; font-size: 9px; }
+.reward-progress-row,
+.reward-lifetime-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #c8d9d3;
+  font-size: 11px;
+}
+.reward-progress-row strong,
+.reward-lifetime-row strong { color: #fff; font-size: 11px; }
+.reward-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+.reward-progress-track > span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9146ff, var(--mint));
+  transition: width .25s ease;
+}
+.reward-progress-track.lifetime > span {
+  background: linear-gradient(90deg, var(--orange), #9146ff);
+}
+.share-rewards-card > small,
+.account-rewards-summary > small {
+  color: #9aaea7;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.share-rewards-card.guest strong { color: #f3edff; font-size: 14px; }
+.share-rewards-card.guest > span { color: #b99ae4; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.share-rewards-card.guest .twitch-login-button { min-height: 44px; margin-top: 2px; }
+
+.account-rewards-summary { margin: 16px 0; }
+.account-share-rewards-button { width: 100%; min-height: 42px; border-radius: 12px; margin-top: 2px; }
+
+.shared-arrival-referral {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(145,70,255,.28);
+  border-radius: 13px;
+  background: rgba(145,70,255,.08);
+  color: #aabdb7;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.shared-arrival-referral strong { color: #efe7ff; }
+
+.referral-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 2800;
+  width: min(460px, calc(100% - 28px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transform: translateX(-50%);
+  padding: 12px 12px 12px 14px;
+  border: 1px solid rgba(69,224,181,.28);
+  border-radius: 14px;
+  background: rgba(7,25,21,.97);
+  box-shadow: 0 18px 48px rgba(0,0,0,.42);
+  color: #dff8f0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.referral-toast span { flex: 1; color: inherit; font-size: inherit; }
+.referral-toast button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.06);
+  color: #adc2bb;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .share-squad-button { min-height: 29px; padding: 0 8px; gap: 4px; font-size: 9px; }
+  .share-label-full { display: none; }
+  .share-label-short { display: inline; }
+  .share-squad-button .text-icon { font-size: 12px; }
+  .share-squad-backdrop { align-items: end; padding: 10px; }
+  .share-squad-modal { max-height: calc(100dvh - 20px); padding: 25px 18px 18px; border-radius: 20px; }
+  .share-squad-modal h2 { font-size: 24px; }
+  .share-squad-actions { grid-template-columns: 1fr; }
+}
+
+.shared-arrival-referral button {
+  width: fit-content;
+  min-height: 34px;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: 1px solid rgba(145,70,255,.5);
+  border-radius: 10px;
+  background: #9146ff;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+.shared-arrival-referral button:disabled { opacity: .55; cursor: not-allowed; }
+.reward-definition { padding-top: 2px; border-top: 1px solid rgba(255,255,255,.06); }
+
+
+/* SquadView Growth Phase 2 — five-minute referral promo tile.
+   Swap one non-focused Twitch tile out of the visible grid while keeping its
+   player mounted off-screen. This avoids obscuring Twitch embeds and restores
+   the stream when the rewards card closes. */
+.referral-promo-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 2px solid #244238;
+  border-radius: 12px;
+  padding: clamp(16px, 2.2vw, 28px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(10px, 1.4vw, 16px);
+  overflow: auto;
+  background:
+    radial-gradient(circle at 92% 8%, rgba(69, 224, 181, .16), transparent 38%),
+    linear-gradient(145deg, rgba(9, 30, 24, .98), rgba(3, 10, 8, .99));
+  color: #f4fbf8;
+}
+
+.referral-promo-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #315248;
+  border-radius: 999px;
+  background: rgba(3, 10, 8, .82);
+  color: #a9beb7;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.referral-promo-copy {
+  max-width: 680px;
+}
+
+.referral-promo-copy > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--mint);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.referral-promo-copy > strong {
+  display: block;
+  font: 700 clamp(20px, 2.2vw, 32px) 'Space Grotesk';
+  line-height: 1.05;
+}
+
+.referral-promo-copy > p {
+  margin: 8px 0 0;
+  max-width: 650px;
+  color: #b8ccc5;
+  font-size: clamp(11px, 1.05vw, 14px);
+  line-height: 1.45;
+}
+
+.referral-promo-progress {
+  display: grid;
+  gap: 7px;
+  max-width: 560px;
+}
+
+.referral-promo-progress > div:not(.referral-promo-progress-track) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #9db8af;
+  font-size: 10px;
+}
+
+.referral-promo-progress > div strong {
+  color: #f4fbf8;
+  font-size: 11px;
+}
+
+.referral-promo-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #17302a;
+}
+
+.referral-promo-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--mint), var(--orange));
+}
+
+.referral-promo-benefits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  max-width: 620px;
+}
+
+.referral-promo-benefits span {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid #244238;
+  border-radius: 9px;
+  background: rgba(7, 23, 19, .72);
+  color: #d7e8e2;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.referral-promo-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.referral-promo-actions .primary-button {
+  min-height: 40px;
+  padding-inline: 18px;
+}
+
+.referral-promo-later {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: #8fa59e;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 1099px) {
+  .referral-promo-tile {
+    padding: 18px 14px 15px;
+    gap: 9px;
+  }
+
+  .referral-promo-copy > strong {
+    font-size: 21px;
+  }
+
+  .referral-promo-copy > p {
+    font-size: 11px;
+  }
+
+  .referral-promo-benefits {
+    gap: 5px;
+  }
+
+  .referral-promo-benefits span {
+    padding: 6px 7px;
+    font-size: 9px;
+  }
+
+  .referral-promo-actions .primary-button {
+    min-height: 38px;
+  }
+}
+
+@media (max-width: 520px) {
+  .referral-promo-tile {
+    padding: 15px 11px 12px;
+    gap: 7px;
+  }
+
+  .referral-promo-close {
+    top: 7px;
+    right: 7px;
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
+  }
+
+  .referral-promo-copy {
+    padding-right: 22px;
+  }
+
+  .referral-promo-copy > strong {
+    font-size: 18px;
+  }
+
+  .referral-promo-copy > p {
+    margin-top: 5px;
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .referral-promo-progress > div:not(.referral-promo-progress-track),
+  .referral-promo-progress > div strong {
+    font-size: 9px;
+  }
+
+  .referral-promo-benefits span {
+    padding: 5px 6px;
+    font-size: 8px;
+  }
+
+  .referral-promo-actions {
+    gap: 5px;
+  }
+
+  .referral-promo-actions .primary-button {
+    min-height: 34px;
+    padding-inline: 12px;
+    font-size: 9px;
+  }
+
+  .referral-promo-later {
+    min-height: 32px;
+    font-size: 9px;
+  }
+}

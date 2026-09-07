@@ -27,6 +27,12 @@ import { FREE_ENTITLEMENTS } from './config/plans';
 import { AD_CONFIG, isLoadingAdConfigured, markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 import { loadSquadViewEntitlements } from './services/premiumService';
 import { createSavedSquad, deleteSavedSquad, loadSavedSquads, updateSavedSquad } from './services/savedSquadService';
+import {
+  capturePendingReferralFromLocation,
+  claimSquadViewReferral,
+  getPendingReferralCode,
+  loadSquadViewReferralSummary,
+} from './services/referralService';
 
 function Icon({ symbol, className = '' }) {
   return <span className={`text-icon ${className}`} aria-hidden="true">{symbol}</span>;
@@ -47,6 +53,9 @@ const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
 const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
 const VIEWER_SESSION_KEY = 'squadview:viewer-session:v1';
+const REFERRAL_PROMO_DISMISSED_KEY = 'squadview:referral-promo-dismissed:v1';
+const REFERRAL_PROMO_WATCH_MS = 5 * 60 * 1000;
+const REFERRAL_PROMO_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 const MAX_SUPPORTED_VIEWER_STREAMS = 16;
 
@@ -99,6 +108,70 @@ function isIOSLikeDevice() {
   } catch {
     return false;
   }
+}
+
+function formatRewardDate(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed);
+}
+
+function referralPromoCooldownActive() {
+  try {
+    const dismissedAt = Number(localStorage.getItem(REFERRAL_PROMO_DISMISSED_KEY)) || 0;
+    return dismissedAt > 0 && Date.now() - dismissedAt < REFERRAL_PROMO_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
+function getReferralPromoCopy(summary, signedIn) {
+  if (!signedIn) {
+    return {
+      eyebrow: 'SquadView Rewards',
+      title: 'Get Premium free',
+      body: 'Sign in with Twitch, then invite 5 new SquadView users to unlock 30 days of Premium.',
+    };
+  }
+
+  const qualified = Math.max(0, Number(summary?.qualifiedReferrals) || 0);
+  const nextRemaining = Math.max(1, Number(summary?.nextMonthRemaining) || (5 - (qualified % 5 || 0)));
+  const lifetimeRemaining = Math.max(0, 100 - qualified);
+
+  if (qualified >= 90) {
+    return {
+      eyebrow: 'Lifetime Premium',
+      title: 'Lifetime Premium is close',
+      body: `${lifetimeRemaining} more qualified ${lifetimeRemaining === 1 ? 'referral' : 'referrals'} unlocks Lifetime Premium for this Twitch account.`,
+    };
+  }
+
+  if (qualified >= 5) {
+    return {
+      eyebrow: 'Keep building your Squad',
+      title: 'Earn another free month',
+      body: `${nextRemaining} more qualified ${nextRemaining === 1 ? 'referral' : 'referrals'} adds another 30 days of Premium. Every 5 keeps stacking.`,
+    };
+  }
+
+  if (qualified > 0) {
+    return {
+      eyebrow: 'You are getting close',
+      title: `${nextRemaining} more ${nextRemaining === 1 ? 'friend' : 'friends'} to Premium`,
+      body: 'Share the SquadView you are watching. Every 5 qualified new users unlocks 30 days of Premium.',
+    };
+  }
+
+  return {
+    eyebrow: 'SquadView Rewards',
+    title: 'Get Premium free',
+    body: 'Invite 5 new SquadView users and unlock 30 days of Premium. Every additional 5 earns another month.',
+  };
 }
 
 function getDesktopPageChannels(sourceChannels, leadChannel, page, visibleTwitchLimit = 4) {
@@ -193,6 +266,7 @@ function readViewerSession() {
 }
 
 function SquadViewApp() {
+  const [incomingReferralCode] = useState(capturePendingReferralFromLocation);
   const [sharedViewer] = useState(readSharedViewerLink);
   const [restoredViewer] = useState(() => sharedViewer ? null : readViewerSession());
   const initialViewer = sharedViewer
@@ -246,6 +320,15 @@ function SquadViewApp() {
   const [accountProfile, setAccountProfile] = useState(null);
   const [accountError, setAccountError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+  const [referralSummary, setReferralSummary] = useState(null);
+  const [referralBusy, setReferralBusy] = useState(false);
+  const [referralMessage, setReferralMessage] = useState('');
+  const [showShareSquad, setShowShareSquad] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState('');
+  const [referralPromoReady, setReferralPromoReady] = useState(false);
+  const [referralPromoSuppressed, setReferralPromoSuppressed] = useState(referralPromoCooldownActive);
+  const referralPromoWatchMsRef = useRef(0);
+  const referralPromoLastTickRef = useRef(Date.now());
   const [defaultLayout, setDefaultLayout] = useState('smart');
   const [followedLiveStreams, setFollowedLiveStreams] = useState([]);
   const [followingStatus, setFollowingStatus] = useState('idle');
@@ -277,6 +360,7 @@ function SquadViewApp() {
   const pendingAdLaunchRef = useRef(null);
   const loadingAdRef = useRef(null);
   const accountHydratedUserRef = useRef('');
+  const sharedViewStartedRef = useRef(false);
   const [viewMode, setViewMode] = useState(() => initialViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
   // audio after a hard refresh until the user interacts with the page again.
@@ -345,10 +429,14 @@ function SquadViewApp() {
     trackEvent('shared_view_opened', {
       stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
     });
+    trackEvent('shared_view_arrived', {
+      stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+      referral_attached: Boolean(incomingReferralCode),
+    });
     trackEvent('shared_view_arrival_shown', {
       stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
     });
-  }, [sharedViewer]);
+  }, [sharedViewer, incomingReferralCode]);
 
   useEffect(() => {
     document.title = 'SquadView Viewer — Build Your Multi Stream View';
@@ -395,6 +483,8 @@ function SquadViewApp() {
         setSavedSquadsStatus('idle');
         setSavedSquadsError('');
         setLiveSavedSquadStreamers(new Set());
+        setReferralSummary(null);
+        setReferralMessage('');
         accountHydratedUserRef.current = '';
       }
     });
@@ -492,6 +582,15 @@ function SquadViewApp() {
           default_view: syncedDefaultLayout,
         });
 
+        try {
+          const growthSummary = await loadSquadViewReferralSummary();
+          if (!cancelled) setReferralSummary(growthSummary);
+        } catch (error) {
+          if (import.meta.env.DEV) {
+            console.info('[SquadView Rewards] referral summary unavailable', error);
+          }
+        }
+
         if (!cancelled) accountHydratedUserRef.current = user.id;
       } catch (error) {
         if (!cancelled) {
@@ -507,6 +606,116 @@ function SquadViewApp() {
       cancelled = true;
     };
   }, [accountSession?.user?.id]);
+
+  useEffect(() => {
+    if (!showAccount || !accountSession?.user?.id || !accountReady) return;
+    let cancelled = false;
+
+    async function refreshAccountGrowthState() {
+      try {
+        const [summary, access] = await Promise.all([
+          loadSquadViewReferralSummary(),
+          loadSquadViewEntitlements(accountSession.user.id),
+        ]);
+        if (cancelled) return;
+        setReferralSummary(summary);
+        setEntitlements(access);
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.info('[SquadView Rewards] account refresh unavailable', error);
+        }
+      }
+    }
+
+    void refreshAccountGrowthState();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAccount, accountReady, accountSession?.user?.id]);
+
+  useEffect(() => {
+    if (screen !== 'viewer' || !accountReady || !accountSession?.user?.id) return;
+    const pendingReferralCode = getPendingReferralCode();
+    if (!pendingReferralCode) return;
+
+    let cancelled = false;
+    setReferralBusy(true);
+
+    async function qualifyPendingReferral() {
+      try {
+        const result = await claimSquadViewReferral(pendingReferralCode);
+        if (cancelled || !result?.available) return;
+
+        if (result.status === 'qualified') {
+          setReferralMessage('Invite credited. Thanks for joining SquadView through a shared view.');
+          trackEvent('referral_qualified', {
+            source: incomingReferralCode ? 'shared_view' : 'stored_referral',
+          });
+        }
+      } catch (error) {
+        if (!cancelled && import.meta.env.DEV) {
+          console.info('[SquadView Rewards] referral claim unavailable', error);
+        }
+      } finally {
+        if (!cancelled) setReferralBusy(false);
+      }
+    }
+
+    void qualifyPendingReferral();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, accountReady, accountSession?.user?.id, incomingReferralCode]);
+
+  useEffect(() => {
+    const watchEligible =
+      screen === 'viewer' &&
+      accountReady &&
+      !entitlements.isPremium &&
+      channels.length >= 2 &&
+      !referralPromoReady &&
+      !referralPromoSuppressed;
+
+    referralPromoLastTickRef.current = Date.now();
+    if (!watchEligible) return undefined;
+
+    const tickWatchTime = () => {
+      const now = Date.now();
+      const elapsed = Math.max(0, Math.min(2000, now - referralPromoLastTickRef.current));
+      referralPromoLastTickRef.current = now;
+
+      if (document.visibilityState !== 'visible') return;
+      referralPromoWatchMsRef.current += elapsed;
+
+      if (referralPromoWatchMsRef.current >= REFERRAL_PROMO_WATCH_MS) {
+        setReferralPromoReady(true);
+        trackEvent('referral_promo_ready', {
+          signed_in: Boolean(accountSession?.user?.id),
+          stream_count_bucket: getStreamCountBucket(channels.length),
+        });
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      referralPromoLastTickRef.current = Date.now();
+    };
+
+    const interval = window.setInterval(tickWatchTime, 1000);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    accountReady,
+    accountSession?.user?.id,
+    channels.length,
+    entitlements.isPremium,
+    referralPromoReady,
+    referralPromoSuppressed,
+    screen,
+  ]);
 
   useEffect(() => {
     const iosManualOwner = iosSingleAudioMode
@@ -601,6 +810,15 @@ function SquadViewApp() {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
     return () => document.body.classList.remove('viewer-active');
   }, [screen]);
+
+  useEffect(() => {
+    if (screen !== 'viewer' || !sharedViewer?.channels?.length || sharedViewStartedRef.current) return;
+    sharedViewStartedRef.current = true;
+    trackEvent('shared_view_started', {
+      stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+      referral_attached: Boolean(incomingReferralCode),
+    });
+  }, [screen, sharedViewer, incomingReferralCode]);
 
   // Preserve the active viewer layout across a browser refresh. Session storage
   // intentionally expires with the tab, so reopening SquadView later still
@@ -2024,30 +2242,137 @@ function SquadViewApp() {
     }
   }, [accountReady, entitlements.squadViewAds, screen, sharedViewer]);
 
-  async function shareView() {
-    if (!channels.length) return;
-
+  function buildShareUrl() {
     const url = new URL('/watch', window.location.origin);
     url.searchParams.set('channels', channels.join(','));
     if (activeChannel && channels.includes(activeChannel)) {
       url.searchParams.set('active', activeChannel);
     }
+    if (accountSession?.user?.id && referralSummary?.available && referralSummary.referralCode) {
+      url.searchParams.set('ref', referralSummary.referralCode);
+    }
+    return url;
+  }
 
+  async function refreshReferralRewards() {
+    if (!accountSession?.user?.id) return null;
+    setReferralBusy(true);
+    try {
+      const [summary, access] = await Promise.all([
+        loadSquadViewReferralSummary(),
+        loadSquadViewEntitlements(accountSession.user.id),
+      ]);
+      setReferralSummary(summary);
+      setEntitlements(access);
+      return summary;
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.info('[SquadView Rewards] share refresh unavailable', error);
+      }
+      return referralSummary;
+    } finally {
+      setReferralBusy(false);
+    }
+  }
+
+  function openShareSquad() {
+    if (!channels.length) return;
+    setShareFeedback('');
+    setShowShareSquad(true);
+    trackEvent('share_opened', {
+      stream_count_bucket: getStreamCountBucket(channels.length),
+      signed_in: Boolean(accountSession?.user?.id),
+    });
+    trackEvent('shared_view_created', {
+      stream_count_bucket: getStreamCountBucket(channels.length),
+    });
+    if (accountSession?.user?.id) void refreshReferralRewards();
+  }
+
+  function suppressReferralPromo(reason) {
+    setReferralPromoReady(false);
+    setReferralPromoSuppressed(true);
+    try {
+      localStorage.setItem(REFERRAL_PROMO_DISMISSED_KEY, String(Date.now()));
+    } catch {
+      // Restricted storage should not block the viewer.
+    }
+    trackEvent('referral_promo_dismissed', {
+      reason,
+      signed_in: Boolean(accountSession?.user?.id),
+      stream_count_bucket: getStreamCountBucket(channels.length),
+    });
+  }
+
+  function handleReferralPromoAction() {
+    trackEvent('referral_promo_cta_clicked', {
+      signed_in: Boolean(accountSession?.user?.id),
+      qualified_referrals: Math.max(0, Number(referralSummary?.qualifiedReferrals) || 0),
+    });
+    suppressReferralPromo(accountSession?.user?.id ? 'share_clicked' : 'signin_clicked');
+
+    if (accountSession?.user?.id) {
+      openShareSquad();
+      return;
+    }
+
+    void handleTwitchSignIn();
+  }
+
+  async function copyShareLink() {
+    if (!channels.length) return;
+    const shareUrl = buildShareUrl().toString();
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = shareUrl;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        textArea.remove();
+      }
+      setShareFeedback('Squad link copied');
+      trackEvent('share_link_copied', {
+        stream_count_bucket: getStreamCountBucket(channels.length),
+        referral_attached: Boolean(referralSummary?.referralCode),
+      });
+    } catch {
+      setShareFeedback('Could not copy automatically. Try Share Squad instead.');
+    }
+  }
+
+  async function shareView() {
+    if (!channels.length) return;
+
+    const url = buildShareUrl();
     const payload = {
       title: 'SquadView',
       text: `Watch ${channels.length} Twitch ${channels.length === 1 ? 'stream' : 'streams'} together on SquadView`,
       url: url.toString(),
     };
 
-    trackEvent('shared_view_created', {
-      stream_count_bucket: getStreamCountBucket(channels.length),
-    });
+    if (!navigator.share) {
+      await copyShareLink();
+      return;
+    }
 
     try {
-      if (navigator.share) await navigator.share(payload);
-      else await navigator.clipboard.writeText(url.toString());
-    } catch {
-      // User dismissed the share sheet.
+      await navigator.share(payload);
+      setShareFeedback('Squad shared');
+      trackEvent('share_native_completed', {
+        stream_count_bucket: getStreamCountBucket(channels.length),
+        referral_attached: Boolean(referralSummary?.referralCode),
+      });
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        setShareFeedback('Share did not open. You can still copy the link.');
+      }
     }
   }
 
@@ -2179,6 +2504,41 @@ function SquadViewApp() {
       };
     };
 
+    const referralPromoBlocked =
+      viewMode !== 'dual' ||
+      showEdit ||
+      showShareSquad ||
+      showAccount ||
+      showSaveSquad ||
+      Boolean(editingSavedSquad) ||
+      showYoutubeCompanion ||
+      showSharedArrival;
+
+    const referralPromoCandidates = visibleChannels
+      .filter((channel) => channel !== activeChannel)
+      .map((channel) => ({
+        channel,
+        tile: Number(twitchTileOrder(channel)) || (visibleChannels.indexOf(channel) + 1),
+      }))
+      .sort((first, second) => second.tile - first.tile);
+
+    const referralPromoTargetChannel =
+      referralPromoReady &&
+      !referralPromoSuppressed &&
+      !entitlements.isPremium &&
+      !referralPromoBlocked &&
+      visibleChannels.length >= 2
+        ? (referralPromoCandidates[0]?.channel || '')
+        : '';
+
+    const referralPromoVisible = Boolean(referralPromoTargetChannel);
+    const referralPromoCopy = getReferralPromoCopy(
+      referralSummary,
+      Boolean(accountSession?.user?.id),
+    );
+    const referralQualifiedCount = Math.max(0, Number(referralSummary?.qualifiedReferrals) || 0);
+    const referralNextProgress = Math.max(0, Math.min(5, Number(referralSummary?.nextMonthProgress) || (referralQualifiedCount % 5)));
+
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
     const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
@@ -2211,7 +2571,7 @@ function SquadViewApp() {
             </button>
             <button className="edit-group-button" onClick={() => openEditGroup()}>Manage streams</button>
             <button className="icon-button" onClick={() => openSaveSquadModal(channels)} aria-label="Save current view as a Squad" title="Save Squad"><Save /></button>
-            <button className="icon-button" onClick={shareView} aria-label="Share"><Share2 /></button>
+            <button className="share-squad-button" onClick={openShareSquad} aria-label="Share this SquadView" title="Share Squad"><Share2 /><span className="share-label-full">Share Squad</span><span className="share-label-short">Share</span></button>
             <button
               className={`icon-button ${favoriteStreamers.includes(activeChannel) ? 'is-favorite' : ''}`}
               onClick={() => toggleFavoriteStreamer(activeChannel)}
@@ -2231,8 +2591,8 @@ function SquadViewApp() {
                   <TwitchPlayer
                     key={channel}
                     channel={channel}
-                    visible={visibleChannels.includes(channel)}
-                    visibleCount={visibleChannels.length}
+                    visible={visibleChannels.includes(channel) && channel !== referralPromoTargetChannel}
+                    visibleCount={Math.max(1, visibleChannels.length - (referralPromoVisible ? 1 : 0))}
                     active={activeChannel === channel}
                     audioSelected={
                       iosSingleAudioMode
@@ -2268,6 +2628,62 @@ function SquadViewApp() {
                   />
                 ))}
 
+                {referralPromoVisible && (
+                  <section
+                    className="referral-promo-tile"
+                    role="dialog"
+                    aria-label="SquadView Premium referral rewards"
+                    style={{ order: Number(twitchTileOrder(referralPromoTargetChannel)) || visibleChannels.indexOf(referralPromoTargetChannel) + 1 }}
+                  >
+                    <button
+                      type="button"
+                      className="referral-promo-close"
+                      onClick={() => suppressReferralPromo('closed')}
+                      aria-label="Dismiss SquadView rewards"
+                    >
+                      ×
+                    </button>
+
+                    <div className="referral-promo-copy">
+                      <span>{referralPromoCopy.eyebrow}</span>
+                      <strong>{referralPromoCopy.title}</strong>
+                      <p>{referralPromoCopy.body}</p>
+                    </div>
+
+                    {accountSession?.user?.id && referralSummary?.available && (
+                      <div className="referral-promo-progress">
+                        <div>
+                          <span>Next free month</span>
+                          <strong>{referralNextProgress}/5</strong>
+                        </div>
+                        <div className="referral-promo-progress-track" aria-hidden="true">
+                          <span style={{ width: `${(referralNextProgress / 5) * 100}%` }} />
+                        </div>
+                        <div>
+                          <span>Lifetime Premium</span>
+                          <strong>{Math.min(referralQualifiedCount, 100)}/100</strong>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="referral-promo-benefits" aria-label="SquadView Premium benefits">
+                      <span>No SquadView ads</span>
+                      <span>Up to 16 Twitch streams</span>
+                      <span>Unlimited Saved Squads</span>
+                      <span>YouTube Companion</span>
+                    </div>
+
+                    <div className="referral-promo-actions">
+                      <button type="button" className="primary-button" onClick={handleReferralPromoAction}>
+                        {accountSession?.user?.id ? 'Share My Squad' : 'Sign in to earn Premium'}
+                      </button>
+                      <button type="button" className="referral-promo-later" onClick={() => suppressReferralPromo('maybe_later')}>
+                        Maybe later
+                      </button>
+                    </div>
+                  </section>
+                )}
+
                 {youtubeCompanion && (
                   <YouTubeCompanion
                     video={youtubeCompanion}
@@ -2279,7 +2695,7 @@ function SquadViewApp() {
                   />
                 )}
 
-                {isDesktopGrid && viewMode === 'dual' && channels.length < viewerStreamLimit && visibleChannels.length < (youtubeVisible ? 3 : 4) && (
+                {isDesktopGrid && viewMode === 'dual' && !referralPromoVisible && channels.length < viewerStreamLimit && visibleChannels.length < (youtubeVisible ? 3 : 4) && (
                   <button
                     type="button"
                     className="stream-add-tile"
@@ -2677,6 +3093,91 @@ function SquadViewApp() {
           </div>
         )}
 
+        {showShareSquad && (
+          <div
+            className="modal-backdrop share-squad-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setShowShareSquad(false);
+            }}
+          >
+            <section className="modal share-squad-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="share-squad-title">
+              <button className="modal-close" onClick={() => setShowShareSquad(false)}><X /></button>
+              <span className="modal-eyebrow">Share this viewing setup</span>
+              <h2 id="share-squad-title">Share this SquadView</h2>
+              <p>Send this exact lineup of {channels.length} Twitch {channels.length === 1 ? 'stream' : 'streams'} to somebody else. They can open it with the streams already loaded.</p>
+
+              <div className="share-squad-preview" aria-label="Streams in this shared view">
+                {channels.slice(0, 8).map((channel) => <span key={channel}>@{channel}</span>)}
+                {channels.length > 8 && <span>+{channels.length - 8} more</span>}
+              </div>
+
+              <div className="share-squad-actions">
+                <button type="button" className="primary-button" onClick={shareView}>
+                  <Share2 />
+                  {navigator.share ? 'Share Squad' : 'Copy Squad link'}
+                </button>
+                {navigator.share && (
+                  <button type="button" className="secondary-button" onClick={copyShareLink}>Copy Link</button>
+                )}
+              </div>
+
+              {shareFeedback && <div className="share-squad-feedback" role="status">{shareFeedback}</div>}
+
+              {accountSession?.user?.id ? (
+                referralSummary?.available ? (
+                  <div className="share-rewards-card">
+                    <div className="share-rewards-heading">
+                      <div>
+                        <span>SquadView Rewards</span>
+                        <strong>{referralSummary.lifetimePremium ? 'Lifetime Premium unlocked' : 'Invite 5. Earn 30 days Premium.'}</strong>
+                      </div>
+                      {referralBusy && <small>Syncing…</small>}
+                    </div>
+
+                    {!referralSummary.lifetimePremium && (
+                      <>
+                        <div className="reward-progress-row">
+                          <span>Next free month</span>
+                          <strong>{referralSummary.nextMonthProgress}/5</strong>
+                        </div>
+                        <div className="reward-progress-track" aria-hidden="true">
+                          <span style={{ width: `${(referralSummary.nextMonthProgress / 5) * 100}%` }} />
+                        </div>
+                        <small>
+                          Every 5 qualified new SquadView users you bring in adds another 30 days. Rewards stack.
+                        </small>
+                      </>
+                    )}
+
+                    <div className="reward-lifetime-row">
+                      <span>Lifetime Premium</span>
+                      <strong>{Math.min(referralSummary.qualifiedReferrals, 100)}/100</strong>
+                    </div>
+                    <div className="reward-progress-track lifetime" aria-hidden="true">
+                      <span style={{ width: `${Math.min(100, referralSummary.qualifiedReferrals)}%` }} />
+                    </div>
+                    <small>
+                      {referralSummary.lifetimePremium
+                        ? 'This Twitch account has permanent SquadView Premium.'
+                        : `${referralSummary.lifetimeRemaining} more qualified ${referralSummary.lifetimeRemaining === 1 ? 'referral' : 'referrals'} to Lifetime Premium.`}
+                    </small>
+                    <small className="reward-definition">A referral qualifies when a new SquadView user opens your link, signs in with Twitch, and starts watching.</small>
+                  </div>
+                ) : null
+              ) : (
+                <div className="share-rewards-card guest">
+                  <span>Want free Premium?</span>
+                  <strong>Sign in with Twitch to get referral credit.</strong>
+                  <small>Every 5 new SquadView users you refer earns 30 days of Premium. Reach 100 for Lifetime Premium.</small>
+                  <button type="button" className="twitch-login-button" onClick={handleTwitchSignIn} disabled={authBusy || !isSquadViewAuthConfigured}>
+                    {authBusy ? 'Opening Twitch…' : 'Continue with Twitch'}
+                  </button>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
         {showSharedArrival && sharedViewer?.channels?.length > 0 && (
           <div
             className="shared-arrival-backdrop"
@@ -2720,6 +3221,16 @@ function SquadViewApp() {
                 Someone shared this Twitch view with you. The streams are already loaded, so you can start watching right away.
               </p>
 
+              {incomingReferralCode && !accountSession?.user?.id && (
+                <div className="shared-arrival-referral">
+                  <strong>New to SquadView?</strong>
+                  <span>Sign in with Twitch during this visit and the person who shared this view gets credit toward Premium. Your viewing experience stays the same.</span>
+                  <button type="button" onClick={handleTwitchSignIn} disabled={authBusy || !isSquadViewAuthConfigured}>
+                    {authBusy ? 'Opening Twitch…' : 'Continue with Twitch'}
+                  </button>
+                </div>
+              )}
+
               {sharedViewer.channels.length > viewerStreamLimit && (
                 <div className="shared-arrival-limit">
                   <strong>Your current plan supports {viewerStreamLimit} streams at once.</strong>
@@ -2751,6 +3262,13 @@ function SquadViewApp() {
                 Install SquadView to keep it one tap away on your phone or computer. No app store required.
               </small>
             </section>
+          </div>
+        )}
+
+        {referralMessage && (
+          <div className="referral-toast" role="status">
+            <span>{referralMessage}</span>
+            <button type="button" onClick={() => setReferralMessage('')} aria-label="Dismiss referral message">×</button>
           </div>
         )}
 
@@ -3674,14 +4192,51 @@ function SquadViewApp() {
                 <div className={`account-plan-summary ${entitlements.isPremium ? 'is-premium' : ''}`}>
                   <div>
                     <small>SquadView plan</small>
-                    <strong>{entitlements.isPremium ? 'Premium' : 'Free'}</strong>
+                    <strong>{entitlements.lifetimePremium ? 'Lifetime Premium' : entitlements.isPremium ? 'Premium' : 'Free'}</strong>
                   </div>
                   <span>
-                    {entitlements.isPremium
-                      ? 'Premium entitlements are synced to this account.'
-                      : 'Free includes the full Twitch viewer. Premium adds power user tools without changing the automatic layouts.'}
+                    {entitlements.lifetimePremium
+                      ? 'Lifetime Premium is permanently attached to this SquadView Twitch account.'
+                      : entitlements.promoPremiumUntil && entitlements.isPremium && entitlements.planKey === 'free'
+                        ? `Referral Premium is active through ${formatRewardDate(entitlements.promoPremiumUntil)}.`
+                        : entitlements.isPremium
+                          ? 'Premium entitlements are synced to this account.'
+                          : 'Free includes the full Twitch viewer. Premium adds power user tools without changing the automatic layouts.'}
                   </span>
                 </div>
+                {referralSummary?.available && (
+                  <div className="account-rewards-summary">
+                    <div className="account-rewards-heading">
+                      <div>
+                        <small>SquadView Rewards</small>
+                        <strong>{referralSummary.qualifiedReferrals} qualified {referralSummary.qualifiedReferrals === 1 ? 'referral' : 'referrals'}</strong>
+                      </div>
+                      {referralBusy && <span>Syncing…</span>}
+                    </div>
+                    {!referralSummary.lifetimePremium && (
+                      <>
+                        <div className="reward-progress-row">
+                          <span>Next 30 days Premium</span>
+                          <strong>{referralSummary.nextMonthProgress}/5</strong>
+                        </div>
+                        <div className="reward-progress-track"><span style={{ width: `${(referralSummary.nextMonthProgress / 5) * 100}%` }} /></div>
+                      </>
+                    )}
+                    <div className="reward-lifetime-row">
+                      <span>Lifetime Premium</span>
+                      <strong>{Math.min(referralSummary.qualifiedReferrals, 100)}/100</strong>
+                    </div>
+                    <div className="reward-progress-track lifetime"><span style={{ width: `${Math.min(100, referralSummary.qualifiedReferrals)}%` }} /></div>
+                    <small>
+                      {referralSummary.lifetimePremium
+                        ? 'Lifetime Premium unlocked.'
+                        : `Every 5 qualified new users adds 30 days. ${referralSummary.lifetimeRemaining} to Lifetime.`}
+                    </small>
+                    <button type="button" className="secondary-button account-share-rewards-button" onClick={() => { setShowAccount(false); if (channels.length) openShareSquad(); }} disabled={!channels.length}>
+                      {channels.length ? 'Share current SquadView' : 'Open a SquadView to share'}
+                    </button>
+                  </div>
+                )}
                 <div className="account-sync-summary">
                   <strong>Sync is on</strong>
                   <span>Favorites and your most recent stream group follow this account across devices. Following Live reads your Twitch follows and never changes them.</span>

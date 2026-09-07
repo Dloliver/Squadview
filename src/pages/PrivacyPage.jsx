@@ -14,6 +14,10 @@ export default function PrivacyPage() {
       <p>You can use the core viewer without creating a SquadView account. If you choose to sign in with Twitch, SquadView uses Twitch authentication through its account provider and may store limited account information such as your Twitch user ID, Twitch login, display name, and avatar so the signed in experience can work across devices.</p>
       <p>Signed in users may sync SquadView product data such as favorites, recent channel groups, viewing preferences, and Saved Squads. Subscription status and Premium feature entitlements may also be associated with the signed in SquadView account. SquadView does not need your Twitch password.</p>
 
+      <h2>Sharing and referral rewards</h2>
+      <p>If you use a SquadView referral link or participate in SquadView Rewards, SquadView may store a referral code, the referring and referred SquadView account identifiers, the referred Twitch user ID, qualification timestamps, referral totals, promotional Premium expiration dates, and Lifetime Premium status. This information is used to attribute a new user to one referrer, prevent duplicate or self referrals, show reward progress, and apply earned Premium access.</p>
+      <p>A referred Twitch identity is intended to count only once. Referral codes included in shared SquadView links are designed to be opaque and do not expose Twitch OAuth tokens, Supabase user IDs, or other account credentials.</p>
+
       <h2>Twitch video, follows, and chat</h2>
       <p>SquadView embeds Twitch video players and Twitch chat. When these embeds load, Twitch may receive information such as your IP address, browser and device information, requested channel, cookies, identifiers, and usage data. If you authorize Following Live, SquadView can read the channels you follow so it can show which of those channels are currently live. SquadView does not change your Twitch follows. Twitch controls its own data practices, authentication, chat features, and content availability.</p>
 

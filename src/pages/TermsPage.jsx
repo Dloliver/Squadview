@@ -19,6 +19,11 @@ export default function TermsPage() {
       <h2>Accounts, Saved Squads, and local data</h2>
       <p>Some SquadView preferences remain in your browser. If you sign in with Twitch, eligible product data such as favorites, recent channel groups, viewing preferences, and Saved Squads may also be associated with your SquadView account for synchronization across devices. Local information can still be lost when browser data is cleared, and synchronized features may be unavailable if account services are interrupted.</p>
 
+      <h2>SquadView Rewards</h2>
+      <p>SquadView may offer an early referral rewards program. Under the current program, each five qualified new-user referrals can add 30 days of promotional Premium access, and 100 qualified referrals can unlock Lifetime Premium for the associated SquadView Twitch account. Rewards are non-transferable and have no cash value.</p>
+      <p>A referral is qualified only when SquadView's systems determine that a genuinely new eligible user arrived through a valid referral, signed in with Twitch, and started using the viewer. Link clicks, repeat accounts, duplicate Twitch identities, self referrals, automated activity, manipulated traffic, or other activity that does not meet the program rules do not qualify. SquadView may withhold or reverse rewards associated with fraud, abuse, technical error, or attempts to manipulate the program.</p>
+      <p>The early referral program, thresholds, and availability may be changed or ended for future referrals. Premium time already validly awarded before a program change remains subject to its recorded expiration. “Lifetime Premium” means Premium access for the life of the SquadView service on the qualifying account, subject to these Terms, account standing, and continued operation of SquadView; it does not guarantee that SquadView or any particular feature will operate indefinitely.</p>
+
       <h2>Availability</h2>
       <p>Streams, chat, advertisements, and product features may be unavailable, delayed, changed, or discontinued. We may update SquadView to improve performance, safety, compliance, or the viewing experience.</p>
 
