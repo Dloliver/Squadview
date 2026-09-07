@@ -368,6 +368,36 @@ function forceLiveResync(
     return;
   }
 
+  /*
+   * iOS audio continuity guard:
+   * Twitch's live-edge recovery reloads the embed with setChannel(). On iOS,
+   * reloading the Twitch iframe while it owns audio can silently revoke the
+   * existing audible media session. The video keeps moving, but audio stays
+   * muted until the next user gesture (for example, touching the volume
+   * slider). Preserve the selected iOS audio owner's live media session and
+   * defer any destructive live-edge resync until that stream is no longer the
+   * audio owner.
+   */
+  if (
+    state.preserveAudibleSession &&
+    state.audioSelected &&
+    state.audioEnabled
+  ) {
+    player.__squadViewLiveEdgeStatus =
+      'stale_audio_owner_preserved';
+
+    player.__squadViewAwaitingLiveEdge =
+      true;
+
+    scheduleLiveEdgeCheck(
+      player,
+      stateRef,
+      LIVE_EDGE_RESYNC_COOLDOWN_MS,
+    );
+
+    return;
+  }
+
   const now = Date.now();
 
   const previousResync =
@@ -442,6 +472,17 @@ function forceLiveResync(
         player,
         latestState.active,
         latestState.visibleCount || 1,
+      );
+
+      /*
+       * The post-resync timer used to be the last writer and could leave an
+       * audible stream muted at volume 0 after PLAYING had already fired.
+       * Re-apply the current React-owned state after recovery so desktop and
+       * non-protected sessions return to their intended audio level.
+       */
+      applyPlayerState(
+        player,
+        latestState,
       );
 
       player.__squadViewLiveEdgeStatus =
@@ -906,6 +947,7 @@ export default function TwitchPlayer({
   active,
   audioSelected,
   audioEnabled,
+  preserveAudibleSession = false,
   focusVolume = 1,
   audioVolume = 1,
   onVolumeChange,
@@ -929,6 +971,7 @@ export default function TwitchPlayer({
     active,
     audioSelected,
     audioEnabled,
+    preserveAudibleSession,
     focusVolume,
     audioVolume,
     visible,
@@ -959,6 +1002,7 @@ export default function TwitchPlayer({
       active,
       audioSelected,
       audioEnabled,
+      preserveAudibleSession,
       focusVolume,
       audioVolume,
       visible,
@@ -974,6 +1018,7 @@ export default function TwitchPlayer({
     active,
     audioSelected,
     audioEnabled,
+    preserveAudibleSession,
     focusVolume,
     audioVolume,
     visible,
@@ -1260,7 +1305,8 @@ export default function TwitchPlayer({
     setMobileVolumePercent(nextPercent);
 
     try {
-      playerRef.current?.play?.();
+      // Volume is audio-only. Never start/restart Twitch playback from this
+      // control; the visible-player scheduler owns playback state.
       playerRef.current?.setVolume?.(nextVolume);
       playerRef.current?.setMuted?.(nextVolume <= 0);
 

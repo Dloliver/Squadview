@@ -87,6 +87,20 @@ function cleanChannel(value) {
   return String(value || '').trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 }
 
+function isIOSLikeDevice() {
+  try {
+    const userAgent = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+
+    return (
+      /iPad|iPhone|iPod/i.test(userAgent) ||
+      (platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getDesktopPageChannels(sourceChannels, leadChannel, page, visibleTwitchLimit = 4) {
   if (!sourceChannels.length) return [];
   const safeVisibleLimit = Math.max(1, Math.min(4, Number(visibleTwitchLimit) || 4));
@@ -274,6 +288,11 @@ function SquadViewApp() {
   const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => initialViewer?.desktopLeadChannel || initialViewer?.channels?.[0] || '');
   const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
+  // iOS can keep multiple Twitch videos visible, but asking a second embed to
+  // become audible may interrupt the first media session. Keep playback and
+  // audio ownership separate: all visible videos remain independent, while iOS
+  // uses one audible Twitch owner at a time. Other platforms keep additive Listen.
+  const iosSingleAudioMode = useMemo(() => isIOSLikeDevice(), []);
   const playersRef = useRef(new Map());
   // The focused stream owns the primary audio level. Keep that level stable
   // while paging, opening/closing chat, or moving focus to another stream.
@@ -490,12 +509,25 @@ function SquadViewApp() {
   }, [accountSession?.user?.id]);
 
   useEffect(() => {
+    const iosManualOwner = iosSingleAudioMode
+      ? [...listeningChannels].find((candidate) => {
+          const candidatePlayer = playersRef.current.get(candidate);
+          return (
+            channels.includes(candidate) &&
+            candidatePlayer?.__squadViewState?.visible !== false
+          );
+        }) || ''
+      : '';
+    const iosAudioOwner = iosSingleAudioMode
+      ? (iosManualOwner || activeChannel)
+      : '';
+
     playersRef.current.forEach((player, channel) => {
       try {
         const isFocusedChannel = channel === activeChannel;
         const isVisibleChannel = player.__squadViewState?.visible !== false;
 
-        if (isFocusedChannel && audioEnabled) {
+        if (isFocusedChannel && audioEnabled && (!iosSingleAudioMode || iosAudioOwner === channel)) {
           const muted = player.getMuted?.();
           const currentVolume = Number(player.getVolume?.());
 
@@ -510,9 +542,10 @@ function SquadViewApp() {
           }
         }
 
-        const shouldPlayAudio =
-          audioEnabled &&
-          (isFocusedChannel || (listeningChannels.has(channel) && isVisibleChannel));
+        const shouldPlayAudio = iosSingleAudioMode
+          ? audioEnabled && channel === iosAudioOwner
+          : audioEnabled &&
+            (isFocusedChannel || (listeningChannels.has(channel) && isVisibleChannel));
 
         const targetVolume = isFocusedChannel
           ? clampFocusedAudioVolume(
@@ -526,13 +559,14 @@ function SquadViewApp() {
 
         const shouldUnmute = shouldPlayAudio && targetVolume > 0;
 
+        // This effect owns audio only. It never calls play() or pause().
         player.setVolume(shouldPlayAudio ? targetVolume : 0);
         player.setMuted(!shouldUnmute);
       } catch {
         // A player may still be finishing initialization.
       }
     });
-  }, [listeningChannels, audioEnabled, activeChannel]);
+  }, [listeningChannels, audioEnabled, activeChannel, channels, iosSingleAudioMode]);
 
   useEffect(() => {
     if (!channels.length) {
@@ -542,8 +576,11 @@ function SquadViewApp() {
     }
 
     const allowed = new Set(channels);
+    const allowedListening = [
+      ...listeningChannels,
+    ].filter((channel) => allowed.has(channel));
     const nextListening = new Set(
-      [...listeningChannels].filter((channel) => allowed.has(channel)),
+      iosSingleAudioMode ? allowedListening.slice(0, 1) : allowedListening,
     );
 
     if (
@@ -558,7 +595,7 @@ function SquadViewApp() {
     if (!nextListening.size && !focusedChannelStillAvailable && audioEnabled) {
       setAudioEnabled(false);
     }
-  }, [channels, listeningChannels, audioEnabled, activeChannel]);
+  }, [channels, listeningChannels, audioEnabled, activeChannel, iosSingleAudioMode]);
 
   useEffect(() => {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
@@ -1083,8 +1120,41 @@ function SquadViewApp() {
   }
 
 
-  // Mobile audio sync: volume 0 is a true mute, while Focus remains the
-  // primary audio source when extra Listen streams are toggled on or off.
+  function applyIOSAudioOwner(ownerChannel, { focused = ownerChannel === activeChannel, volume } = {}) {
+    if (!iosSingleAudioMode) return;
+
+    const cleanedOwner = cleanChannel(ownerChannel);
+    const ownerPlayer = playersRef.current.get(cleanedOwner);
+    const targetVolume = clampFocusedAudioVolume(
+      volume ?? (focused
+        ? ownerPlayer?.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current
+        : ownerPlayer?.__squadViewManualVolume),
+      1,
+    );
+
+    // Important ordering for iOS: silence every other Twitch embed before
+    // unmuting the selected owner. These are audio-only changes; playback is
+    // deliberately untouched so both visible videos can continue moving.
+    playersRef.current.forEach((player, playerChannel) => {
+      if (playerChannel === cleanedOwner) return;
+      try {
+        player?.setVolume?.(0);
+        player?.setMuted?.(true);
+      } catch {
+        // A player may still be initializing.
+      }
+    });
+
+    try {
+      ownerPlayer?.setVolume?.(targetVolume);
+      ownerPlayer?.setMuted?.(targetVolume <= 0);
+    } catch {
+      // The state effect will retry once the Twitch player is ready.
+    }
+  }
+
+  // Mobile audio sync: volume 0 is a true mute. Focus/Listen/Volume only own
+  // mute + volume state; they never start or stop Twitch playback.
   function setStreamVolume(channel, value) {
     const cleaned = cleanChannel(channel);
     const nextVolume = clampFocusedAudioVolume(value, 1);
@@ -1102,17 +1172,24 @@ function SquadViewApp() {
       player.__squadViewManualVolume = nextVolume;
     }
 
-    if (
-      cleaned === activeChannel ||
-      listeningChannels.has(cleaned)
-    ) {
+    const iosManualOwner = iosSingleAudioMode ? [...listeningChannels][0] || '' : '';
+    const iosAudioOwner = iosSingleAudioMode ? (iosManualOwner || activeChannel) : '';
+    const isSelectedAudio = iosSingleAudioMode
+      ? cleaned === iosAudioOwner
+      : cleaned === activeChannel || listeningChannels.has(cleaned);
+
+    if (isSelectedAudio) {
       setAudioEnabled(true);
 
+      if (iosSingleAudioMode) {
+        applyIOSAudioOwner(cleaned, {
+          focused: cleaned === activeChannel,
+          volume: nextVolume,
+        });
+        return;
+      }
+
       try {
-        // Audio controls must not issue play(). On mobile Safari, starting one
-        // Twitch iframe can pause another iframe that is already playing.
-        // Focus/Listen/Volume only change the audio mix; TwitchPlayer owns
-        // playback recovery when a scheduler-paused stream becomes visible.
         player?.setVolume?.(nextVolume);
         player?.setMuted?.(nextVolume <= 0);
       } catch {
@@ -1125,6 +1202,38 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
 
+    if (iosSingleAudioMode) {
+      const manualOwner = [...listeningChannels][0] || '';
+
+      if (cleaned === activeChannel) {
+        // Focus always wins when its Listen control is tapped.
+        setListeningChannels(new Set());
+        setAudioEnabled(true);
+        applyIOSAudioOwner(cleaned, { focused: true });
+        return;
+      }
+
+      if (manualOwner === cleaned) {
+        // Tapping the current manual owner again hands audio back to Focus.
+        setListeningChannels(new Set());
+        setAudioEnabled(Boolean(activeChannel));
+        applyIOSAudioOwner(activeChannel, { focused: true });
+        return;
+      }
+
+      // On iOS, Listen is a one-owner audio handoff. Both Twitch videos stay
+      // playing; only mute/volume ownership moves to the selected stream.
+      const player = playersRef.current.get(cleaned);
+      if (player && !Number.isFinite(Number(player.__squadViewManualVolume))) {
+        player.__squadViewManualVolume = 1;
+      }
+
+      setListeningChannels(new Set([cleaned]));
+      setAudioEnabled(true);
+      applyIOSAudioOwner(cleaned, { focused: false });
+      return;
+    }
+
     if (cleaned === activeChannel) {
       // Focus always implies Listen. A Listen tap on the focused stream should
       // never toggle it off or disturb any other stream already in the mix.
@@ -1132,7 +1241,6 @@ function SquadViewApp() {
       try {
         const player = playersRef.current.get(cleaned);
         const focusedVolume = rememberFocusedAudioVolume(cleaned);
-        // Never restart video from an audio-only action.
         player?.setVolume?.(focusedVolume);
         player?.setMuted?.(focusedVolume <= 0);
       } catch {
@@ -1153,12 +1261,8 @@ function SquadViewApp() {
     setListeningChannels(nextListening);
     setAudioEnabled(true);
 
-    /*
-     * Multi-stream Listen is additive. The user gesture should affect only the
-     * stream whose Listen control was pressed. Do not reconcile, mute, pause,
-     * or restart the focused player (or any other manually-listened player) here.
-     * React's normal audio-state effect will keep the rest of the current mix.
-     */
+    // Non-iOS platforms keep additive multi-stream Listen. The user gesture
+    // affects only the selected stream and never issues play() or pause().
     const player = playersRef.current.get(cleaned);
 
     try {
@@ -1175,9 +1279,6 @@ function SquadViewApp() {
           player.__squadViewManualVolume = manualVolume;
         }
 
-        // Listen is additive audio only. Do not call play() here because
-        // mobile browsers may pause another Twitch iframe when a second media
-        // element is explicitly started.
         player?.setVolume?.(manualVolume);
         player?.setMuted?.(manualVolume <= 0);
       }
@@ -1285,10 +1386,18 @@ function SquadViewApp() {
     setActiveChannel(cleaned);
     setAudioEnabled(true);
 
-    // The Focus click is already a viewer gesture, so use it to start/unmute the
-    // newly focused stream immediately. The primary focus volume follows Focus
-    // instead of resetting to 100%. Extra streams only remain audible when their
-    // individual Listen toggle is enabled.
+    if (iosSingleAudioMode) {
+      // Focus implies Listen on iOS. Clear any temporary manual audio owner,
+      // mute the previous audio session first, then hand audio to the new Focus.
+      // No play()/pause() calls are allowed in this path.
+      setListeningChannels(new Set());
+      applyIOSAudioOwner(cleaned, {
+        focused: true,
+        volume: inheritedFocusedVolume,
+      });
+      return;
+    }
+
     const visibleNow = viewMode === 'dual'
       ? (isDesktopGrid
           ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
@@ -1307,8 +1416,6 @@ function SquadViewApp() {
 
         if (isFocusedPlayer) {
           player.__squadViewPreferredVolume = inheritedFocusedVolume;
-          // Focus changes audio ownership only. Playback state is preserved so
-          // both visible Twitch embeds can continue playing on mobile.
         }
 
         const manualVolume = clampFocusedAudioVolume(
@@ -2022,6 +2129,13 @@ function SquadViewApp() {
       mountedPlayerChannelsRef.current.has(channel),
     );
 
+    const iosManualAudioOwner = iosSingleAudioMode
+      ? [...listeningChannels][0] || ''
+      : '';
+    const selectedAudioOwner = iosSingleAudioMode
+      ? (iosManualAudioOwner || activeChannel)
+      : '';
+
     const desktopTileCount = desktopGridChat
       ? 4
       : desktopSingleChat
@@ -2120,8 +2234,13 @@ function SquadViewApp() {
                     visible={visibleChannels.includes(channel)}
                     visibleCount={visibleChannels.length}
                     active={activeChannel === channel}
-                    audioSelected={activeChannel === channel || listeningChannels.has(channel)}
+                    audioSelected={
+                      iosSingleAudioMode
+                        ? selectedAudioOwner === channel
+                        : activeChannel === channel || listeningChannels.has(channel)
+                    }
                     audioEnabled={audioEnabled}
+                    preserveAudibleSession={iosSingleAudioMode}
                     focusVolume={focusedAudioVolumeRef.current}
                     audioVolume={
                       activeChannel === channel
