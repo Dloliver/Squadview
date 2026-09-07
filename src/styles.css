@@ -5047,3 +5047,19 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     padding: 7px 8px;
   }
 }
+
+/* SQUADVIEW_STANDALONE_HOME_SAFE_AREA_START */
+/* SquadView standalone home safe-area alignment.
+   Installed PWAs use viewport-fit=cover, so the document can extend under the
+   iPhone status bar. Give the landing-page topbar the same usable top inset
+   users naturally get when opening SquadView in Safari. */
+@media (display-mode: standalone) and (max-width: 760px) {
+  .app-shell > .topbar {
+    min-height: calc(68px + env(safe-area-inset-top));
+    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: 10px;
+    padding-left: max(16px, env(safe-area-inset-left));
+  }
+}
+/* SQUADVIEW_STANDALONE_HOME_SAFE_AREA_END */
