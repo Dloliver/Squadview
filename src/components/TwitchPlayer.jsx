@@ -428,8 +428,8 @@ function forceLiveResync(
 
   try {
     /*
-     * Keep the recovery muted. Audio is restored only
-     * after React confirms this stream still owns focus.
+     * A destructive live-edge reload may briefly silence the embed, but the
+     * viewer audio controller is the only authority that restores final audio.
      */
     player.setMuted?.(true);
     player.setVolume?.(0);
@@ -461,8 +461,6 @@ function forceLiveResync(
       }
 
       try {
-        player.setMuted?.(true);
-        player.setVolume?.(0);
         player.play?.();
       } catch {
         // Native Twitch play remains available.
@@ -474,16 +472,11 @@ function forceLiveResync(
         latestState.visibleCount || 1,
       );
 
-      /*
-       * The post-resync timer used to be the last writer and could leave an
-       * audible stream muted at volume 0 after PLAYING had already fired.
-       * Re-apply the current React-owned state after recovery so desktop and
-       * non-protected sessions return to their intended audio level.
-       */
       applyPlayerState(
         player,
         latestState,
       );
+      latestState.reconcileAudio?.(latestState.channel, player);
 
       player.__squadViewLiveEdgeStatus =
         'checking_after_resync';
@@ -575,226 +568,100 @@ function applyPlayerState(
     active,
     audioSelected,
     audioEnabled,
-    focusVolume = 1,
-    audioVolume = 1,
+    allowBackgroundAudio = false,
     visible,
     visibleCount = 1,
   } = state;
 
-  const audible =
-    Boolean(
-      audioSelected &&
-      audioEnabled &&
-      (visible || active),
-    );
-
-  const wasVisible =
-    player.__squadViewWasVisible;
-
-  const schedulerPaused =
-    Boolean(
-      player.__squadViewPausedByScheduler,
-    );
-
-  const currentMuted = safeRead(
-    () => player.getMuted?.(),
-    true,
-  );
-
-  const currentVolume = Number(
-    safeRead(
-      () => player.getVolume?.(),
-      NaN,
-    ),
-  );
-
-  if (
-    active &&
+  // Playback scheduling and audio ownership are intentionally separate. This
+  // component may pause/resume embeds for performance, but final mute/volume
+  // is owned exclusively by App's viewer audio controller.
+  const keepAliveForAudio = Boolean(
     audioSelected &&
     audioEnabled &&
-    currentMuted === false &&
-    Number.isFinite(currentVolume) &&
-    currentVolume >= 0
-  ) {
-    player.__squadViewPreferredVolume =
-      Math.max(
-        0,
-        Math.min(1, currentVolume),
-      );
-  }
+    allowBackgroundAudio,
+  );
 
-  const preferredFocusedVolume =
-    Math.max(
-      0,
-      Math.min(
-        1,
-        Number.isFinite(
-          Number(
-            player.__squadViewPreferredVolume,
-          ),
-        )
-          ? Number(
-              player.__squadViewPreferredVolume,
-            )
-          : Number.isFinite(Number(focusVolume))
-            ? Number(focusVolume)
-            : 1,
-      ),
-    );
-
-  if (active) {
-    player.__squadViewPreferredVolume =
-      preferredFocusedVolume;
-  }
-
-  const preferredManualVolume =
-    Math.max(
-      0,
-      Math.min(
-        1,
-        Number.isFinite(Number(player.__squadViewManualVolume))
-          ? Number(player.__squadViewManualVolume)
-          : Number.isFinite(Number(audioVolume))
-            ? Number(audioVolume)
-            : 1,
-      ),
-    );
-
-  if (!active) {
-    player.__squadViewManualVolume = preferredManualVolume;
-  }
-
-  /*
-   * Focused mobile audio restore fix:
-   * Do not blanket-mute every player during ordinary state reconciliation.
-   * On mobile, a setMuted(true) followed by a later programmatic unmute can
-   * be treated as a fresh autoplay attempt and leave the focused player stuck
-   * muted. Twitch embeds already initialize muted, and the scheduler still
-   * mutes explicitly when it truly has to restart a paused/hidden stream.
-   */
+  const wasVisible = player.__squadViewWasVisible;
+  const schedulerPaused = Boolean(player.__squadViewPausedByScheduler);
 
   if (!visible) {
     clearLiveEdgeTimers(player);
 
-    if (active && audible) {
-      /*
-       * The focused stream owns the viewer's primary audio. When the user
-       * pages through another group, keep that focused stream playing in the
-       * background so its audio is continuous. Other off-page streams still
-       * use the normal scheduler pause/mute behavior below.
-       */
+    if (keepAliveForAudio) {
       try {
         if (player.isPaused?.() === true) {
           player.play?.();
         }
-        player.setVolume?.(
-          preferredFocusedVolume,
-        );
-        player.setMuted?.(
-          preferredFocusedVolume <= 0,
-        );
       } catch {
         // Twitch may still be applying the page transition.
       }
 
-      player.__squadViewPausedByScheduler =
-        false;
-
+      player.__squadViewPausedByScheduler = false;
       player.__squadViewWasVisible = false;
-
-      player.__squadViewAwaitingLiveEdge =
-        false;
-
-      player.__squadViewLiveEdgeStatus =
-        'focused_audio_background';
+      player.__squadViewAwaitingLiveEdge = false;
+      player.__squadViewLiveEdgeStatus = active
+        ? 'focused_audio_background'
+        : 'selected_audio_background';
 
       player.__squadViewState = {
         channel,
         active,
         audioSelected,
         audioEnabled,
-        focusVolume: preferredFocusedVolume,
+        allowBackgroundAudio,
         visible,
         visibleCount,
-        targetQuality:
-          player.__squadViewQualityTarget ||
-          '',
+        targetQuality: player.__squadViewQualityTarget || '',
       };
 
+      state.reconcileAudio?.(channel, player);
       return;
     }
 
     try {
-      if (
-        player.isPaused?.() !== true
-      ) {
+      if (player.isPaused?.() !== true) {
         player.pause?.();
       }
     } catch {
       // Player may already be paused.
     }
 
-    player.__squadViewPausedByScheduler =
-      true;
-
+    player.__squadViewPausedByScheduler = true;
     player.__squadViewWasVisible = false;
-
-    player.__squadViewAwaitingLiveEdge =
-      false;
-
-    player.__squadViewLiveEdgeStatus =
-      'paused_off_page';
+    player.__squadViewAwaitingLiveEdge = false;
+    player.__squadViewLiveEdgeStatus = 'paused_off_page';
 
     player.__squadViewState = {
       channel,
       active,
       audioSelected,
       audioEnabled,
-      focusVolume: preferredFocusedVolume,
+      allowBackgroundAudio,
       visible,
       visibleCount,
-      targetQuality:
-        player.__squadViewQualityTarget ||
-        '',
+      targetQuality: player.__squadViewQualityTarget || '',
     };
 
+    state.reconcileAudio?.(channel, player);
     return;
   }
 
-  const returningFromHiddenPage =
-    wasVisible === false ||
-    schedulerPaused;
+  const returningFromHiddenPage = wasVisible === false || schedulerPaused;
 
   if (returningFromHiddenPage) {
-    if (active && audible && !schedulerPaused) {
-      /*
-       * A focused stream that stayed audible off page was never paused.
-       * Do not mute/restart it just because its tile became visible again;
-       * preserving the existing media session is what keeps mobile audio alive.
-       */
-      player.__squadViewAwaitingLiveEdge =
-        false;
-
-      player.__squadViewLiveEdgeStatus =
-        'focused_audio_returned';
+    if (keepAliveForAudio && !schedulerPaused) {
+      player.__squadViewAwaitingLiveEdge = false;
+      player.__squadViewLiveEdgeStatus = 'audible_stream_returned';
     } else {
-      /*
-       * This pause was caused by SquadView paging, not by the viewer pressing
-       * Twitch's pause control. Mute only for the actual restart operation.
-       */
       try {
-        player.setMuted?.(true);
-        player.setVolume?.(0);
         player.play?.();
       } catch {
         // Native Twitch play remains available.
       }
 
-      player.__squadViewAwaitingLiveEdge =
-        true;
-
-      player.__squadViewLiveEdgeStatus =
-        'syncing_to_live';
+      player.__squadViewAwaitingLiveEdge = true;
+      player.__squadViewLiveEdgeStatus = 'syncing_to_live';
 
       scheduleLiveEdgeCheck(
         player,
@@ -809,24 +676,7 @@ function applyPlayerState(
     visibleCount,
   );
 
-  /*
-   * Restore audio only after playback/resource state
-   * has been handled.
-   */
-  try {
-    const targetVolume = audible
-      ? (active ? preferredFocusedVolume : preferredManualVolume)
-      : 0;
-
-    player.setVolume?.(targetVolume);
-    player.setMuted?.(!(audible && targetVolume > 0));
-  } catch {
-    // Player may still be starting.
-  }
-
-  player.__squadViewPausedByScheduler =
-    false;
-
+  player.__squadViewPausedByScheduler = false;
   player.__squadViewWasVisible = true;
 
   player.__squadViewState = {
@@ -834,13 +684,13 @@ function applyPlayerState(
     active,
     audioSelected,
     audioEnabled,
-    focusVolume: preferredFocusedVolume,
+    allowBackgroundAudio,
     visible,
     visibleCount,
-    targetQuality:
-      player.__squadViewQualityTarget ||
-      '',
+    targetQuality: player.__squadViewQualityTarget || '',
   };
+
+  state.reconcileAudio?.(channel, player);
 }
 
 if (typeof window !== 'undefined') {
@@ -886,6 +736,22 @@ if (typeof window !== 'undefined') {
                   player.getMuted?.(),
                 null,
               ),
+
+            volume:
+              safeRead(
+                () =>
+                  player.getVolume?.(),
+                null,
+              ),
+
+            audioSelected:
+              Boolean(state.audioSelected),
+
+            audioEnabled:
+              Boolean(state.audioEnabled),
+
+            schedulerPaused:
+              Boolean(player.__squadViewPausedByScheduler),
 
             quality:
               safeRead(
@@ -945,14 +811,23 @@ export default function TwitchPlayer({
   visible,
   visibleCount = 1,
   active,
+  highlightActive = active,
+  focusActive = false,
   audioSelected,
   audioEnabled,
+  audioAudible = false,
   preserveAudibleSession = false,
+  allowBackgroundAudio = false,
   focusVolume = 1,
   audioVolume = 1,
   onVolumeChange,
   onListen,
   onFocus,
+  onChat,
+  onAudioReconcile,
+  onLiveAudioStateChange,
+  onStreamStatusChange,
+  chatActive = false,
   isTwitchFollowed = false,
   isFavorite = false,
   onToggleFavorite,
@@ -972,10 +847,12 @@ export default function TwitchPlayer({
     audioSelected,
     audioEnabled,
     preserveAudibleSession,
+    allowBackgroundAudio,
     focusVolume,
     audioVolume,
     visible,
     visibleCount,
+    reconcileAudio: onAudioReconcile,
   });
 
   const [status, setStatus] =
@@ -984,6 +861,17 @@ export default function TwitchPlayer({
     useState(false);
   const [mobileVolumePercent, setMobileVolumePercent] =
     useState(() => Math.round(Math.max(0, Math.min(1, Number(audioVolume) || 0)) * 100));
+  // Keep the label synced to what the Twitch player is actually outputting.
+  // The parent controller describes the intended audio state, while Twitch's
+  // own mute/volume controls can change the live player after that intent was
+  // applied. This local read-only signal never writes audio back to Twitch.
+  const [liveAudible, setLiveAudible] = useState(Boolean(audioAudible));
+  const nativeAudioMismatchCountRef = useRef(0);
+  const lastReportedNativeAudioRef = useRef('');
+
+  useEffect(() => {
+    onStreamStatusChange?.(channel, status);
+  }, [channel, status, onStreamStatusChange]);
 
   useEffect(() => {
     const sourceVolume = active ? focusVolume : audioVolume;
@@ -995,6 +883,96 @@ export default function TwitchPlayer({
     );
   }, [active, focusVolume, audioVolume]);
 
+  useEffect(() => {
+    if (!visible) {
+      setLiveAudible(false);
+      nativeAudioMismatchCountRef.current = 0;
+      lastReportedNativeAudioRef.current = '';
+      return undefined;
+    }
+
+    // Twitch exposes live getMuted(), getVolume(), and isPaused() reads, but
+    // does not expose a volume-change event for the embedded player. Poll every
+    // visible player so the label reflects the iframe's real output. If the
+    // iframe's mute/volume intent differs from SquadView for two consecutive
+    // reads, report that native user change back to the central audio controller
+    // so Chat/page changes do not erase it. Pause is status only, not intent.
+    setLiveAudible(Boolean(audioAudible));
+
+    const syncLiveAudioStatus = () => {
+      const player = playerRef.current;
+      if (!player) {
+        setLiveAudible(Boolean(audioAudible));
+        return;
+      }
+
+      try {
+        const muted = player.getMuted?.();
+        const currentVolume = Number(player.getVolume?.());
+        const paused = player.isPaused?.();
+
+        if (Number.isFinite(currentVolume)) {
+          const clampedVolume = Math.max(0, Math.min(1, currentVolume));
+          const nextPercent = Math.round(clampedVolume * 100);
+          const nativeWantsAudio = muted !== true && clampedVolume > 0;
+          const actuallyAudible = nativeWantsAudio && paused !== true;
+
+          setMobileVolumePercent((current) => current === nextPercent ? current : nextPercent);
+          setLiveAudible(actuallyAudible);
+
+          const expectedWantsAudio = Boolean(audioAudible);
+          const intentMismatch = nativeWantsAudio !== expectedWantsAudio;
+          nativeAudioMismatchCountRef.current = intentMismatch
+            ? nativeAudioMismatchCountRef.current + 1
+            : 0;
+
+          const expectedVolume = Math.max(
+            0,
+            Math.min(1, Number(active ? focusVolume : audioVolume) || 0),
+          );
+          const audibleVolumeChanged = nativeWantsAudio
+            && Math.abs(clampedVolume - expectedVolume) > 0.02;
+
+          const signature = `${muted === true ? 1 : 0}:${nextPercent}`;
+          const shouldReport = audibleVolumeChanged
+            || nativeAudioMismatchCountRef.current >= 2;
+
+          if (shouldReport && lastReportedNativeAudioRef.current !== signature) {
+            lastReportedNativeAudioRef.current = signature;
+            nativeAudioMismatchCountRef.current = 0;
+            onLiveAudioStateChange?.(channel, {
+              muted: muted === true,
+              volume: clampedVolume,
+            });
+          }
+          return;
+        }
+
+        if (muted === true || paused === true) {
+          setLiveAudible(false);
+          return;
+        }
+      } catch {
+        // Twitch can briefly reject reads while an iframe is initializing.
+      }
+
+      setLiveAudible(Boolean(audioAudible));
+    };
+
+    syncLiveAudioStatus();
+    const statusTimer = window.setInterval(syncLiveAudioStatus, 300);
+
+    return () => window.clearInterval(statusTimer);
+  }, [
+    visible,
+    audioAudible,
+    channel,
+    active,
+    focusVolume,
+    audioVolume,
+    onLiveAudioStateChange,
+  ]);
+
 
   useEffect(() => {
     stateRef.current = {
@@ -1003,10 +981,12 @@ export default function TwitchPlayer({
       audioSelected,
       audioEnabled,
       preserveAudibleSession,
+      allowBackgroundAudio,
       focusVolume,
       audioVolume,
       visible,
       visibleCount,
+      reconcileAudio: onAudioReconcile,
     };
 
     applyPlayerState(
@@ -1019,10 +999,12 @@ export default function TwitchPlayer({
     audioSelected,
     audioEnabled,
     preserveAudibleSession,
+    allowBackgroundAudio,
     focusVolume,
     audioVolume,
     visible,
     visibleCount,
+    onAudioReconcile,
   ]);
 
   useEffect(() => {
@@ -1111,6 +1093,7 @@ export default function TwitchPlayer({
               player,
               stateRef.current,
             );
+            stateRef.current.reconcileAudio?.(channel, player);
           };
 
         player.addEventListener(
@@ -1259,10 +1242,10 @@ export default function TwitchPlayer({
     registerPlayer,
   ]);
 
-  const listening =
-    visible &&
-    audioSelected &&
-    audioEnabled;
+  // Listening is a live status, not a remembered preference. Off-page streams
+  // are never Listening, and a visible Twitch player that is muted or at 0%
+  // immediately returns to Listen even if its Listen preference is remembered.
+  const listening = Boolean(visible && liveAudible);
 
   function handleListen() {
     /*
@@ -1275,26 +1258,17 @@ export default function TwitchPlayer({
   }
 
   function openMobileVolumeControl() {
-    const player = playerRef.current;
-    let nextPercent = mobileVolumePercent;
-
-    try {
-      const current = Number(player?.getVolume?.());
-      if (Number.isFinite(current)) {
-        nextPercent = Math.round(
-          Math.max(0, Math.min(1, current)) * 100,
-        );
-      }
-    } catch {
-      // Fall back to the last SquadView volume level.
-    }
+    const sourceVolume = active ? focusVolume : audioVolume;
+    const nextPercent = Math.round(
+      Math.max(0, Math.min(1, Number(sourceVolume) || 0)) * 100,
+    );
 
     setMobileVolumePercent(nextPercent);
     setShowVolumeControl((current) => !current);
   }
 
-  // A 0% SquadView slider is an explicit mute. Restoring any positive
-  // value unmutes only when this stream is selected for audio.
+  // Volume input reports intent to the parent audio controller. The Twitch
+  // component itself never writes final mute/volume state from this control.
   function changeMobileVolume(event) {
     const nextPercent = Math.max(
       0,
@@ -1303,24 +1277,10 @@ export default function TwitchPlayer({
     const nextVolume = nextPercent / 100;
 
     setMobileVolumePercent(nextPercent);
-
-    try {
-      // Volume is audio-only. Never start/restart Twitch playback from this
-      // control; the visible-player scheduler owns playback state.
-      playerRef.current?.setVolume?.(nextVolume);
-      playerRef.current?.setMuted?.(nextVolume <= 0);
-
-      if (playerRef.current) {
-        if (active) {
-          playerRef.current.__squadViewPreferredVolume = nextVolume;
-        } else {
-          playerRef.current.__squadViewManualVolume = nextVolume;
-        }
-      }
-    } catch {
-      // App state will reapply the level once Twitch is ready.
-    }
-
+    // Make the label react immediately to SquadView's slider. The live Twitch
+    // poll above will correct this optimistic value if the embed reports a
+    // different mute state.
+    setLiveAudible(Boolean(visible && audioSelected && nextVolume > 0));
     onVolumeChange?.(nextVolume);
   }
 
@@ -1331,10 +1291,10 @@ export default function TwitchPlayer({
           ? 'is-visible'
           : 'is-hidden'
       } ${
-        active
+        highlightActive
           ? 'is-active'
           : ''
-      } ${chatCovered ? 'is-chat-covered' : ''}`}
+      } ${isFavorite ? 'is-favorite' : ''} ${chatCovered ? 'is-chat-covered' : ''}`}
       aria-label={`${channel} Twitch stream`}
       aria-hidden={chatCovered ? 'true' : undefined}
       style={{
@@ -1401,12 +1361,22 @@ export default function TwitchPlayer({
 
           <button
             type="button"
-            className={`focus-chip ${active ? 'is-focused' : ''}`}
+            className={`focus-chip ${focusActive ? 'is-focused' : ''}`}
             onClick={onFocus}
-            aria-pressed={active}
-            title="Link this stream to SquadView chat"
+            aria-pressed={focusActive}
+            title={focusActive ? 'Return to Grid' : `Focus only on ${channel}`}
           >
-            {active ? 'Focused' : 'Focus'}
+            {focusActive ? 'Focused' : 'Focus'}
+          </button>
+
+          <button
+            type="button"
+            className={`chat-chip ${chatActive ? 'is-chatting' : ''}`}
+            onClick={onChat}
+            aria-pressed={chatActive}
+            title={chatActive ? 'Close chat and return to Grid' : `Open ${channel} chat`}
+          >
+            {chatActive ? 'Chatting' : 'Chat'}
           </button>
 
           <button

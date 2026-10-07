@@ -53,11 +53,53 @@ const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
 const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
 const VIEWER_SESSION_KEY = 'squadview:viewer-session:v1';
+const GUEST_BENEFITS_SESSION_KEY = 'squadview:guest-benefits-dismissed:v1';
 const REFERRAL_PROMO_DISMISSED_KEY = 'squadview:referral-promo-dismissed:v1';
 const REFERRAL_PROMO_WATCH_MS = 5 * 60 * 1000;
 const REFERRAL_PROMO_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 const MAX_SUPPORTED_VIEWER_STREAMS = 16;
+const AUTO_FILL_FAVORITES_KEY = 'squadview:auto-fill-favorites:v1';
+const FAVORITE_LIVE_ALERTS_KEY = 'squadview:favorite-live-alerts:v1';
+const FAVORITE_LIVE_ALERT_SOUND_KEY = 'squadview:favorite-live-alert-sound:v1';
+const FAVORITE_LIVE_POLL_MS = 60 * 1000;
+const VIEWER_LIVE_POLL_MS = 45 * 1000;
+const OFFLINE_REMOVAL_GRACE_MS = 75 * 1000;
+const FREE_FAVORITE_STREAMER_LIMIT = 8;
+const PREMIUM_FAVORITE_STREAMER_LIMIT = 50;
+
+function readStoredBoolean(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    if (value === null) return fallback;
+    return value === 'true';
+  } catch {
+    return fallback;
+  }
+}
+
+function playFavoriteLiveAlertTone() {
+  try {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const context = new AudioContextCtor();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(660, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(880, context.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.05, context.currentTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.2);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.22);
+    window.setTimeout(() => void context.close?.(), 350);
+  } catch {
+    // Browser media policy may block a tone until the user has interacted.
+  }
+}
 
 function padViewerInputs(values, limit) {
   const safeLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, Number(limit) || 8));
@@ -174,15 +216,42 @@ function getReferralPromoCopy(summary, signedIn) {
   };
 }
 
-function getDesktopPageChannels(sourceChannels, leadChannel, page, visibleTwitchLimit = 4) {
+function getDesktopPageChannels(sourceChannels, _leadChannel, page, visibleTwitchLimit = 4) {
   if (!sourceChannels.length) return [];
   const safeVisibleLimit = Math.max(1, Math.min(4, Number(visibleTwitchLimit) || 4));
-  const lead = sourceChannels.includes(leadChannel) ? leadChannel : sourceChannels[0];
-  const otherChannels = sourceChannels.filter((channel) => channel !== lead);
+  const start = Math.max(0, page) * safeVisibleLimit;
+  return sourceChannels.slice(start, start + safeVisibleLimit).filter(Boolean);
+}
+
+function getDesktopChatRotationChannels(sourceChannels, pinnedChannel, rotationChannels = []) {
+  if (!sourceChannels.length) return [];
+  const pinned = sourceChannels.includes(pinnedChannel) ? pinnedChannel : sourceChannels[0];
+  const validRotation = [...new Set(rotationChannels)]
+    .filter((channel) => sourceChannels.includes(channel) && channel !== pinned);
+  const missingChannels = sourceChannels
+    .filter((channel) => channel !== pinned && !validRotation.includes(channel));
+  return [...validRotation, ...missingChannels];
+}
+
+function getDesktopChatPageChannels(
+  sourceChannels,
+  pinnedChannel,
+  pinnedSlot,
+  page,
+  visibleTwitchLimit = 3,
+  rotationChannels = [],
+) {
+  if (!sourceChannels.length) return [];
+  const safeVisibleLimit = Math.max(1, Math.min(4, Number(visibleTwitchLimit) || 3));
+  const pinned = sourceChannels.includes(pinnedChannel) ? pinnedChannel : sourceChannels[0];
+  const otherChannels = getDesktopChatRotationChannels(sourceChannels, pinned, rotationChannels);
   const otherPerPage = Math.max(0, safeVisibleLimit - 1);
-  if (!otherPerPage) return [lead].filter(Boolean);
   const start = Math.max(0, page) * otherPerPage;
-  return [lead, ...otherChannels.slice(start, start + otherPerPage)].filter(Boolean);
+  const pageOthers = otherChannels.slice(start, start + otherPerPage);
+  const safePinnedSlot = Math.max(0, Math.min(safeVisibleLimit - 1, Number(pinnedSlot) || 0));
+  const result = [...pageOthers];
+  result.splice(Math.min(safePinnedSlot, result.length), 0, pinned);
+  return result.slice(0, safeVisibleLimit).filter(Boolean);
 }
 
 function readSharedViewerLink() {
@@ -300,21 +369,46 @@ function SquadViewApp() {
     }
   });
   const [channels, setChannels] = useState(() => initialViewer?.channels || []);
-  // activeChannel owns Focus + chat. listeningChannels tracks extra streams
-  // the viewer explicitly chose to hear alongside the focused stream.
+  // activeChannel owns the visual/solo focus. Chat has its own channel target so
+  // desktop chat switching never rewrites Focus or the viewer's audio mix.
   const [activeChannel, setActiveChannel] = useState(() => initialViewer?.activeChannel || '');
+  const [chatChannel, setChatChannel] = useState(() => initialViewer?.activeChannel || '');
   const [listeningChannels, setListeningChannels] = useState(() => new Set());
+  // UI status follows the controller's current audible result, not remembered
+  // Listen intent. This keeps the Listening label honest when paging or another
+  // viewer transition temporarily mutes a stream.
+  const [audibleChannels, setAudibleChannels] = useState(() => new Set());
   const [favoriteStreamers, setFavoriteStreamers] = useState(readFavoriteStreamers);
   const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
+  const [favoriteLiveStatusReady, setFavoriteLiveStatusReady] = useState(false);
+  const [autoFillFavorites, setAutoFillFavorites] = useState(() => readStoredBoolean(AUTO_FILL_FAVORITES_KEY, false));
+  const [favoriteLiveAlertsEnabled, setFavoriteLiveAlertsEnabled] = useState(() => readStoredBoolean(FAVORITE_LIVE_ALERTS_KEY, true));
+  const [favoriteLiveAlertSound, setFavoriteLiveAlertSound] = useState(() => readStoredBoolean(FAVORITE_LIVE_ALERT_SOUND_KEY, false));
+  const [favoriteLiveNotice, setFavoriteLiveNotice] = useState(null);
+  const autoFillSuppressedFavoritesRef = useRef(new Set());
   const [landingTab, setLandingTab] = useState('home');
-  const [builderMode, setBuilderMode] = useState('manual');
+  const [followingView, setFollowingView] = useState('live');
   const [showEdit, setShowEdit] = useState(false);
+  const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
+  const [managerDraftChannels, setManagerDraftChannels] = useState([]);
+  const [managerClearedAll, setManagerClearedAll] = useState(false);
+  const [managerLiveChannels, setManagerLiveChannels] = useState(() => new Set());
+  const [managerLiveStatus, setManagerLiveStatus] = useState('idle');
+  // Twitch players already know when a mounted viewer stream is ONLINE/OFFLINE.
+  // Mirror that signal here so Manage streams can classify current-view channels
+  // even when the generic live-status endpoint is unavailable or the channel is
+  // not part of the user's followed list.
+  const [viewerLiveStatusByChannel, setViewerLiveStatusByChannel] = useState(() => new Map());
+  const managerOriginalChannelsRef = useRef([]);
   const [managerSource, setManagerSource] = useState('live');
   const [managerSearch, setManagerSearch] = useState('');
   const [manualManagerChannel, setManualManagerChannel] = useState('');
   const [pendingReplacement, setPendingReplacement] = useState('');
   const [draggedManagerChannel, setDraggedManagerChannel] = useState('');
   const [showAccount, setShowAccount] = useState(false);
+  const [showGuestBenefits, setShowGuestBenefits] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const guestBenefitsPromptedRef = useRef(false);
   const [accountSession, setAccountSession] = useState(null);
   const [accountReady, setAccountReady] = useState(false);
   const [accountProfile, setAccountProfile] = useState(null);
@@ -370,8 +464,29 @@ function SquadViewApp() {
   // Keep the displayed desktop page independent from the stream that is focused.
   // Focusing a stream can enable its audio without reshuffling the grid.
   const [desktopLeadChannel, setDesktopLeadChannel] = useState(() => initialViewer?.desktopLeadChannel || initialViewer?.channels?.[0] || '');
+  // Grid + Chat remembers the screen slot where chat was activated. The chat
+  // owner stays in that slot while paging instead of jumping to tile one as
+  // soon as Chat is clicked.
+  const [desktopChatPinnedSlot, setDesktopChatPinnedSlot] = useState(0);
+  // Grid + Chat treats the chat owner as the one stream that travels between
+  // pages. The remaining streams stay assigned to their current page slots.
+  // When chat moves to another visible stream, the previous chat owner drops
+  // into that page instead of jumping back to its original roster position.
+  const [desktopChatRotationChannels, setDesktopChatRotationChannels] = useState(() => {
+    const initialChannels = initialViewer?.channels || [];
+    const initialPinned = initialViewer?.activeChannel || initialChannels[0] || '';
+    return initialChannels.filter((channel) => channel !== initialPinned);
+  });
   const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
-  const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
+  const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 761px)').matches ?? false);
+  const [isWideDesktopChat, setIsWideDesktopChat] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
+  const [chatDockSide, setChatDockSide] = useState(() => {
+    try {
+      return localStorage.getItem('squadview:chat-dock-side-v1') === 'left' ? 'left' : 'right';
+    } catch {
+      return 'right';
+    }
+  });
   // iOS can keep multiple Twitch videos visible, but asking a second embed to
   // become audible may interrupt the first media session. Keep playback and
   // audio ownership separate: all visible videos remain independent, while iOS
@@ -381,6 +496,13 @@ function SquadViewApp() {
   // The focused stream owns the primary audio level. Keep that level stable
   // while paging, opening/closing chat, or moving focus to another stream.
   const focusedAudioVolumeRef = useRef(1);
+  // Audio has one final-state authority. Layout components may decide whether a
+  // Twitch embed is visible or paused for performance, but they never decide
+  // mute/volume. The controller below is the only place that reconciles the
+  // user's intended audio mix onto mounted Twitch players.
+  const audioPolicyRef = useRef(null);
+  const lastAppliedAudioPolicyRef = useRef(null);
+  const focusReturnAudioRef = useRef(null);
 
   function clampFocusedAudioVolume(value, fallback = 1) {
     const numeric = Number(value);
@@ -415,6 +537,219 @@ function SquadViewApp() {
     return clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1);
   }
 
+
+  const audioModeKey = viewMode === 'solo'
+    ? 'solo'
+    : (iosSingleAudioMode && !isDesktopGrid && viewMode === 'chat')
+      ? 'mobile-chat'
+      : 'mix';
+
+  function makeAudioPolicy(overrides = {}) {
+    return {
+      channels: [...(overrides.channels ?? channels)],
+      activeChannel: cleanChannel(overrides.activeChannel ?? activeChannel),
+      listeningChannels: new Set(overrides.listeningChannels ?? listeningChannels),
+      audioEnabled: overrides.audioEnabled ?? audioEnabled,
+      iosSingleAudioMode: overrides.iosSingleAudioMode ?? iosSingleAudioMode,
+      mode: overrides.mode ?? audioModeKey,
+    };
+  }
+
+  // Keep the ref current during render so Twitch READY/PLAYING callbacks always
+  // reconcile against the latest intent without waiting for another state edge.
+  audioPolicyRef.current = makeAudioPolicy();
+
+  function audioPolicySelectsChannel(policy, channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !policy?.audioEnabled || !policy.channels.includes(cleaned)) return false;
+
+    if (policy.mode === 'solo' || policy.mode === 'mobile-chat') {
+      return cleaned === policy.activeChannel;
+    }
+
+    if (policy.iosSingleAudioMode) {
+      const manualOwner = [...policy.listeningChannels].find((candidate) =>
+        policy.channels.includes(candidate),
+      );
+      return cleaned === (manualOwner || policy.activeChannel);
+    }
+
+    return cleaned === policy.activeChannel || policy.listeningChannels.has(cleaned);
+  }
+
+  function snapshotAudioLevels(policy = lastAppliedAudioPolicyRef.current || audioPolicyRef.current) {
+    if (!policy?.audioEnabled) return;
+
+    playersRef.current.forEach((player, channel) => {
+      if (!audioPolicySelectsChannel(policy, channel)) return;
+
+      try {
+        const muted = player?.getMuted?.();
+        const currentVolume = Number(player?.getVolume?.());
+        if (muted !== false || !Number.isFinite(currentVolume) || currentVolume < 0) return;
+
+        const rememberedVolume = clampFocusedAudioVolume(currentVolume, 1);
+        if (channel === policy.activeChannel) {
+          focusedAudioVolumeRef.current = rememberedVolume;
+          player.__squadViewPreferredVolume = rememberedVolume;
+        } else {
+          player.__squadViewManualVolume = rememberedVolume;
+        }
+      } catch {
+        // Keep the last known SquadView level while Twitch is initializing.
+      }
+    });
+  }
+
+  function getPlayerAudioTarget(channel, player = playersRef.current.get(channel), policy = audioPolicyRef.current) {
+    if (!player || !policy) {
+      return { displayed: false, selected: false, targetVolume: 0, audible: false };
+    }
+
+    const displayed = Boolean(
+      player?.__squadViewStateRef?.current?.visible ??
+      player?.__squadViewState?.visible ??
+      false
+    );
+    const selected = displayed && audioPolicySelectsChannel(policy, channel);
+    const targetVolume = channel === policy.activeChannel
+      ? clampFocusedAudioVolume(
+          player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
+          1,
+        )
+      : clampFocusedAudioVolume(player.__squadViewManualVolume, 1);
+
+    return {
+      displayed,
+      selected,
+      targetVolume,
+      audible: Boolean(selected && targetVolume > 0),
+    };
+  }
+
+  function syncAudibleChannelStatus(policy = audioPolicyRef.current) {
+    const nextAudible = new Set();
+
+    playersRef.current.forEach((player, channel) => {
+      const target = getPlayerAudioTarget(channel, player, policy);
+      if (target.audible) nextAudible.add(channel);
+    });
+
+    setAudibleChannels((current) => {
+      if (
+        current.size === nextAudible.size &&
+        [...current].every((channel) => nextAudible.has(channel))
+      ) {
+        return current;
+      }
+      return nextAudible;
+    });
+  }
+
+  function applyAudioPolicyToPlayer(channel, player = playersRef.current.get(channel), policy = audioPolicyRef.current) {
+    if (!player || !policy) return;
+
+    // Audio is allowed only for Twitch tiles that are actually displayed.
+    // Listen choices remain remembered underneath paging so returning to a
+    // page can restore the user's mix without letting hidden streams bleed.
+    const { selected, targetVolume, audible } = getPlayerAudioTarget(channel, player, policy);
+
+    try {
+      player.setVolume?.(selected ? targetVolume : 0);
+      player.setMuted?.(!audible);
+    } catch {
+      // Twitch may still be initializing. READY/PLAYING will retry this policy.
+    }
+  }
+
+  function reconcileViewerAudio(overrides = {}, { captureCurrent = true } = {}) {
+    const previousPolicy = lastAppliedAudioPolicyRef.current || audioPolicyRef.current;
+    if (captureCurrent) snapshotAudioLevels(previousPolicy);
+
+    const nextPolicy = makeAudioPolicy(overrides);
+    audioPolicyRef.current = nextPolicy;
+
+    playersRef.current.forEach((player, channel) => {
+      applyAudioPolicyToPlayer(channel, player, nextPolicy);
+    });
+    syncAudibleChannelStatus(nextPolicy);
+
+    lastAppliedAudioPolicyRef.current = nextPolicy;
+    return nextPolicy;
+  }
+
+  const reconcilePlayerAudio = useCallback((channel, player) => {
+    applyAudioPolicyToPlayer(channel, player, audioPolicyRef.current);
+    syncAudibleChannelStatus(audioPolicyRef.current);
+  }, []);
+
+  // Twitch's native iframe controls can change mute/volume without going
+  // through SquadView's Listen button. Mirror those real user audio changes
+  // back into the central audio intent so the next Chat/page transition does
+  // not overwrite them. Playback pause is deliberately NOT treated as an
+  // audio preference.
+  const syncNativeTwitchAudioIntent = useCallback((channel, nativeState = {}) => {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
+
+    const nativeVolume = clampFocusedAudioVolume(nativeState.volume, 0);
+    const wantsAudio = nativeState.muted !== true && nativeVolume > 0;
+    const player = playersRef.current.get(cleaned);
+
+    if (cleaned === activeChannel) {
+      const nextFocusedVolume = wantsAudio ? nativeVolume : 0;
+      if (Math.abs(clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) - nextFocusedVolume) > 0.01) {
+        focusedAudioVolumeRef.current = nextFocusedVolume;
+      }
+      if (player) player.__squadViewPreferredVolume = nextFocusedVolume;
+      if (wantsAudio && !audioEnabled) setAudioEnabled(true);
+      return;
+    }
+
+    if (player) player.__squadViewManualVolume = wantsAudio ? nativeVolume : 0;
+
+    setListeningChannels((current) => {
+      const alreadySelected = current.has(cleaned);
+      if (alreadySelected === wantsAudio) return current;
+
+      const next = new Set(current);
+      if (wantsAudio) next.add(cleaned);
+      else next.delete(cleaned);
+      return next;
+    });
+
+    if (wantsAudio && !audioEnabled) setAudioEnabled(true);
+  }, [channels, activeChannel, audioEnabled]);
+
+  function resumeViewerChannelsFromGesture(candidateChannels = []) {
+    [...new Set(candidateChannels.map(cleanChannel).filter(Boolean))].forEach((channel) => {
+      const player = playersRef.current.get(channel);
+      if (!player) return;
+      try {
+        if (player.isPaused?.() === true) player.play?.();
+      } catch {
+        // Twitch's native controls remain available if playback is rejected.
+      }
+    });
+  }
+
+  function resumeAudioSelectedPlayers(policy) {
+    playersRef.current.forEach((player, channel) => {
+      if (!audioPolicySelectsChannel(policy, channel)) return;
+      const displayed = Boolean(
+        player?.__squadViewStateRef?.current?.visible ??
+        player?.__squadViewState?.visible ??
+        false
+      );
+      if (!displayed) return;
+      try {
+        if (player?.isPaused?.() === true) player.play?.();
+      } catch {
+        // Playback can still recover through Twitch's native controls.
+      }
+    });
+  }
+
   // Twitch players are created lazily. The initial page creates only its
   // visible players. Once a channel has been visited, its player stays mounted
   // and pauses while off page so returning can resume without rebuilding every
@@ -423,6 +758,9 @@ function SquadViewApp() {
 
   const viewerSessionActiveRef = useRef(Boolean(initialViewer));
   const viewerStreamLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, entitlements.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
+  const favoriteStreamerLimit = entitlements.isPremium
+    ? PREMIUM_FAVORITE_STREAMER_LIMIT
+    : FREE_FAVORITE_STREAMER_LIMIT;
 
   useEffect(() => {
     if (!sharedViewer?.channels?.length) return;
@@ -444,8 +782,11 @@ function SquadViewApp() {
     const canonical = document.querySelector('link[rel="canonical"]');
     const ogUrl = document.querySelector('meta[property="og:url"]');
     descriptionTag?.setAttribute('content', 'Build a SquadView with multiple Twitch channels and switch between grid, chat, solo viewing, and audio focus.');
-    canonical?.setAttribute('href', 'https://squadview.app/watch');
-    ogUrl?.setAttribute('content', 'https://squadview.app/watch');
+    const canonicalUrl = window.location.pathname.startsWith('/watch')
+      ? 'https://squadview.app/watch'
+      : 'https://squadview.app';
+    canonical?.setAttribute('href', canonicalUrl);
+    ogUrl?.setAttribute('content', canonicalUrl);
   }, []);
 
   const registerPlayer = useCallback((channel, player) => {
@@ -526,6 +867,10 @@ function SquadViewApp() {
           setSlotChannels(allowedSharedChannels.slice(0, 2));
           setDesktopPage(0);
           setDesktopLeadChannel(sharedActive || allowedSharedChannels[0] || '');
+          setDesktopChatRotationChannels(
+            allowedSharedChannels.filter((channel) => channel !== (sharedActive || allowedSharedChannels[0] || '')),
+          );
+          setDesktopChatPinnedSlot(0);
           setViewMode('dual');
           setChatLayout('single');
           viewerSessionActiveRef.current = Boolean(allowedSharedChannels.length);
@@ -634,6 +979,22 @@ function SquadViewApp() {
   }, [showAccount, accountReady, accountSession?.user?.id]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_FILL_FAVORITES_KEY, String(autoFillFavorites));
+      localStorage.setItem(FAVORITE_LIVE_ALERTS_KEY, String(favoriteLiveAlertsEnabled));
+      localStorage.setItem(FAVORITE_LIVE_ALERT_SOUND_KEY, String(favoriteLiveAlertSound));
+    } catch {
+      // Device-local preferences still work for this session when storage is restricted.
+    }
+  }, [autoFillFavorites, favoriteLiveAlertsEnabled, favoriteLiveAlertSound]);
+
+  useEffect(() => {
+    if (!favoriteLiveNotice) return undefined;
+    const timeout = window.setTimeout(() => setFavoriteLiveNotice(null), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [favoriteLiveNotice]);
+
+  useEffect(() => {
     if (screen !== 'viewer' || !accountReady || !accountSession?.user?.id) return;
     const pendingReferralCode = getPendingReferralCode();
     if (!pendingReferralCode) return;
@@ -718,64 +1079,57 @@ function SquadViewApp() {
   ]);
 
   useEffect(() => {
-    const iosManualOwner = iosSingleAudioMode
-      ? [...listeningChannels].find((candidate) => {
-          const candidatePlayer = playersRef.current.get(candidate);
-          return (
-            channels.includes(candidate) &&
-            candidatePlayer?.__squadViewState?.visible !== false
-          );
-        }) || ''
-      : '';
-    const iosAudioOwner = iosSingleAudioMode
-      ? (iosManualOwner || activeChannel)
-      : '';
+    // Final mute/volume reconciliation lives here. Desktop Chat does not change
+    // audioModeKey, activeChannel, or listeningChannels, so merely switching
+    // chat targets never causes an audio rewrite.
+    reconcileViewerAudio({}, { captureCurrent: true });
+  }, [listeningChannels, audioEnabled, activeChannel, channels, iosSingleAudioMode, audioModeKey]);
 
-    playersRef.current.forEach((player, channel) => {
-      try {
-        const isFocusedChannel = channel === activeChannel;
-        const isVisibleChannel = player.__squadViewState?.visible !== false;
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
 
-        if (isFocusedChannel && audioEnabled && (!iosSingleAudioMode || iosAudioOwner === channel)) {
-          const muted = player.getMuted?.();
-          const currentVolume = Number(player.getVolume?.());
-
-          if (
-            muted === false &&
-            Number.isFinite(currentVolume) &&
-            currentVolume >= 0
-          ) {
-            const remembered = clampFocusedAudioVolume(currentVolume, 1);
-            focusedAudioVolumeRef.current = remembered;
-            player.__squadViewPreferredVolume = remembered;
-          }
-        }
-
-        const shouldPlayAudio = iosSingleAudioMode
-          ? audioEnabled && channel === iosAudioOwner
-          : audioEnabled &&
-            (isFocusedChannel || (listeningChannels.has(channel) && isVisibleChannel));
-
-        const targetVolume = isFocusedChannel
-          ? clampFocusedAudioVolume(
-              player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
-              1,
-            )
-          : clampFocusedAudioVolume(
-              player.__squadViewManualVolume,
-              1,
-            );
-
-        const shouldUnmute = shouldPlayAudio && targetVolume > 0;
-
-        // This effect owns audio only. It never calls play() or pause().
-        player.setVolume(shouldPlayAudio ? targetVolume : 0);
-        player.setMuted(!shouldUnmute);
-      } catch {
-        // A player may still be finishing initialization.
-      }
+    window.__squadViewAudioDebug = () => ({
+      activeChannel,
+      listeningChannels: [...listeningChannels],
+      audibleChannels: [...audibleChannels],
+      audioEnabled,
+      audioMode: audioModeKey,
+      desiredAudioChannels: channels.filter((channel) => {
+        const player = playersRef.current.get(channel);
+        const displayed = Boolean(
+          player?.__squadViewStateRef?.current?.visible ??
+          player?.__squadViewState?.visible ??
+          false
+        );
+        return displayed && audioPolicySelectsChannel(audioPolicyRef.current, channel);
+      }),
+      iosSingleAudioMode,
+      isDesktopGrid,
+      viewMode,
+      desktopPage,
+      desktopLeadChannel,
+      channels: [...channels],
+      players: typeof window.__squadViewPlayerDebug === 'function'
+        ? window.__squadViewPlayerDebug()
+        : [],
     });
-  }, [listeningChannels, audioEnabled, activeChannel, channels, iosSingleAudioMode]);
+
+    return () => {
+      delete window.__squadViewAudioDebug;
+    };
+  }, [
+    activeChannel,
+    listeningChannels,
+    audibleChannels,
+    audioEnabled,
+    audioModeKey,
+    iosSingleAudioMode,
+    isDesktopGrid,
+    viewMode,
+    desktopPage,
+    desktopLeadChannel,
+    channels,
+  ]);
 
   useEffect(() => {
     if (!channels.length) {
@@ -842,12 +1196,28 @@ function SquadViewApp() {
   }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout]);
 
   useEffect(() => {
-    const media = window.matchMedia('(min-width: 1100px)');
+    const media = window.matchMedia('(min-width: 761px)');
     const syncDesktopGrid = () => setIsDesktopGrid(media.matches);
     syncDesktopGrid();
     media.addEventListener?.('change', syncDesktopGrid);
     return () => media.removeEventListener?.('change', syncDesktopGrid);
   }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1100px)');
+    const syncWideDesktopChat = () => setIsWideDesktopChat(media.matches);
+    syncWideDesktopChat();
+    media.addEventListener?.('change', syncWideDesktopChat);
+    return () => media.removeEventListener?.('change', syncWideDesktopChat);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('squadview:chat-dock-side-v1', chatDockSide);
+    } catch {
+      // Chat docking still works for the current page when storage is blocked.
+    }
+  }, [chatDockSide]);
 
   useEffect(() => {
     const trackViewerExitOnPageLeave = () => {
@@ -883,6 +1253,21 @@ function SquadViewApp() {
     () => [...new Set(inputs.map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit),
     [inputs, viewerStreamLimit],
   );
+  const manualBuilderInputCount = useMemo(() => {
+    const availableInputs = inputs.slice(0, viewerStreamLimit);
+    let lastFilledIndex = -1;
+
+    availableInputs.forEach((value, index) => {
+      if (String(value || '').trim()) lastFilledIndex = index;
+    });
+
+    // Keep the builder compact: one empty field is always visible, and typing
+    // into the last visible field reveals exactly one more slot underneath.
+    return Math.min(
+      viewerStreamLimit,
+      Math.max(1, lastFilledIndex + 2),
+    );
+  }, [inputs, viewerStreamLimit]);
   const shouldPreloadLoadingAd = screen === 'home'
     && accountReady
     && entitlements.squadViewAds
@@ -894,17 +1279,43 @@ function SquadViewApp() {
         && (validInputs.length > 0 || liveSavedSquadStreamers.size > 0)
       )
     );
+  const followedLiveLogins = useMemo(
+    () => new Set(followedLiveStreams.map((stream) => cleanChannel(stream.user_login)).filter(Boolean)),
+    [followedLiveStreams],
+  );
+  const followedChannelLogins = useMemo(
+    () => new Set(followedChannels.map((item) => cleanChannel(item.broadcaster_login)).filter(Boolean)),
+    [followedChannels],
+  );
+  const knownLiveFavoriteLogins = useMemo(() => {
+    const favoriteSet = new Set(favoriteStreamers.map(cleanChannel));
+    const live = new Set();
+
+    // Twitch Following Live is authoritative for positive live status. The
+    // Favorites-only poll supplements that list for SquadView Favorites that
+    // are not currently present in Twitch's followed-live response. Neither
+    // source is allowed to hide a creator that the other source confirms live.
+    followedLiveLogins.forEach((login) => {
+      if (favoriteSet.has(login)) live.add(login);
+    });
+    liveFavoriteStreamers.forEach((login) => {
+      const cleaned = cleanChannel(login);
+      if (favoriteSet.has(cleaned)) live.add(cleaned);
+    });
+
+    return live;
+  }, [favoriteStreamers, followedLiveLogins, liveFavoriteStreamers]);
   const sortedFavoriteStreamers = useMemo(
     () => [...favoriteStreamers].sort((first, second) => {
       const liveDifference =
-        Number(liveFavoriteStreamers.has(second)) - Number(liveFavoriteStreamers.has(first));
+        Number(knownLiveFavoriteLogins.has(second)) - Number(knownLiveFavoriteLogins.has(first));
       return liveDifference || first.localeCompare(second);
     }),
-    [favoriteStreamers, liveFavoriteStreamers],
+    [favoriteStreamers, knownLiveFavoriteLogins],
   );
   const liveFavoriteList = useMemo(
-    () => sortedFavoriteStreamers.filter((streamer) => liveFavoriteStreamers.has(streamer)),
-    [sortedFavoriteStreamers, liveFavoriteStreamers],
+    () => sortedFavoriteStreamers.filter((streamer) => knownLiveFavoriteLogins.has(streamer)),
+    [sortedFavoriteStreamers, knownLiveFavoriteLogins],
   );
   const savedSquadMemberLogins = useMemo(
     () => [...new Set(savedSquads.flatMap((squad) => squad.members.map((member) => member.twitchLogin)).filter(Boolean))],
@@ -914,22 +1325,77 @@ function SquadViewApp() {
     () => savedSquads.filter((squad) => squad.members.some((member) => liveSavedSquadStreamers.has(member.twitchLogin))).length,
     [savedSquads, liveSavedSquadStreamers],
   );
-  const followedLiveLogins = useMemo(
-    () => new Set(followedLiveStreams.map((stream) => cleanChannel(stream.user_login)).filter(Boolean)),
-    [followedLiveStreams],
-  );
-  const followedChannelLogins = useMemo(
-    () => new Set(followedChannels.map((item) => cleanChannel(item.broadcaster_login)).filter(Boolean)),
-    [followedChannels],
-  );
+  const orderedFollowedLiveStreams = useMemo(() => {
+    const favoriteSet = new Set(favoriteStreamers.map(cleanChannel));
+    const favoriteRank = new Map(
+      favoriteStreamers.map((channel, index) => [cleanChannel(channel), index]),
+    );
+    const followedRank = new Map(
+      followedLiveStreams.map((stream, index) => [cleanChannel(stream.user_login), index]),
+    );
+    const streamByLogin = new Map();
+
+    // Never subtract from Twitch's followed-live result. If Twitch says a
+    // followed creator is live, that card belongs in Live now even when the
+    // separate Favorites-only status endpoint is still loading or disagrees.
+    followedLiveStreams.forEach((stream) => {
+      const login = cleanChannel(stream.user_login);
+      if (!login) return;
+      streamByLogin.set(login, stream);
+    });
+
+    // The Favorites-only poll is additive. It lets a SquadView Favorite appear
+    // immediately even when they are not part of the current Twitch follow list
+    // or they went live after the latest full Following snapshot.
+    knownLiveFavoriteLogins.forEach((login) => {
+      if (!favoriteSet.has(login) || streamByLogin.has(login)) return;
+      const followed = followedChannels.find(
+        (item) => cleanChannel(item.broadcaster_login) === login,
+      );
+      streamByLogin.set(login, {
+        id: `favorite-live-${login}`,
+        user_login: login,
+        user_name: followed?.broadcaster_name || login,
+        title: 'Favorite streamer is live now',
+        game_name: 'Twitch',
+        viewer_count: 0,
+        thumbnail_url: '',
+        squadviewFavoriteStatusOnly: true,
+      });
+    });
+
+    return [...streamByLogin.values()].sort((first, second) => {
+      const firstLogin = cleanChannel(first.user_login);
+      const secondLogin = cleanChannel(second.user_login);
+      const firstIsFavorite = favoriteSet.has(firstLogin);
+      const secondIsFavorite = favoriteSet.has(secondLogin);
+
+      // Live Favorites always stay inside Live now / Following Live and occupy
+      // the first positions. Within that priority group keep the user's Favorite
+      // order; everyone else keeps Twitch's
+      // current live-list order.
+      if (firstIsFavorite !== secondIsFavorite) return firstIsFavorite ? -1 : 1;
+      if (firstIsFavorite && secondIsFavorite) {
+        return (favoriteRank.get(firstLogin) ?? Number.MAX_SAFE_INTEGER)
+          - (favoriteRank.get(secondLogin) ?? Number.MAX_SAFE_INTEGER);
+      }
+
+      return (followedRank.get(firstLogin) ?? Number.MAX_SAFE_INTEGER)
+        - (followedRank.get(secondLogin) ?? Number.MAX_SAFE_INTEGER)
+        || String(first.user_name || firstLogin).localeCompare(String(second.user_name || secondLogin));
+    });
+  }, [favoriteStreamers, followedChannels, followedLiveStreams, knownLiveFavoriteLogins]);
   const managerFollowedChannels = useMemo(() => {
     const query = managerSearch.trim().toLowerCase();
+    const favoriteSet = new Set(favoriteStreamers.map(cleanChannel));
     const sorted = [...followedChannels].sort((first, second) => {
       const firstLogin = cleanChannel(first.broadcaster_login);
       const secondLogin = cleanChannel(second.broadcaster_login);
+      const favoriteDifference =
+        Number(favoriteSet.has(secondLogin)) - Number(favoriteSet.has(firstLogin));
       const liveDifference =
         Number(followedLiveLogins.has(secondLogin)) - Number(followedLiveLogins.has(firstLogin));
-      return liveDifference ||
+      return favoriteDifference || liveDifference ||
         String(first.broadcaster_name || firstLogin).localeCompare(String(second.broadcaster_name || secondLogin));
     });
 
@@ -939,7 +1405,70 @@ function SquadViewApp() {
       const name = String(item.broadcaster_name || '').toLowerCase();
       return login.includes(query) || name.includes(query);
     });
-  }, [followedChannels, followedLiveLogins, managerSearch]);
+  }, [favoriteStreamers, followedChannels, followedLiveLogins, managerSearch]);
+
+  const managerKnownLiveChannels = useMemo(() => {
+    const live = new Set(managerLiveChannels);
+    followedLiveLogins.forEach((channel) => live.add(channel));
+    knownLiveFavoriteLogins.forEach((channel) => live.add(channel));
+    // The mounted Twitch player is the freshest source for channels already in
+    // the viewer. Let an explicit OFFLINE event override a stale Following Live
+    // response, while ONLINE/PLAYING/PAUSED can confirm that the channel is live.
+    viewerLiveStatusByChannel.forEach((status, channel) => {
+      if (status === 'offline') live.delete(channel);
+      if (status === 'live') live.add(channel);
+    });
+    return live;
+  }, [managerLiveChannels, followedLiveLogins, knownLiveFavoriteLogins, viewerLiveStatusByChannel]);
+
+  const managerOfflineChannels = useMemo(() => {
+    const genericCheckReady = managerLiveStatus === 'ready';
+    const followedStatusReady =
+      followingStatus === 'ready' && followedChannelsStatus === 'ready';
+
+    return managerDraftChannels.filter((channel) => {
+      const viewerStatus = viewerLiveStatusByChannel.get(channel);
+      if (viewerStatus === 'offline') return true;
+      if (managerKnownLiveChannels.has(channel)) return false;
+      if (genericCheckReady) return true;
+      return followedStatusReady && followedChannelLogins.has(channel);
+    });
+  }, [
+    managerDraftChannels,
+    managerKnownLiveChannels,
+    managerLiveStatus,
+    followingStatus,
+    followedChannelsStatus,
+    followedChannelLogins,
+    viewerLiveStatusByChannel,
+  ]);
+
+  const managerUnknownChannels = useMemo(() => {
+    const offline = new Set(managerOfflineChannels);
+    return managerDraftChannels.filter(
+      (channel) => !managerKnownLiveChannels.has(channel) && !offline.has(channel),
+    );
+  }, [managerDraftChannels, managerKnownLiveChannels, managerOfflineChannels]);
+
+  const managerAddedChannelCount = useMemo(() => {
+    const original = new Set(managerOriginalChannelsRef.current);
+    return managerDraftChannels.filter((channel) => !original.has(channel)).length;
+  }, [managerDraftChannels]);
+
+  const managerRetainedOriginalCount = useMemo(() => {
+    const original = new Set(managerOriginalChannelsRef.current);
+    return managerDraftChannels.filter((channel) => original.has(channel)).length;
+  }, [managerDraftChannels]);
+
+  const managerCommercialPending = Boolean(
+    entitlements.squadViewAds
+    && managerDraftChannels.length
+    && (
+      managerClearedAll
+      || managerAddedChannelCount >= 4
+      || (managerOriginalChannelsRef.current.length > 0 && managerRetainedOriginalCount === 0)
+    ),
+  );
 
   const editSquadCandidateChannels = useMemo(() => {
     const memberSet = new Set(editSquadMembers);
@@ -947,7 +1476,7 @@ function SquadViewApp() {
     let candidates = [];
 
     if (editSquadSource === 'live') {
-      candidates = followedLiveStreams.map((stream) => ({
+      candidates = orderedFollowedLiveStreams.map((stream) => ({
         login: cleanChannel(stream.user_login),
         name: stream.user_name || stream.user_login,
         meta: stream.game_name || 'Live on Twitch',
@@ -957,8 +1486,8 @@ function SquadViewApp() {
       candidates = favoriteStreamers.map((channel) => ({
         login: cleanChannel(channel),
         name: channel,
-        meta: liveFavoriteStreamers.has(cleanChannel(channel)) ? 'Live now' : 'Favorite',
-        live: liveFavoriteStreamers.has(cleanChannel(channel)),
+        meta: knownLiveFavoriteLogins.has(cleanChannel(channel)) ? 'Live now' : 'Favorite',
+        live: knownLiveFavoriteLogins.has(cleanChannel(channel)),
       }));
     } else {
       candidates = followedChannels.map((item) => {
@@ -985,7 +1514,8 @@ function SquadViewApp() {
     followedChannels,
     followedLiveLogins,
     followedLiveStreams,
-    liveFavoriteStreamers,
+    orderedFollowedLiveStreams,
+    knownLiveFavoriteLogins,
   ]);
 
   const refreshSavedSquads = useCallback(async ({ silent = false } = {}) => {
@@ -1062,12 +1592,21 @@ function SquadViewApp() {
   useEffect(() => {
     if (!LIVE_STATUS_API_URL || !favoriteStreamers.length) {
       setLiveFavoriteStreamers(new Set());
-      return;
+      // The Twitch followed-live response can still provide Favorite priority
+      // when the optional Favorites-only status endpoint is unavailable. Do not
+      // leave the Following screen stuck waiting for a supplemental source.
+      setFavoriteLiveStatusReady(true);
+      return undefined;
     }
 
     let cancelled = false;
+    let baselineReady = false;
+    let previousLive = new Set();
+    setFavoriteLiveStatusReady(false);
 
     async function refreshFavoriteLiveStatus() {
+      if (document.visibilityState === 'hidden') return;
+
       try {
         const url = new URL(LIVE_STATUS_API_URL);
         favoriteStreamers.forEach((streamer) => url.searchParams.append('login', streamer));
@@ -1084,24 +1623,333 @@ function SquadViewApp() {
         const live = Array.isArray(result?.live)
           ? result.live.map(cleanChannel).filter(Boolean)
           : [];
+        const nextLive = new Set(live);
 
-        setLiveFavoriteStreamers(new Set(live));
+        if (baselineReady) {
+          const newlyLive = live.filter((streamer) => !previousLive.has(streamer));
+          if (
+            newlyLive.length &&
+            favoriteLiveAlertsEnabled &&
+            document.visibilityState === 'visible'
+          ) {
+            setFavoriteLiveNotice({
+              kind: 'favorite_live',
+              channels: newlyLive,
+              createdAt: Date.now(),
+            });
+            if (favoriteLiveAlertSound) playFavoriteLiveAlertTone();
+          }
+        }
+
+        previousLive = nextLive;
+        baselineReady = true;
+        setLiveFavoriteStreamers(nextLive);
+        setFavoriteLiveStatusReady(true);
       } catch (error) {
-        if (!cancelled) setLiveFavoriteStreamers(new Set());
+        if (!cancelled) setFavoriteLiveStatusReady(true);
         if (import.meta.env.DEV) {
           console.info('[SquadView live status] unavailable', error);
         }
       }
     }
 
-    refreshFavoriteLiveStatus();
-    const interval = window.setInterval(refreshFavoriteLiveStatus, 3 * 60 * 1000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshFavoriteLiveStatus();
+    };
+
+    void refreshFavoriteLiveStatus();
+    const interval = window.setInterval(refreshFavoriteLiveStatus, FAVORITE_LIVE_POLL_MS);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [favoriteStreamers]);
+  }, [favoriteStreamers, favoriteLiveAlertsEnabled, favoriteLiveAlertSound]);
+
+  // Only the streams that are actively in the viewer receive generic background
+  // live checks. This keeps Following lightweight while still letting SquadView
+  // clear a dead player even when that creator is not a Favorite.
+  useEffect(() => {
+    if (screen !== 'viewer' || !channels.length || !LIVE_STATUS_API_URL) return undefined;
+
+    let cancelled = false;
+
+    async function refreshViewerLiveStatus() {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const targets = [...new Set(channels.map(cleanChannel).filter(Boolean))];
+        const url = new URL(LIVE_STATUS_API_URL);
+        targets.forEach((channel) => url.searchParams.append('login', channel));
+
+        const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(`Live status request failed with ${response.status}`);
+        const result = await response.json();
+        if (cancelled) return;
+
+        const live = new Set(
+          Array.isArray(result?.live)
+            ? result.live.map(cleanChannel).filter(Boolean)
+            : [],
+        );
+
+        setViewerLiveStatusByChannel((current) => {
+          const next = new Map(current);
+          let changed = false;
+          targets.forEach((channel) => {
+            const status = live.has(channel) ? 'live' : 'offline';
+            if (next.get(channel) !== status) {
+              next.set(channel, status);
+              changed = true;
+            }
+          });
+          return changed ? next : current;
+        });
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.info('[SquadView active viewer live status] unavailable', error);
+        }
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshViewerLiveStatus();
+    };
+
+    void refreshViewerLiveStatus();
+    const interval = window.setInterval(refreshViewerLiveStatus, VIEWER_LIVE_POLL_MS);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [screen, channels]);
+
+  function reconcileOpenSlotsWithLiveFavorites(roster, { excludedChannels = [] } = {}) {
+    const normalizedRoster = [...new Set((roster || []).map(cleanChannel).filter(Boolean))]
+      .slice(0, viewerStreamLimit);
+
+    if (!autoFillFavorites || !favoriteLiveStatusReady || !knownLiveFavoriteLogins.size) {
+      return normalizedRoster;
+    }
+
+    const selected = new Set(normalizedRoster);
+    const excluded = new Set((excludedChannels || []).map(cleanChannel).filter(Boolean));
+    const openSlots = Math.max(0, viewerStreamLimit - normalizedRoster.length);
+    if (!openSlots) return normalizedRoster;
+
+    const additions = favoriteStreamers
+      .map(cleanChannel)
+      .filter(Boolean)
+      .filter((streamer) => knownLiveFavoriteLogins.has(streamer))
+      .filter((streamer) => !selected.has(streamer))
+      .filter((streamer) => !excluded.has(streamer))
+      .filter((streamer) => !autoFillSuppressedFavoritesRef.current.has(streamer))
+      .slice(0, openSlots);
+
+    return additions.length ? [...normalizedRoster, ...additions] : normalizedRoster;
+  }
+
+  // A single OFFLINE signal is not enough to tear down a stream. Give Twitch a
+  // short restart/grace window; any ONLINE/PLAYING update cancels this timer.
+  useEffect(() => {
+    if (screen !== 'viewer' || !channels.length) return undefined;
+    const offlineChannels = channels.filter(
+      (channel) => viewerLiveStatusByChannel.get(channel) === 'offline',
+    );
+    if (!offlineChannels.length) return undefined;
+
+    const timer = window.setTimeout(() => {
+      const offline = new Set(offlineChannels);
+      const remainingChannels = channels.filter((channel) => !offline.has(channel));
+
+      // An offline Favorite may still appear live in a stale Twitch snapshot.
+      // Suppress that exact creator until the merged live sources clear them so
+      // Auto-fill cannot immediately put the just-removed offline stream back.
+      offlineChannels.forEach(suppressFavoriteAutoFill);
+
+      // Natural offline removal creates a real vacancy. When Auto-fill is on,
+      // use that vacancy immediately for another eligible live Favorite.
+      const nextChannels = reconcileOpenSlotsWithLiveFavorites(remainingChannels, {
+        excludedChannels: offlineChannels,
+      });
+      const autoFilledCount = Math.max(0, nextChannels.length - remainingChannels.length);
+
+      trackEvent('viewer_offline_streams_auto_removed', {
+        removed_count_bucket: getStreamCountBucket(offlineChannels.length),
+        auto_fill_favorites: autoFillFavorites,
+        auto_filled_count_bucket: getStreamCountBucket(autoFilledCount),
+      });
+
+      commitViewerChannels(nextChannels, {
+        preferredActive: nextChannels.includes(activeChannel) ? activeChannel : nextChannels[0],
+        preserveDesktopPage: true,
+        preferredDesktopLead: nextChannels.includes(desktopLeadChannel) ? desktopLeadChannel : nextChannels[0],
+        preserveAudioMix: true,
+      });
+    }, OFFLINE_REMOVAL_GRACE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    screen,
+    channels,
+    viewerLiveStatusByChannel,
+    activeChannel,
+    desktopLeadChannel,
+    autoFillFavorites,
+    favoriteLiveStatusReady,
+    knownLiveFavoriteLogins,
+    favoriteStreamers,
+    viewerStreamLimit,
+  ]);
+
+  // Manual removals stay suppressed until every positive live source agrees the
+  // creator is no longer live. This prevents a stale/missing supplemental status
+  // response from immediately making a still-live Favorite eligible again.
+  useEffect(() => {
+    autoFillSuppressedFavoritesRef.current.forEach((streamer) => {
+      if (!knownLiveFavoriteLogins.has(streamer)) {
+        autoFillSuppressedFavoritesRef.current.delete(streamer);
+      }
+    });
+  }, [knownLiveFavoriteLogins]);
+
+  // Auto-fill is intentionally additive only. Reconcile against the merged live
+  // Favorite set whenever the app loads, Twitch Following refreshes, Favorite
+  // status refreshes, Auto-fill is enabled, or a slot opens. It can use any open
+  // slot, but it never replaces a live stream the viewer chose. If the user
+  // manually removes a Favorite, only that Favorite stays suppressed; a different
+  // eligible live Favorite may still use the newly opened slot.
+  useEffect(() => {
+    if (!autoFillFavorites || !favoriteLiveStatusReady || !knownLiveFavoriteLogins.size) return;
+
+    const eligible = favoriteStreamers.filter(
+      (streamer) => knownLiveFavoriteLogins.has(streamer) && !autoFillSuppressedFavoritesRef.current.has(streamer),
+    );
+    if (!eligible.length) return;
+
+    if (screen === 'viewer') {
+      // Manage streams edits a draft roster. Keep Auto-fill active there too so
+      // removing a non-Favorite (or a Favorite the user explicitly dismissed)
+      // can offer the vacancy to the next eligible live Favorite before Done.
+      if (showEdit) {
+        if (managerClearedAll) return;
+        const reconciledDraft = reconcileOpenSlotsWithLiveFavorites(managerDraftChannels);
+        if (reconciledDraft.length === managerDraftChannels.length) return;
+        const addedCount = reconciledDraft.length - managerDraftChannels.length;
+        setManagerDraftChannels(reconciledDraft);
+        trackEvent('favorite_auto_fill_applied', {
+          source: 'manager',
+          added_count_bucket: getStreamCountBucket(addedCount),
+        });
+        return;
+      }
+
+      const missing = eligible.filter((streamer) => !channels.includes(streamer));
+      const openSlots = Math.max(0, viewerStreamLimit - channels.length);
+      if (!missing.length || !openSlots) return;
+      const additions = missing.slice(0, openSlots);
+      commitViewerChannels([...channels, ...additions], {
+        preserveDesktopPage: true,
+        preferredDesktopLead: desktopLeadChannel,
+        preserveAudioMix: true,
+      });
+      trackEvent('favorite_auto_fill_applied', {
+        source: 'viewer',
+        added_count_bucket: getStreamCountBucket(additions.length),
+      });
+      return;
+    }
+
+    if (screen === 'home') {
+      setInputs((current) => {
+        const selected = new Set(current.map(cleanChannel).filter(Boolean));
+        const additions = eligible.filter((streamer) => !selected.has(streamer));
+        if (!additions.length) return current;
+
+        const next = [...current];
+        let additionIndex = 0;
+        for (let index = 0; index < next.length && additionIndex < additions.length; index += 1) {
+          if (cleanChannel(next[index])) continue;
+          next[index] = additions[additionIndex];
+          additionIndex += 1;
+        }
+        return next;
+      });
+    }
+  }, [
+    autoFillFavorites,
+    favoriteLiveStatusReady,
+    knownLiveFavoriteLogins,
+    favoriteStreamers,
+    screen,
+    channels,
+    viewerStreamLimit,
+    desktopLeadChannel,
+    showEdit,
+    managerDraftChannels,
+    managerClearedAll,
+  ]);
+
+  useEffect(() => {
+    if (!showEdit) return undefined;
+
+    const targets = [...new Set(managerDraftChannels.map(cleanChannel).filter(Boolean))];
+
+    if (!targets.length) {
+      setManagerLiveChannels(new Set());
+      setManagerLiveStatus('ready');
+      return undefined;
+    }
+
+    if (!LIVE_STATUS_API_URL) {
+      setManagerLiveChannels(new Set());
+      setManagerLiveStatus('unavailable');
+      return undefined;
+    }
+
+    let cancelled = false;
+    setManagerLiveStatus('loading');
+
+    async function refreshManagerLiveStatus() {
+      try {
+        const url = new URL(LIVE_STATUS_API_URL);
+        targets.forEach((channel) => url.searchParams.append('login', channel));
+
+        const response = await fetch(url.toString(), {
+          headers: { Accept: 'application/json' },
+        });
+
+        if (!response.ok) throw new Error(`Live status request failed with ${response.status}`);
+
+        const result = await response.json();
+        if (cancelled) return;
+
+        const live = Array.isArray(result?.live)
+          ? result.live.map(cleanChannel).filter(Boolean)
+          : [];
+
+        setManagerLiveChannels(new Set(live));
+        setManagerLiveStatus('ready');
+      } catch (error) {
+        if (cancelled) return;
+        setManagerLiveChannels(new Set());
+        setManagerLiveStatus('unavailable');
+        if (import.meta.env.DEV) {
+          console.info('[SquadView stream manager live status] unavailable', error);
+        }
+      }
+    }
+
+    void refreshManagerLiveStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showEdit, managerDraftChannels]);
 
 
   const refreshFollowedLiveStreams = useCallback(async ({ silent = false } = {}) => {
@@ -1162,17 +2010,30 @@ function SquadViewApp() {
       setFollowedChannels([]);
       setFollowedChannelsStatus('idle');
       setFollowedChannelsError('');
-      return undefined;
+      return;
     }
 
+    // Take one full Following snapshot when Twitch connects. Background live
+    // checks are reserved for Favorites; everyone else refreshes manually or
+    // when the user returns to Following Live.
     void refreshFollowedLiveStreams();
-    const interval = window.setInterval(
-      () => void refreshFollowedLiveStreams({ silent: true }),
-      3 * 60 * 1000,
-    );
-
-    return () => window.clearInterval(interval);
   }, [accountSession?.user?.id, refreshFollowedLiveStreams]);
+
+  useEffect(() => {
+    if (!accountSession?.user?.id || landingTab !== 'following') return;
+    void refreshFollowedLiveStreams({ silent: true });
+  }, [accountSession?.user?.id, landingTab, refreshFollowedLiveStreams]);
+
+  useEffect(() => {
+    if (
+      !accountSession?.user?.id ||
+      landingTab !== 'following' ||
+      followedChannelsStatus !== 'idle'
+    ) {
+      return;
+    }
+    void refreshFollowedChannels();
+  }, [accountSession?.user?.id, landingTab, followedChannelsStatus, refreshFollowedChannels]);
 
   useEffect(() => {
     if (
@@ -1214,6 +2075,39 @@ function SquadViewApp() {
     });
   }
 
+  function dismissGuestBenefitsPrompt() {
+    setShowGuestBenefits(false);
+    try {
+      sessionStorage.setItem(GUEST_BENEFITS_SESSION_KEY, '1');
+    } catch {
+      // A restricted browser can still continue as a guest.
+    }
+  }
+
+  function handleBuilderInputChange(index, value) {
+    setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? value : item));
+
+    if (
+      !String(value || '').trim() ||
+      !accountReady ||
+      accountSession?.user?.id ||
+      guestBenefitsPromptedRef.current
+    ) {
+      return;
+    }
+
+    let dismissed = false;
+    try {
+      dismissed = sessionStorage.getItem(GUEST_BENEFITS_SESSION_KEY) === '1';
+    } catch {
+      dismissed = false;
+    }
+
+    if (dismissed) return;
+    guestBenefitsPromptedRef.current = true;
+    setShowGuestBenefits(true);
+  }
+
   function commitViewerStart(unique) {
     mountedPlayerChannelsRef.current = new Set();
 
@@ -1223,7 +2117,7 @@ function SquadViewApp() {
     // Focus implies Listen: the lead stream is the primary audio source as soon
     // as the viewer starts. Other streams remain silent until Listen is chosen.
     setAudioEnabled(Boolean(unique[0]));
-    const startWithGridChat = isDesktopGrid && unique.length === 3;
+    const startWithGridChat = false;
     const initialViewMode = defaultLayout === 'smart'
       ? (startWithGridChat ? 'chat' : 'dual')
       : defaultLayout;
@@ -1234,6 +2128,8 @@ function SquadViewApp() {
     setSlotChannels(unique.slice(0, 2));
     setDesktopPage(0);
     setDesktopLeadChannel(unique[0]);
+    setDesktopChatRotationChannels(unique.slice(1));
+    setDesktopChatPinnedSlot(0);
     setChatLayout(initialChatLayout);
     saveLastChannels(unique);
     viewerSessionActiveRef.current = true;
@@ -1329,6 +2225,16 @@ function SquadViewApp() {
       return;
     }
 
+    if (launch?.kind === 'manager_draft' && launch.channels?.length) {
+      commitViewerChannels(launch.channels, {
+        preserveDesktopPage: true,
+        preferredDesktopLead: desktopLeadChannel,
+        preserveAudioMix: true,
+      });
+      setScreen('viewer');
+      return;
+    }
+
     if (launch?.kind === 'channels' && launch.channels?.length) {
       commitViewerStart(launch.channels);
       return;
@@ -1338,171 +2244,143 @@ function SquadViewApp() {
   }
 
 
-  function applyIOSAudioOwner(ownerChannel, { focused = ownerChannel === activeChannel, volume } = {}) {
-    if (!iosSingleAudioMode) return;
-
-    const cleanedOwner = cleanChannel(ownerChannel);
-    const ownerPlayer = playersRef.current.get(cleanedOwner);
-    const targetVolume = clampFocusedAudioVolume(
-      volume ?? (focused
-        ? ownerPlayer?.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current
-        : ownerPlayer?.__squadViewManualVolume),
-      1,
-    );
-
-    // Important ordering for iOS: silence every other Twitch embed before
-    // unmuting the selected owner. These are audio-only changes; playback is
-    // deliberately untouched so both visible videos can continue moving.
-    playersRef.current.forEach((player, playerChannel) => {
-      if (playerChannel === cleanedOwner) return;
-      try {
-        player?.setVolume?.(0);
-        player?.setMuted?.(true);
-      } catch {
-        // A player may still be initializing.
-      }
-    });
-
-    try {
-      ownerPlayer?.setVolume?.(targetVolume);
-      ownerPlayer?.setMuted?.(targetVolume <= 0);
-    } catch {
-      // The state effect will retry once the Twitch player is ready.
-    }
-  }
-
-  // Mobile audio sync: volume 0 is a true mute. Focus/Listen/Volume only own
-  // mute + volume state; they never start or stop Twitch playback.
+  // Volume state is stored with the Twitch player, but only the controller
+  // above is allowed to write the final mute/volume state to the embed.
   function setStreamVolume(channel, value) {
     const cleaned = cleanChannel(channel);
+    if (!cleaned) return;
+
+    // Preserve every other currently audible stream before changing one slider.
+    snapshotAudioLevels(lastAppliedAudioPolicyRef.current || audioPolicyRef.current);
+
     const nextVolume = clampFocusedAudioVolume(value, 1);
     const player = playersRef.current.get(cleaned);
 
     if (cleaned === activeChannel) {
       focusedAudioVolumeRef.current = nextVolume;
-
-      if (player) {
-        player.__squadViewPreferredVolume = nextVolume;
-      }
-
-      setAudioEnabled(true);
+      if (player) player.__squadViewPreferredVolume = nextVolume;
     } else if (player) {
       player.__squadViewManualVolume = nextVolume;
     }
 
-    const iosManualOwner = iosSingleAudioMode ? [...listeningChannels][0] || '' : '';
-    const iosAudioOwner = iosSingleAudioMode ? (iosManualOwner || activeChannel) : '';
-    const isSelectedAudio = iosSingleAudioMode
-      ? cleaned === iosAudioOwner
-      : cleaned === activeChannel || listeningChannels.has(cleaned);
+    const canOwnAudio = audioPolicySelectsChannel(
+      { ...audioPolicyRef.current, audioEnabled: true },
+      cleaned,
+    );
+    const nextAudioEnabled = canOwnAudio ? true : audioEnabled;
 
-    if (isSelectedAudio) {
-      setAudioEnabled(true);
+    if (canOwnAudio && !audioEnabled) setAudioEnabled(true);
 
-      if (iosSingleAudioMode) {
-        applyIOSAudioOwner(cleaned, {
-          focused: cleaned === activeChannel,
-          volume: nextVolume,
-        });
-        return;
-      }
-
-      try {
-        player?.setVolume?.(nextVolume);
-        player?.setMuted?.(nextVolume <= 0);
-      } catch {
-        // Twitch's native controls remain available if the player is still loading.
-      }
-    }
+    reconcileViewerAudio(
+      { audioEnabled: nextAudioEnabled },
+      { captureCurrent: false },
+    );
   }
 
-  function listenToChannel(channel) {
+  const handleViewerStreamStatusChange = useCallback((channel, nextStatus) => {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
 
+    const normalized = String(nextStatus || '').toLowerCase();
+    let availability = '';
+
+    if (normalized === 'offline') availability = 'offline';
+    if (['live', 'playing', 'paused'].includes(normalized)) availability = 'live';
+    if (!availability) return;
+
+    setViewerLiveStatusByChannel((current) => {
+      if (current.get(cleaned) === availability) return current;
+      const next = new Map(current);
+      next.set(cleaned, availability);
+      return next;
+    });
+  }, []);
+
+  function listenToChannel(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
+
+    if (viewMode === 'solo') {
+      // Solo Focus owns audio until the viewer exits Focus. Listen choices are
+      // intentionally preserved underneath and are not rewritten here.
+      return;
+    }
+
     if (iosSingleAudioMode) {
       const manualOwner = [...listeningChannels][0] || '';
+      let nextListening;
 
       if (cleaned === activeChannel) {
-        // Focus always wins when its Listen control is tapped.
-        setListeningChannels(new Set());
-        setAudioEnabled(true);
-        applyIOSAudioOwner(cleaned, { focused: true });
-        return;
+        if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
+          focusedAudioVolumeRef.current = 1;
+          const player = playersRef.current.get(cleaned);
+          if (player) player.__squadViewPreferredVolume = 1;
+        }
+        nextListening = new Set();
+      } else if (manualOwner === cleaned) {
+        const player = playersRef.current.get(cleaned);
+        const currentVolume = clampFocusedAudioVolume(player?.__squadViewManualVolume, 1);
+        if (currentVolume <= 0) {
+          if (player) player.__squadViewManualVolume = 1;
+          nextListening = new Set([cleaned]);
+        } else {
+          nextListening = new Set();
+        }
+      } else {
+        const player = playersRef.current.get(cleaned);
+        if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
+          player.__squadViewManualVolume = 1;
+        }
+        nextListening = new Set([cleaned]);
       }
 
-      if (manualOwner === cleaned) {
-        // Tapping the current manual owner again hands audio back to Focus.
-        setListeningChannels(new Set());
-        setAudioEnabled(Boolean(activeChannel));
-        applyIOSAudioOwner(activeChannel, { focused: true });
-        return;
-      }
+      setListeningChannels(nextListening);
+      setAudioEnabled(Boolean(activeChannel));
 
-      // On iOS, Listen is a one-owner audio handoff. Both Twitch videos stay
-      // playing; only mute/volume ownership moves to the selected stream.
-      const player = playersRef.current.get(cleaned);
-      if (player && !Number.isFinite(Number(player.__squadViewManualVolume))) {
-        player.__squadViewManualVolume = 1;
-      }
-
-      setListeningChannels(new Set([cleaned]));
-      setAudioEnabled(true);
-      applyIOSAudioOwner(cleaned, { focused: false });
+      const nextPolicy = reconcileViewerAudio({
+        listeningChannels: nextListening,
+        audioEnabled: Boolean(activeChannel),
+      });
+      resumeAudioSelectedPlayers(nextPolicy);
       return;
     }
 
     if (cleaned === activeChannel) {
-      // Focus always implies Listen. A Listen tap on the focused stream should
-      // never toggle it off or disturb any other stream already in the mix.
-      setAudioEnabled(true);
-      try {
+      if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
+        focusedAudioVolumeRef.current = 1;
         const player = playersRef.current.get(cleaned);
-        const focusedVolume = rememberFocusedAudioVolume(cleaned);
-        player?.setVolume?.(focusedVolume);
-        player?.setMuted?.(focusedVolume <= 0);
-      } catch {
-        // Twitch's native controls remain available if the player is still loading.
+        if (player) player.__squadViewPreferredVolume = 1;
       }
+      setAudioEnabled(true);
+      const nextPolicy = reconcileViewerAudio({ audioEnabled: true });
+      resumeAudioSelectedPlayers(nextPolicy);
       return;
     }
 
     const nextListening = new Set(listeningChannels);
-    const wasListening = nextListening.has(cleaned);
-
-    if (wasListening) {
-      nextListening.delete(cleaned);
+    const player = playersRef.current.get(cleaned);
+    if (nextListening.has(cleaned)) {
+      const currentVolume = clampFocusedAudioVolume(player?.__squadViewManualVolume, 1);
+      if (currentVolume <= 0) {
+        if (player) player.__squadViewManualVolume = 1;
+      } else {
+        nextListening.delete(cleaned);
+      }
     } else {
       nextListening.add(cleaned);
+      if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
+        player.__squadViewManualVolume = 1;
+      }
     }
 
     setListeningChannels(nextListening);
     setAudioEnabled(true);
 
-    // Non-iOS platforms keep additive multi-stream Listen. The user gesture
-    // affects only the selected stream and never issues play() or pause().
-    const player = playersRef.current.get(cleaned);
-
-    try {
-      if (wasListening) {
-        player?.setVolume?.(0);
-        player?.setMuted?.(true);
-      } else {
-        const manualVolume = clampFocusedAudioVolume(
-          player?.__squadViewManualVolume,
-          1,
-        );
-
-        if (player) {
-          player.__squadViewManualVolume = manualVolume;
-        }
-
-        player?.setVolume?.(manualVolume);
-        player?.setMuted?.(manualVolume <= 0);
-      }
-    } catch {
-      // The React state effect will apply the same audio state once ready.
-    }
+    const nextPolicy = reconcileViewerAudio({
+      listeningChannels: nextListening,
+      audioEnabled: true,
+    });
+    resumeAudioSelectedPlayers(nextPolicy);
   }
 
   function rotateOther(direction) {
@@ -1516,15 +2394,6 @@ function SquadViewApp() {
     const nextIndex = (currentIndex + direction + candidates.length) % candidates.length;
     const nextChannel = candidates[nextIndex];
 
-    // Keep the replacement player mounted and muted. Avoid calling play again
-    // here because repeated play calls can replay Twitch's startup sequence.
-    try {
-      playersRef.current.get(nextChannel)?.setMuted?.(true);
-      playersRef.current.get(nextChannel)?.setVolume?.(0);
-    } catch {
-      // The player may still be initializing.
-    }
-
     setSlotChannels((current) => current.map((channel, index) => index === replaceIndex ? nextChannel : channel));
   }
 
@@ -1537,11 +2406,33 @@ function SquadViewApp() {
   }
 
   function openEditGroup(preferredSource = '') {
+    // Opening the manager is an overlay, not a playback transition. Use this
+    // explicit click to keep every currently visible Twitch embed playing.
+    playersRef.current.forEach((player) => {
+      const visible =
+        player?.__squadViewStateRef?.current?.visible ??
+        player?.__squadViewState?.visible ??
+        false;
+      if (!visible) return;
+      try {
+        if (player?.isPaused?.() === true) player.play?.();
+      } catch {
+        // Twitch controls remain available if the browser rejects play.
+      }
+    });
+
     const nextSource = preferredSource || (accountSession?.user?.id ? 'live' : 'favorites');
+    const currentRoster = [...channels];
+    managerOriginalChannelsRef.current = currentRoster;
+    setManagerDraftChannels(currentRoster);
+    setManagerClearedAll(false);
+    setManagerLiveChannels(new Set());
+    setManagerLiveStatus('idle');
     setManagerSource(nextSource);
     setManagerSearch('');
     setManualManagerChannel('');
     setPendingReplacement('');
+    setDraggedManagerChannel('');
     setShowEdit(true);
 
     if (accountSession?.user?.id) {
@@ -1556,7 +2447,7 @@ function SquadViewApp() {
     event?.preventDefault?.();
     const cleaned = cleanChannel(manualManagerChannel);
     if (!cleaned) return;
-    addChannelToViewer(cleaned);
+    addChannelToManagerDraft(cleaned);
     setManualManagerChannel('');
   }
 
@@ -1593,102 +2484,145 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
 
-    const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
-    const nextFocusedPlayer = playersRef.current.get(cleaned);
-
-    if (nextFocusedPlayer) {
-      nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
-    }
-
-    focusedAudioVolumeRef.current = inheritedFocusedVolume;
-    setActiveChannel(cleaned);
-    setAudioEnabled(true);
-
-    if (iosSingleAudioMode) {
-      // Focus implies Listen on iOS. Clear any temporary manual audio owner,
-      // mute the previous audio session first, then hand audio to the new Focus.
-      // No play()/pause() calls are allowed in this path.
-      setListeningChannels(new Set());
-      applyIOSAudioOwner(cleaned, {
-        focused: true,
-        volume: inheritedFocusedVolume,
-      });
+    if (viewMode === 'solo' && cleaned === activeChannel) {
+      returnToDual();
       return;
     }
 
-    const visibleNow = viewMode === 'dual'
-      ? (isDesktopGrid
-          ? getDesktopPageChannels(channels, desktopLeadChannel, desktopPage, youtubeCompanion ? 3 : 4)
-          : slotChannels)
-      : [cleaned];
+    // Preserve the exact pre-Focus audio context once. Cycling between focused
+    // streams while already in Solo must not overwrite the return target.
+    if (viewMode !== 'solo') {
+      focusReturnAudioRef.current = {
+        activeChannel,
+        audioEnabled,
+      };
+    }
 
-    playersRef.current.forEach((player, playerChannel) => {
-      try {
-        const isFocusedPlayer = playerChannel === cleaned;
-        const shouldListen =
-          isFocusedPlayer ||
-          (
-            visibleNow.includes(playerChannel) &&
-            listeningChannels.has(playerChannel)
-          );
+    const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+    const nextFocusedPlayer = playersRef.current.get(cleaned);
+    if (nextFocusedPlayer) {
+      nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+    }
+    focusedAudioVolumeRef.current = inheritedFocusedVolume;
 
-        if (isFocusedPlayer) {
-          player.__squadViewPreferredVolume = inheritedFocusedVolume;
-        }
+    // Focus is the intentional temporary audio override: one stream, one audio
+    // owner. listeningChannels stays untouched underneath so Grid can restore
+    // the user's mix exactly when Focus closes.
+    setActiveChannel(cleaned);
+    setAudioEnabled(true);
+    setChatChannel(cleaned);
+    setChatLayout('single');
+    setViewMode('solo');
 
-        const manualVolume = clampFocusedAudioVolume(
-          player.__squadViewManualVolume,
-          1,
-        );
+    try {
+      nextFocusedPlayer?.play?.();
+    } catch {
+      // Twitch native playback remains available if the browser rejects play.
+    }
 
-        const targetVolume = shouldListen
-          ? (isFocusedPlayer ? inheritedFocusedVolume : manualVolume)
-          : 0;
-
-        player.setVolume(targetVolume);
-        player.setMuted(!(shouldListen && targetVolume > 0));
-      } catch {
-        // The React state effect will apply the same audio state once ready.
-      }
+    reconcileViewerAudio({
+      activeChannel: cleaned,
+      audioEnabled: true,
+      mode: 'solo',
     });
   }
 
   function enterSolo(channel = activeChannel) {
+    focusChannel(channel);
+  }
+
+  function toggleChatForChannel(channel) {
     const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
 
-    if (cleaned && cleaned !== activeChannel) {
-      const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
-      const nextFocusedPlayer = playersRef.current.get(cleaned);
-
-      if (nextFocusedPlayer) {
-        nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
-      }
-
-      focusedAudioVolumeRef.current = inheritedFocusedVolume;
+    if (
+      (viewMode === 'chat' && chatChannel === cleaned) ||
+      (viewMode === 'solo' && activeChannel === cleaned)
+    ) {
+      returnToDual();
+      return;
     }
 
-    setActiveChannel(cleaned || activeChannel);
-    setViewMode('solo');
+    if (isDesktopGrid) {
+      // Wide desktop keeps Chat in a dedicated side rail. When the viewport is
+      // too narrow for that rail, Chat deliberately becomes the fourth grid
+      // tile so the remaining streams stay large enough to watch comfortably.
+      const threeStreamGridChat = !youtubeCompanion && channels.length === 3;
+      const chatUsesGridTile = !isWideDesktopChat || threeStreamGridChat;
+      const visibleLimit = youtubeCompanion
+        ? (chatUsesGridTile ? 2 : 3)
+        : (chatUsesGridTile ? 3 : 4);
+      const currentGridLimit = youtubeCompanion ? 3 : 4;
+      const currentVisible = viewMode === 'chat'
+        ? getDesktopChatPageChannels(
+            channels,
+            channels.includes(chatChannel) ? chatChannel : cleaned,
+            desktopChatPinnedSlot,
+            desktopPage,
+            visibleLimit,
+            desktopChatRotationChannels,
+          )
+        : getDesktopPageChannels(
+            channels,
+            desktopLeadChannel,
+            desktopPage,
+            currentGridLimit,
+          );
+      const clickedSlot = Math.max(0, currentVisible.indexOf(cleaned));
+      const nextPinnedSlot = Math.min(clickedSlot, visibleLimit - 1);
+      const desiredPageOthers = currentVisible.filter((item) => item !== cleaned);
+      const otherPerPage = Math.max(1, visibleLimit - 1);
+      const pageStart = Math.max(0, desktopPage) * otherPerPage;
+      const remainingRotation = channels.filter(
+        (item) => item !== cleaned && !desiredPageOthers.includes(item),
+      );
+      const nextRotation = [...remainingRotation];
+      nextRotation.splice(Math.min(pageStart, nextRotation.length), 0, ...desiredPageOthers);
+      const nextVisibleChannels = getDesktopChatPageChannels(
+        channels,
+        cleaned,
+        nextPinnedSlot,
+        desktopPage,
+        visibleLimit,
+        nextRotation,
+      );
+
+      resumeViewerChannelsFromGesture(nextVisibleChannels);
+      setDesktopChatRotationChannels(nextRotation);
+      setDesktopChatPinnedSlot(nextPinnedSlot);
+      setChatChannel(cleaned);
+      setChatLayout('grid');
+      setViewMode('chat');
+      return;
+    }
+
+    // Mobile Chat is one displayed Twitch stream plus that same stream's chat.
+    // The mobile single-owner audio policy follows the displayed stream.
+    setChatChannel(cleaned);
+    setActiveChannel(cleaned);
+    setChatLayout('single');
+    setViewMode('chat');
+
+    reconcileViewerAudio({
+      activeChannel: cleaned,
+      mode: iosSingleAudioMode ? 'mobile-chat' : 'mix',
+    });
   }
 
   function enterChatMode() {
-    if (viewMode === 'chat') return;
-
-    rememberFocusedAudioVolume(activeChannel);
-
-    // Desktop grid chat keeps the current page in place and replaces its fourth
-    // tile with chat. Solo -> Chat (and all mobile Chat views) stays one stream
-    // plus that stream's chat.
-    setChatLayout(isDesktopGrid && viewMode === 'dual' && channels.length > 1 ? 'grid' : 'single');
-    setViewMode('chat');
+    toggleChatForChannel(chatChannel || activeChannel);
   }
 
   function returnToDual() {
-    rememberFocusedAudioVolume(activeChannel);
+    const leavingSolo = viewMode === 'solo';
+    const returnAudio = leavingSolo ? focusReturnAudioRef.current : null;
+    const restoredActive = returnAudio?.activeChannel && channels.includes(returnAudio.activeChannel)
+      ? returnAudio.activeChannel
+      : activeChannel;
+    const restoredAudioEnabled = leavingSolo
+      ? Boolean(returnAudio?.audioEnabled)
+      : audioEnabled;
 
-    // Returning from Chat is an explicit viewer gesture. Resume the streams that
-    // are about to be visible before React changes the layout so Twitch does not
-    // leave them waiting for a second manual Play click.
     const desktopResumeLimit = youtubeCompanion ? 3 : 4;
     const resumeChannels = isDesktopGrid
       ? getDesktopPageChannels(
@@ -1698,7 +2632,7 @@ function SquadViewApp() {
           desktopResumeLimit,
         )
       : youtubeCompanion
-        ? [activeChannel].filter(Boolean)
+        ? [restoredActive].filter(Boolean)
         : (slotChannels.length ? slotChannels : channels.slice(0, 2));
 
     resumeChannels.forEach((channel) => {
@@ -1709,25 +2643,29 @@ function SquadViewApp() {
       }
     });
 
-    setViewMode('dual');
-    setSlotChannels((current) => {
-      const nextSlots = current.includes(activeChannel)
-        ? current
-        : [activeChannel, channels.find((channel) => channel !== activeChannel)].filter(Boolean);
-
-      nextSlots.forEach((channel) => {
-        try {
-          if (channel !== activeChannel) {
-            playersRef.current.get(channel)?.setMuted?.(true);
-            playersRef.current.get(channel)?.setVolume?.(0);
-          }
-        } catch {
-          // Twitch's native controls remain available.
-        }
+    if (leavingSolo) {
+      const restoredPolicy = makeAudioPolicy({
+        activeChannel: restoredActive,
+        audioEnabled: restoredAudioEnabled,
+        mode: 'mix',
       });
 
-      return nextSlots;
-    });
+      // A manually listened stream may have been paused while Solo was active.
+      // Resume selected streams under this explicit click before restoring their
+      // volume so browser autoplay rules are not asked to create a new gesture.
+      resumeAudioSelectedPlayers(restoredPolicy);
+      reconcileViewerAudio(restoredPolicy, { captureCurrent: true });
+      focusReturnAudioRef.current = null;
+    }
+
+    if (restoredActive !== activeChannel) setActiveChannel(restoredActive);
+    if (restoredAudioEnabled !== audioEnabled) setAudioEnabled(restoredAudioEnabled);
+    setViewMode('dual');
+    setChatChannel('');
+    setChatLayout('single');
+    setSlotChannels((current) => current.includes(restoredActive)
+      ? current
+      : [restoredActive, channels.find((channel) => channel !== restoredActive)].filter(Boolean));
   }
 
   function saveFavoriteStreamers(nextStreamers) {
@@ -1969,7 +2907,34 @@ function SquadViewApp() {
   function toggleFavoriteStreamer(channel) {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
-    const next = favoriteStreamers.includes(cleaned)
+
+    const alreadyFavorite = favoriteStreamers.includes(cleaned);
+    if (!alreadyFavorite && favoriteStreamers.length >= favoriteStreamerLimit) {
+      setFavoriteLiveNotice({
+        kind: 'message',
+        message: entitlements.isPremium
+          ? `You can keep up to ${favoriteStreamerLimit} Favorite streamers on this plan.`
+          : `Free SquadView includes ${favoriteStreamerLimit} Favorites. Remove one to add another.`,
+        createdAt: Date.now(),
+      });
+      return;
+    }
+
+    // If someone is already present in Twitch's current Following Live result,
+    // promote them into the Favorite-live set immediately. This keeps the card
+    // visible and moves it to the top the instant the heart is pressed instead
+    // of waiting for the next background Favorite status poll.
+    setLiveFavoriteStreamers((current) => {
+      const nextLive = new Set(current);
+      if (alreadyFavorite) {
+        nextLive.delete(cleaned);
+      } else if (followedLiveLogins.has(cleaned)) {
+        nextLive.add(cleaned);
+      }
+      return nextLive;
+    });
+
+    const next = alreadyFavorite
       ? favoriteStreamers.filter((item) => item !== cleaned)
       : [cleaned, ...favoriteStreamers];
     saveFavoriteStreamers(next);
@@ -1990,9 +2955,17 @@ function SquadViewApp() {
     saveFavoriteStreamers(favoriteStreamers.filter((item) => item !== channel));
   }
 
+  function suppressFavoriteAutoFill(channel) {
+    const cleaned = cleanChannel(channel);
+    if (cleaned && favoriteStreamers.includes(cleaned)) {
+      autoFillSuppressedFavoritesRef.current.add(cleaned);
+    }
+  }
+
   function removeFromBuildList(channel) {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
+    suppressFavoriteAutoFill(cleaned);
     setInputs((current) => compactViewerInputs(
       current.filter((item) => cleanChannel(item) !== cleaned),
       viewerStreamLimit,
@@ -2000,10 +2973,120 @@ function SquadViewApp() {
   }
 
   function removeBuildInputAt(indexToRemove) {
-    setInputs((current) => compactViewerInputs(
-      current.filter((_, index) => index !== indexToRemove),
-      viewerStreamLimit,
-    ));
+    setInputs((current) => {
+      suppressFavoriteAutoFill(current[indexToRemove]);
+      return compactViewerInputs(
+        current.filter((_, index) => index !== indexToRemove),
+        viewerStreamLimit,
+      );
+    });
+  }
+
+  function clearAllBuildStreams() {
+    validInputs.forEach(suppressFavoriteAutoFill);
+    setInputs(padViewerInputs([], viewerStreamLimit));
+    saveLastChannels([]);
+  }
+
+  function clearAllViewerStreams() {
+    if (!managerDraftChannels.length) return;
+    setShowClearAllConfirm(true);
+  }
+
+  function confirmClearAllViewerStreams() {
+    const previousDraftCount = managerDraftChannels.length;
+    managerDraftChannels.forEach(suppressFavoriteAutoFill);
+    setShowClearAllConfirm(false);
+    setManagerDraftChannels([]);
+    setManagerClearedAll(true);
+    setPendingReplacement('');
+    trackEvent('stream_manager_clear_all_draft', {
+      previous_stream_count_bucket: getStreamCountBucket(previousDraftCount),
+    });
+  }
+
+  function removeOfflineManagerStreams() {
+    if (!managerOfflineChannels.length) return;
+
+    const offline = new Set(managerOfflineChannels);
+    setManagerDraftChannels((current) => current.filter((channel) => !offline.has(channel)));
+    setPendingReplacement('');
+    trackEvent('stream_manager_remove_offline', {
+      removed_count_bucket: getStreamCountBucket(managerOfflineChannels.length),
+    });
+  }
+
+  function closeManageStreams() {
+    setShowEdit(false);
+    setShowClearAllConfirm(false);
+    setPendingReplacement('');
+    setDraggedManagerChannel('');
+    setManagerDraftChannels([]);
+    setManagerClearedAll(false);
+    setManagerLiveChannels(new Set());
+    setManagerLiveStatus('idle');
+  }
+
+  function finishManageStreams() {
+    const nextChannels = [...new Set(managerDraftChannels.map(cleanChannel).filter(Boolean))]
+      .slice(0, viewerStreamLimit);
+
+    if (!nextChannels.length) return;
+
+    const originalChannels = [...managerOriginalChannelsRef.current];
+    const originalSet = new Set(originalChannels);
+    const addedCount = nextChannels.filter((channel) => !originalSet.has(channel)).length;
+    const retainedOriginalCount = nextChannels.filter((channel) => originalSet.has(channel)).length;
+    const fullRebuild = Boolean(
+      managerClearedAll
+      || (originalChannels.length && retainedOriginalCount === 0),
+    );
+    const rosterChanged = nextChannels.length !== originalChannels.length
+      || nextChannels.some((channel, index) => channel !== originalChannels[index]);
+    originalChannels
+      .filter((channel) => !nextChannels.includes(channel))
+      .forEach(suppressFavoriteAutoFill);
+    const shouldPlayCommercial = Boolean(
+      rosterChanged
+      && accountReady
+      && entitlements.squadViewAds
+      && isLoadingAdConfigured()
+      && (fullRebuild || addedCount >= 4)
+    );
+    const adSource = fullRebuild ? 'manager_rebuild' : 'manager_bulk_add';
+
+    setShowEdit(false);
+    setShowClearAllConfirm(false);
+    setPendingReplacement('');
+    setDraggedManagerChannel('');
+    setManagerDraftChannels([]);
+    setManagerClearedAll(false);
+    setManagerLiveChannels(new Set());
+    setManagerLiveStatus('idle');
+
+    if (!rosterChanged) return;
+
+    trackEvent('stream_manager_changes_committed', {
+      stream_count_bucket: getStreamCountBucket(nextChannels.length),
+      added_count_bucket: getStreamCountBucket(addedCount),
+      full_rebuild: fullRebuild,
+      sponsor_break: shouldPlayCommercial,
+    });
+
+    if (shouldPlayCommercial) {
+      queueLoadingAd({
+        kind: 'manager_draft',
+        channels: nextChannels,
+        source: adSource,
+      });
+      return;
+    }
+
+    commitViewerChannels(nextChannels, {
+      preserveDesktopPage: true,
+      preferredDesktopLead: desktopLeadChannel,
+      preserveAudioMix: true,
+    });
   }
 
   function openLandingTab(tab) {
@@ -2019,21 +3102,43 @@ function SquadViewApp() {
       preferredActive = activeChannel,
       preserveDesktopPage = false,
       preferredDesktopLead = desktopLeadChannel,
+      preserveAudioMix = false,
+      keepManagerOpen = false,
     } = {},
   ) {
     const unique = [...new Set((nextChannels || []).map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit);
-    const previousCount = channels.length;
 
     if (!unique.length) {
+      reconcileViewerAudio({
+        channels: [],
+        activeChannel: '',
+        listeningChannels: new Set(),
+        audioEnabled: false,
+        mode: 'dual',
+      }, { captureCurrent: false });
+
       setChannels([]);
-      setInputs(['', '', '', '', '', '', '', '']);
+      setInputs(padViewerInputs([], viewerStreamLimit));
       setActiveChannel('');
+      setChatChannel('');
       setListeningChannels(new Set());
+      setAudibleChannels(new Set());
       setSlotChannels([]);
       setAudioEnabled(false);
       setDesktopPage(0);
       setDesktopLeadChannel('');
+      setDesktopChatRotationChannels([]);
+      setDesktopChatPinnedSlot(0);
+      setViewMode('dual');
+      setChatLayout('single');
+      setPendingReplacement('');
       saveLastChannels([]);
+
+      if (keepManagerOpen) {
+        setShowEdit(true);
+        return;
+      }
+
       setShowEdit(false);
       exitViewer('last_stream_removed');
       return;
@@ -2060,18 +3165,56 @@ function SquadViewApp() {
       ...unique.filter((channel) => channel !== nextActive && !retainedSlots.includes(channel)),
     ].slice(0, 2);
 
+    // Removing one Twitch tile must not tear down the remaining audio mix.
+    // Snapshot current levels first, prune only the removed channel from Listen,
+    // then immediately publish the next policy before React reflows the grid.
+    let preservedAudioPolicy = null;
+    if (preserveAudioMix) {
+      snapshotAudioLevels(audioPolicyRef.current);
+      const nextListening = new Set(
+        [...listeningChannels].filter((channel) => unique.includes(channel)),
+      );
+      const nextAudioEnabled = Boolean(audioEnabled && (nextActive || nextListening.size));
+
+      setListeningChannels(nextListening);
+      setAudioEnabled(nextAudioEnabled);
+
+      preservedAudioPolicy = {
+        channels: [...unique],
+        activeChannel: nextActive,
+        listeningChannels: nextListening,
+        audioEnabled: nextAudioEnabled,
+        iosSingleAudioMode,
+        mode: viewMode === 'solo' ? 'solo' : audioModeKey,
+      };
+      audioPolicyRef.current = preservedAudioPolicy;
+      lastAppliedAudioPolicyRef.current = preservedAudioPolicy;
+    }
+
+    const nextChatChannel = unique.includes(chatChannel) ? chatChannel : nextActive;
+
     setChannels(unique);
     setInputs(padViewerInputs(unique, viewerStreamLimit));
     setActiveChannel(nextActive);
+    setChatChannel(nextChatChannel);
+    setDesktopChatRotationChannels(unique.filter((channel) => channel !== nextChatChannel));
     setSlotChannels(nextSlots);
+
+    if (preservedAudioPolicy) {
+      playersRef.current.forEach((player, channel) => {
+        if (!unique.includes(channel)) return;
+        applyAudioPolicyToPlayer(channel, player, preservedAudioPolicy);
+      });
+      resumeAudioSelectedPlayers(preservedAudioPolicy);
+    }
 
     if (preserveDesktopPage && isDesktopGrid) {
       const desktopGridChat = viewMode === 'chat' && chatLayout === 'grid';
       const youtubeVisibleForPaging = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
       const visibleTwitchLimit = youtubeVisibleForPaging ? 3 : 4;
-      const otherPerPage = Math.max(1, visibleTwitchLimit - 1);
-      const otherCount = Math.max(0, unique.length - 1);
-      const nextPageCount = Math.max(1, Math.ceil(otherCount / otherPerPage));
+      const nextPageCount = desktopGridChat
+        ? Math.max(1, Math.ceil(Math.max(0, unique.length - 1) / Math.max(1, visibleTwitchLimit - 1)))
+        : Math.max(1, Math.ceil(unique.length / Math.max(1, visibleTwitchLimit)));
       const requestedLead = cleanChannel(preferredDesktopLead);
       const nextLead = unique.includes(requestedLead)
         ? requestedLead
@@ -2089,30 +3232,20 @@ function SquadViewApp() {
 
     saveLastChannels(unique);
 
-    // Four desktop streams edited down to three should not leave a dead tile.
-    // Reuse that fourth quadrant for the focused stream's chat.
-    if (isDesktopGrid && previousCount >= 4 && unique.length === 3 && viewMode === 'dual') {
-      setChatLayout('grid');
-      setViewMode('chat');
-    }
-
-    // If the user adds a fourth stream back to the automatic three plus chat
-    // arrangement, restore the full grid automatically.
-    if (
-      isDesktopGrid &&
-      previousCount === 3 &&
-      unique.length >= 4 &&
-      viewMode === 'chat' &&
-      chatLayout === 'grid'
-    ) {
-      setViewMode('dual');
-      setChatLayout('single');
-    }
   }
 
   function removeChannelFromGroup(channelToRemove) {
     const cleaned = cleanChannel(channelToRemove);
+
+    // A manual Favorite removal means "not this creator right now," not
+    // "disable Auto-fill." Suppress only that Favorite, then allow another
+    // eligible live Favorite to use the open slot. Non-Favorite removals can be
+    // filled immediately as well when Auto-fill is enabled.
+    suppressFavoriteAutoFill(cleaned);
     const remaining = channels.filter((channel) => channel !== cleaned);
+    const nextChannels = reconcileOpenSlotsWithLiveFavorites(remaining, {
+      excludedChannels: [cleaned],
+    });
 
     const desktopGridChat = viewMode === 'chat' && isDesktopGrid && chatLayout === 'grid';
     const youtubeVisibleForPaging = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
@@ -2124,23 +3257,17 @@ function SquadViewApp() {
       (channel) => channel !== cleaned && remaining.includes(channel),
     );
     const nextActive = cleaned === activeChannel
-      ? remainingOnCurrentPage[0] || remaining[0]
+      ? remainingOnCurrentPage[0] || nextChannels[0]
       : activeChannel;
     const nextDesktopLead = cleaned === desktopLeadChannel
-      ? remainingOnCurrentPage[0] || nextActive || remaining[0]
+      ? remainingOnCurrentPage[0] || nextActive || nextChannels[0]
       : desktopLeadChannel;
 
-    try {
-      playersRef.current.get(cleaned)?.setMuted?.(true);
-      playersRef.current.get(cleaned)?.setVolume?.(0);
-    } catch {
-      // The player may already be unmounting.
-    }
-
-    commitViewerChannels(remaining, {
+    commitViewerChannels(nextChannels, {
       preferredActive: nextActive,
       preserveDesktopPage: true,
       preferredDesktopLead: nextDesktopLead,
+      preserveAudioMix: true,
     });
   }
 
@@ -2199,6 +3326,75 @@ function SquadViewApp() {
     reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, dragged);
     commitViewerChannels(reordered);
+    setDraggedManagerChannel('');
+  }
+
+  function removeChannelFromManagerDraft(channelToRemove) {
+    const cleaned = cleanChannel(channelToRemove);
+    if (!cleaned) return;
+    suppressFavoriteAutoFill(cleaned);
+    setManagerDraftChannels((current) => {
+      const remaining = current.filter((channel) => channel !== cleaned);
+      if (managerClearedAll) return remaining;
+      return reconcileOpenSlotsWithLiveFavorites(remaining, { excludedChannels: [cleaned] });
+    });
+    if (pendingReplacement === cleaned) setPendingReplacement('');
+  }
+
+  function addChannelToManagerDraft(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || managerDraftChannels.includes(cleaned)) return;
+
+    if (managerDraftChannels.length >= viewerStreamLimit) {
+      setPendingReplacement(cleaned);
+      return;
+    }
+
+    setManagerDraftChannels((current) => [...current, cleaned]);
+  }
+
+  function replaceChannelInManagerDraft(channelToReplace, replacementChannel = pendingReplacement) {
+    const oldChannel = cleanChannel(channelToReplace);
+    const replacement = cleanChannel(replacementChannel);
+    if (!oldChannel || !replacement || managerDraftChannels.includes(replacement)) return;
+
+    setManagerDraftChannels((current) => current.map(
+      (channel) => channel === oldChannel ? replacement : channel,
+    ));
+    setPendingReplacement('');
+  }
+
+  function moveManagerDraftChannel(channel, direction) {
+    const cleaned = cleanChannel(channel);
+    const currentIndex = managerDraftChannels.indexOf(cleaned);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= managerDraftChannels.length) return;
+
+    const reordered = [...managerDraftChannels];
+    [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+    setManagerDraftChannels(reordered);
+  }
+
+  function dropManagerDraftChannel(targetChannel) {
+    const dragged = cleanChannel(draggedManagerChannel);
+    const target = cleanChannel(targetChannel);
+
+    if (!dragged || !target || dragged === target) {
+      setDraggedManagerChannel('');
+      return;
+    }
+
+    const reordered = [...managerDraftChannels];
+    const fromIndex = reordered.indexOf(dragged);
+    const toIndex = reordered.indexOf(target);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggedManagerChannel('');
+      return;
+    }
+
+    reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, dragged);
+    setManagerDraftChannels(reordered);
     setDraggedManagerChannel('');
   }
 
@@ -2377,6 +3573,38 @@ function SquadViewApp() {
   }
 
 
+  function renderFavoriteLiveNotice() {
+    if (!favoriteLiveNotice) return null;
+    const isLiveNotice = favoriteLiveNotice.kind === 'favorite_live';
+    const channelsGoingLive = Array.isArray(favoriteLiveNotice.channels) ? favoriteLiveNotice.channels : [];
+    const primaryChannel = channelsGoingLive[0] || '';
+    const message = favoriteLiveNotice.kind === 'message'
+      ? favoriteLiveNotice.message
+      : channelsGoingLive.length > 1
+        ? `${channelsGoingLive.length} Favorites just went live.`
+        : `${primaryChannel} is live now.`;
+
+    return (
+      <div className="favorite-live-toast" role="status" aria-live="polite">
+        <div>
+          <span>{isLiveNotice ? 'Favorite live' : 'SquadView'}</span>
+          <strong>{message}</strong>
+          {isLiveNotice && autoFillFavorites && <small>Auto-fill will use an open slot without replacing a live stream.</small>}
+        </div>
+        {isLiveNotice && (
+          <button type="button" onClick={() => {
+            setFavoriteLiveNotice(null);
+            if (screen === 'viewer') openEditGroup('live');
+            else { setFollowingView('live'); openLandingTab('following'); }
+          }}>
+            {screen === 'viewer' ? 'Manage' : 'View'}
+          </button>
+        )}
+        <button type="button" className="favorite-live-toast-dismiss" onClick={() => setFavoriteLiveNotice(null)} aria-label="Dismiss Favorite live alert">×</button>
+      </div>
+    );
+  }
+
   if (screen === 'shared_pending') {
     return (
       <main className="loading-screen shared-loading-screen" aria-live="polite">
@@ -2406,9 +3634,10 @@ function SquadViewApp() {
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
 
-    // Desktop page order is anchored separately from activeChannel. Focusing a
-    // stream only changes audio/highlighting. When the user changes pages, the
-    // currently focused stream becomes the first tile on the destination page.
+    // Desktop page order is anchored separately from activeChannel. In normal
+    // Grid the saved desktop lead stays pinned. In Grid + Chat, the channel that
+    // owns the open chat becomes the pinned Twitch tile while only the remaining
+    // streams rotate as the user changes pages.
     const desktopGridChat = viewMode === 'chat' && isDesktopGrid && chatLayout === 'grid';
     const desktopSingleChat = viewMode === 'chat' && isDesktopGrid && !desktopGridChat;
     // Keep the Companion mounted across viewer modes. Desktop Grid + Chat
@@ -2417,22 +3646,49 @@ function SquadViewApp() {
     // Chat temporarily hides/pauses YouTube and gives that lower panel to chat.
     const mobileYoutubeDual = Boolean(youtubeCompanion) && !isDesktopGrid && viewMode === 'dual';
     const youtubeVisible = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
-    // Grid + Chat visually replaces quadrant four, but the displaced Twitch
-    // player stays live underneath the chat tile. Keeping the same Twitch page
-    // size as Dual prevents a layout toggle from pausing embeds and forcing the
-    // viewer to press Play again when Chat closes.
-    const desktopVisibleTwitchLimit = youtubeVisible ? 3 : 4;
-    const desktopOtherPerPage = Math.max(1, desktopVisibleTwitchLimit - 1);
-    const desktopOtherCount = Math.max(0, channels.length - 1);
-    const desktopPageCount = Math.max(1, Math.ceil(desktopOtherCount / desktopOtherPerPage));
-    const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
-    const desktopChannels = getDesktopPageChannels(
-      channels,
-      desktopLeadChannel,
-      desktopPageForRender,
-      desktopVisibleTwitchLimit,
+    // Chat uses the fourth 2x2 quadrant in two cases: the viewport is too
+    // narrow for a comfortable side rail, or exactly three Twitch streams are
+    // selected. With three streams the fourth quadrant is already empty, so
+    // keeping Chat there preserves the natural 2x2 composition instead of
+    // squeezing all three streams sideways for an unnecessary rail.
+    const narrowDesktopGridChat = desktopGridChat && !isWideDesktopChat;
+    const threeStreamDesktopChat = desktopGridChat && !youtubeVisible && channels.length === 3;
+    const desktopChatUsesGridTile = narrowDesktopGridChat || threeStreamDesktopChat;
+    const showDesktopChatRail = isDesktopGrid && (
+      viewMode === 'solo' ||
+      (viewMode === 'chat' && !desktopChatUsesGridTile)
     );
-    const desktopChatChannels = desktopGridChat ? desktopChannels : [activeChannel];
+    // Preserve the responsive capacity rule from Phase 1.1, then specialize the
+    // wide three-stream case so the otherwise-empty fourth quadrant becomes Chat.
+    const responsiveDesktopVisibleTwitchLimit = youtubeVisible
+      ? (narrowDesktopGridChat ? 2 : 3)
+      : (narrowDesktopGridChat ? 3 : 4);
+    const desktopVisibleTwitchLimit = threeStreamDesktopChat
+      ? 3
+      : responsiveDesktopVisibleTwitchLimit;
+    const desktopPageCount = desktopGridChat
+      ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
+      : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
+    const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
+    const activeChatChannel = channels.includes(chatChannel) ? chatChannel : activeChannel;
+    const desktopPinnedChannel = desktopGridChat
+      ? activeChatChannel
+      : desktopLeadChannel;
+    const desktopChannels = desktopGridChat
+      ? getDesktopChatPageChannels(
+          channels,
+          desktopPinnedChannel,
+          desktopChatPinnedSlot,
+          desktopPageForRender,
+          desktopVisibleTwitchLimit,
+          desktopChatRotationChannels,
+        )
+      : getDesktopPageChannels(
+          channels,
+          desktopPinnedChannel,
+          desktopPageForRender,
+          desktopVisibleTwitchLimit,
+        );
     const visibleChannels = viewMode === 'dual'
       ? (isDesktopGrid
           ? desktopChannels
@@ -2440,7 +3696,7 @@ function SquadViewApp() {
             ? [activeChannel]
             : dualChannels)
       : viewMode === 'chat'
-        ? (isDesktopGrid ? desktopChatChannels : [activeChannel])
+        ? (isDesktopGrid ? desktopChannels : [activeChatChannel])
         : [activeChannel];
 
     // Only instantiate Twitch embeds as the user actually visits channels.
@@ -2461,11 +3717,9 @@ function SquadViewApp() {
       ? (iosManualAudioOwner || activeChannel)
       : '';
 
-    const desktopTileCount = desktopGridChat
-      ? 4
-      : desktopSingleChat
-        ? 2
-        : visibleChannels.length + (youtubeVisible ? 1 : 0);
+    const desktopTileCount = viewMode === 'solo'
+      ? 1
+      : visibleChannels.length + (youtubeVisible ? 1 : 0);
 
     // In the YouTube Companion desktop grid, slot 1 is always the pinned Twitch
     // lead/focused stream, slot 2 is always YouTube, and only slots 3-4 rotate
@@ -2481,17 +3735,7 @@ function SquadViewApp() {
       return visibleIndex + 1;
     };
 
-    const activeBaseTile = desktopGridChat
-      ? baseTwitchTileOrder(activeChannel)
-      : undefined;
-
-    const twitchTileOrder = (channel) => {
-      const baseTile = baseTwitchTileOrder(channel);
-      if (!desktopGridChat || activeBaseTile !== 4) return baseTile;
-      if (channel === activeChannel) return 3;
-      if (baseTile === 3) return 4;
-      return baseTile;
-    };
+    const twitchTileOrder = (channel) => baseTwitchTileOrder(channel);
 
     const twitchGridPosition = (channel) => {
       if (!desktopGridChat) return {};
@@ -2500,7 +3744,7 @@ function SquadViewApp() {
       return {
         gridColumn: tile % 2 === 0 ? 2 : 1,
         gridRow: tile <= 2 ? 1 : 2,
-        chatCovered: tile === 4,
+        chatCovered: false,
       };
     };
 
@@ -2514,24 +3758,13 @@ function SquadViewApp() {
       showYoutubeCompanion ||
       showSharedArrival;
 
-    const referralPromoCandidates = visibleChannels
-      .filter((channel) => channel !== activeChannel)
-      .map((channel) => ({
-        channel,
-        tile: Number(twitchTileOrder(channel)) || (visibleChannels.indexOf(channel) + 1),
-      }))
-      .sort((first, second) => second.tile - first.tile);
-
-    const referralPromoTargetChannel =
+    const referralPromoVisible = Boolean(
       referralPromoReady &&
       !referralPromoSuppressed &&
       !entitlements.isPremium &&
       !referralPromoBlocked &&
       visibleChannels.length >= 2
-        ? (referralPromoCandidates[0]?.channel || '')
-        : '';
-
-    const referralPromoVisible = Boolean(referralPromoTargetChannel);
+    );
     const referralPromoCopy = getReferralPromoCopy(
       referralSummary,
       Boolean(accountSession?.user?.id),
@@ -2545,8 +3778,29 @@ function SquadViewApp() {
     const moveDesktopPage = (direction) => {
       if (desktopPageCount <= 1) return;
       rememberFocusedAudioVolume(activeChannel);
-      setDesktopLeadChannel(activeChannel);
-      setDesktopPage((current) => (current + direction + desktopPageCount) % desktopPageCount);
+
+      const nextPage = (desktopPageForRender + direction + desktopPageCount) % desktopPageCount;
+      const nextVisibleChannels = desktopGridChat
+        ? getDesktopChatPageChannels(
+            channels,
+            desktopPinnedChannel,
+            desktopChatPinnedSlot,
+            nextPage,
+            desktopVisibleTwitchLimit,
+            desktopChatRotationChannels,
+          )
+        : getDesktopPageChannels(
+            channels,
+            desktopLeadChannel,
+            nextPage,
+            desktopVisibleTwitchLimit,
+          );
+
+      // Page arrows are explicit user gestures. Resume already-mounted incoming
+      // embeds here; TwitchPlayer still owns the off-page pause policy after
+      // the render completes.
+      resumeViewerChannelsFromGesture(nextVisibleChannels);
+      setDesktopPage(nextPage);
     };
     const previousDesktopPage = () => moveDesktopPage(-1);
     const nextDesktopPage = () => moveDesktopPage(1);
@@ -2557,7 +3811,7 @@ function SquadViewApp() {
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Solo focus'}</span>
+            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
           </div>
           <div className="header-actions">
             <button
@@ -2585,22 +3839,69 @@ function SquadViewApp() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
+            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} chat-dock-${chatDockSide}`}>
+              {isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
+                <div className="focus-stream-selector" aria-label="Choose focused stream">
+                  {channels.map((channel) => (
+                    <button
+                      type="button"
+                      key={channel}
+                      className={channel === activeChannel ? 'is-current' : ''}
+                      onClick={() => channel !== activeChannel && focusChannel(channel)}
+                      title={`Focus ${channel}`}
+                    >
+                      {favoriteStreamers.includes(channel) && <FilledHeart />}
+                      <span>{channel}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {!isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
+                <div className="mobile-focus-stream-selector" aria-label="Choose focused stream">
+                  {channels.map((channel) => (
+                    <button
+                      type="button"
+                      key={channel}
+                      className={channel === activeChannel ? 'is-current' : ''}
+                      onClick={() => channel !== activeChannel && focusChannel(channel)}
+                      title={`Focus ${channel}`}
+                    >
+                      <span className="mobile-focus-avatar" aria-hidden="true">
+                        {channel.slice(0, 1).toUpperCase()}
+                      </span>
+                      {favoriteStreamers.includes(channel) && <FilledHeart />}
+                      <span>{channel}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
               <div className="stream-stage-players">
                 {mountedChannels.map((channel) => (
                   <TwitchPlayer
                     key={channel}
                     channel={channel}
-                    visible={visibleChannels.includes(channel) && channel !== referralPromoTargetChannel}
-                    visibleCount={Math.max(1, visibleChannels.length - (referralPromoVisible ? 1 : 0))}
+                    visible={visibleChannels.includes(channel)}
+                    visibleCount={Math.max(1, visibleChannels.length)}
                     active={activeChannel === channel}
+                    highlightActive={
+                      desktopGridChat
+                        ? activeChatChannel === channel
+                        : activeChannel === channel
+                    }
+                    focusActive={viewMode === 'solo' && activeChannel === channel}
                     audioSelected={
                       iosSingleAudioMode
                         ? selectedAudioOwner === channel
-                        : activeChannel === channel || listeningChannels.has(channel)
+                        : viewMode === 'solo'
+                          ? activeChannel === channel
+                          : activeChannel === channel || listeningChannels.has(channel)
                     }
                     audioEnabled={audioEnabled}
+                    audioAudible={audibleChannels.has(channel)}
                     preserveAudibleSession={iosSingleAudioMode}
+                    allowBackgroundAudio={false}
                     focusVolume={focusedAudioVolumeRef.current}
                     audioVolume={
                       activeChannel === channel
@@ -2613,6 +3914,14 @@ function SquadViewApp() {
                     onVolumeChange={(value) => setStreamVolume(channel, value)}
                     onListen={() => listenToChannel(channel)}
                     onFocus={() => focusChannel(channel)}
+                    onChat={() => toggleChatForChannel(channel)}
+                    onAudioReconcile={reconcilePlayerAudio}
+                    onLiveAudioStateChange={syncNativeTwitchAudioIntent}
+                    onStreamStatusChange={handleViewerStreamStatusChange}
+                    chatActive={
+                      (viewMode === 'chat' && activeChatChannel === channel) ||
+                      (viewMode === 'solo' && activeChannel === channel)
+                    }
                     isTwitchFollowed={
                       followedLiveLogins.has(channel) ||
                       followedChannelLogins.has(channel)
@@ -2628,12 +3937,17 @@ function SquadViewApp() {
                   />
                 ))}
 
+                {desktopChatUsesGridTile && activeChatChannel && (
+                  <section className="desktop-chat-grid-tile" aria-label={`Chat with ${activeChatChannel}`}>
+                    <ChatPanel channel={activeChatChannel} />
+                  </section>
+                )}
+
                 {referralPromoVisible && (
                   <section
-                    className="referral-promo-tile"
+                    className="referral-promo-tile viewer-rewards-popover"
                     role="dialog"
                     aria-label="SquadView Premium referral rewards"
-                    style={{ order: Number(twitchTileOrder(referralPromoTargetChannel)) || visibleChannels.indexOf(referralPromoTargetChannel) + 1 }}
                   >
                     <button
                       type="button"
@@ -2695,7 +4009,7 @@ function SquadViewApp() {
                   />
                 )}
 
-                {isDesktopGrid && viewMode === 'dual' && !referralPromoVisible && channels.length < viewerStreamLimit && visibleChannels.length < (youtubeVisible ? 3 : 4) && (
+                {isDesktopGrid && viewMode === 'dual' && channels.length < viewerStreamLimit && visibleChannels.length < (youtubeVisible ? 3 : 4) && (
                   <button
                     type="button"
                     className="stream-add-tile"
@@ -2704,8 +4018,8 @@ function SquadViewApp() {
                     <span>+</span>
                     <strong>Add a stream</strong>
                     <small>
-                      {accountSession?.user?.id && followedLiveStreams.length
-                        ? `${followedLiveStreams.length} people you follow are live`
+                      {accountSession?.user?.id && orderedFollowedLiveStreams.length
+                        ? `${orderedFollowedLiveStreams.length} people you follow are live`
                         : accountSession?.user?.id
                           ? 'Choose from Twitch follows or favorites'
                           : 'Choose from favorites or enter a channel'}
@@ -2713,22 +4027,37 @@ function SquadViewApp() {
                   </button>
                 )}
 
-                {viewMode === 'chat' && isDesktopGrid && (
-                  <section className="desktop-grid-chat-tile">
-                    <ChatPanel channel={activeChannel} />
-                  </section>
-                )}
 
                 {!isDesktopGrid && activeChannel && (
                   <section
-                    className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' ? 'is-active' : 'is-parked'}`}
-                    aria-hidden={viewMode !== 'chat'}
+                    className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' || viewMode === 'solo' ? 'is-active' : 'is-parked'}`}
+                    aria-hidden={viewMode !== 'chat' && viewMode !== 'solo'}
                   >
-                    <ChatPanel channel={activeChannel} />
+                    <ChatPanel channel={activeChatChannel} />
                   </section>
                 )}
               </div>
-            </section>
+              </section>
+
+              {showDesktopChatRail && (activeChatChannel || activeChannel) && (
+                <aside className="desktop-chat-rail" aria-label="Twitch chat">
+                  {isWideDesktopChat && (
+                    <div className="desktop-chat-dock-toolbar">
+                      <span>Chat position</span>
+                      <button
+                        type="button"
+                        onClick={() => setChatDockSide((side) => side === 'right' ? 'left' : 'right')}
+                        aria-label={chatDockSide === 'right' ? 'Move chat to the left side' : 'Move chat to the right side'}
+                        title={chatDockSide === 'right' ? 'Dock chat left' : 'Dock chat right'}
+                      >
+                        {chatDockSide === 'right' ? '← Dock left' : 'Dock right →'}
+                      </button>
+                    </div>
+                  )}
+                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} />
+                </aside>
+              )}
+            </div>
 
             {!isDesktopGrid && mobileYoutubeDual && channels.length > 1 && (
               <div className="mobile-stream-pager youtube-mobile-stream-pager" aria-label="Change the Twitch stream above YouTube">
@@ -2752,7 +4081,7 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && (
+            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && viewMode !== 'solo' && (
               <div className="mobile-stream-pager" aria-label="Move through streams">
                 <button
                   onClick={viewMode === 'dual' ? previousOther : () => cycleFocused(-1)}
@@ -2777,7 +4106,7 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length === 2 && viewMode !== 'dual' && (
+            {!isDesktopGrid && channels.length === 2 && viewMode === 'chat' && (
               <div className="focus-carousel" aria-label="Move through selected streams">
                 <button onClick={() => cycleFocused(-1)} aria-label="Previous stream">←</button>
                 <div>
@@ -2802,8 +4131,6 @@ function SquadViewApp() {
 
           <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && desktopPagedMode ? 'has-page-controls' : ''}`}>
             <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
-            <button className={viewMode === 'chat' ? 'is-current' : ''} onClick={enterChatMode}>☰ Chat</button>
-
             {isDesktopGrid && desktopPageCount > 1 && desktopPagedMode && (
               <div className="toolbar-page-controls" aria-label="Change visible stream page">
                 <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
@@ -2812,7 +4139,6 @@ function SquadViewApp() {
               </div>
             )}
 
-            <button className={viewMode === 'solo' ? 'is-current' : ''} onClick={() => enterSolo()}>⛶ Solo</button>
             {isDesktopGrid && (
               <button
                 onClick={desktopPagedMode ? nextDesktopPage : cycleForward}
@@ -2825,15 +4151,15 @@ function SquadViewApp() {
         </main>
 
         {showEdit && (
-          <div className="stream-manager-backdrop" onClick={() => setShowEdit(false)}>
+          <div className="stream-manager-backdrop" onClick={closeManageStreams}>
             <aside className="stream-manager-drawer" onClick={(event) => event.stopPropagation()}>
               <header className="stream-manager-header">
                 <div>
                   <span>Current SquadView</span>
                   <h2>Manage streams</h2>
-                  <p>Add, remove, replace, or reorder without leaving what you are watching.</p>
+                  <p>Build your next lineup here. Your current viewer stays unchanged until you choose Done.</p>
                 </div>
-                <button className="stream-manager-close" onClick={() => setShowEdit(false)} aria-label="Close stream manager"><X /></button>
+                <button className="stream-manager-close" onClick={closeManageStreams} aria-label="Close stream manager"><X /></button>
               </header>
 
               <section className="stream-manager-current">
@@ -2842,19 +4168,27 @@ function SquadViewApp() {
                     <strong>In this view</strong>
                     <small>Drag on desktop or use the arrows to reorder.</small>
                   </div>
-                  <b>{channels.length}/{viewerStreamLimit}</b>
+                  <b>{managerDraftChannels.length}/{viewerStreamLimit}</b>
                 </div>
 
                 <div className="stream-manager-current-list">
-                  {channels.map((channel, index) => (
+                  {!managerDraftChannels.length && (
+                    <div className="stream-manager-current-empty">
+                      <span>Fresh lineup</span>
+                      <strong>No streams selected</strong>
+                      <p>Choose streams on the right to rebuild this SquadView. Add at least one stream to continue.</p>
+                    </div>
+                  )}
+
+                  {managerDraftChannels.map((channel, index) => (
                     <article
                       key={channel}
-                      className={`stream-manager-current-row ${draggedManagerChannel === channel ? 'is-dragging' : ''}`}
+                      className={`stream-manager-current-row ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''} ${managerKnownLiveChannels.has(channel) ? 'is-live' : ''} ${draggedManagerChannel === channel ? 'is-dragging' : ''}`}
                       draggable
                       onDragStart={() => setDraggedManagerChannel(channel)}
                       onDragEnd={() => setDraggedManagerChannel('')}
                       onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => dropViewerChannel(channel)}
+                      onDrop={() => dropManagerDraftChannel(channel)}
                     >
                       <button
                         type="button"
@@ -2867,19 +4201,30 @@ function SquadViewApp() {
                       <div className="stream-manager-channel-copy">
                         <strong>{channel}</strong>
                         <small>
-                          {followedLiveLogins.has(channel) && <><i className="live-dot" aria-hidden="true" /> Live now</>}
-                          {!followedLiveLogins.has(channel) && favoriteStreamers.includes(channel) && 'Favorite'}
-                          {!followedLiveLogins.has(channel) && !favoriteStreamers.includes(channel) && (channel === activeChannel ? 'Audio focus' : 'In current view')}
+                          {managerKnownLiveChannels.has(channel) && <><i className="live-dot" aria-hidden="true" /> Live now</>}
+                          {!managerKnownLiveChannels.has(channel) && managerOfflineChannels.includes(channel) && 'Offline'}
+                          {!managerKnownLiveChannels.has(channel) && !managerOfflineChannels.includes(channel) && 'Live status unknown'}
                         </small>
                       </div>
-                      <div className="stream-manager-order-buttons">
-                        <button type="button" onClick={() => moveViewerChannel(channel, -1)} disabled={index === 0} aria-label={`Move ${channel} earlier`}>↑</button>
-                        <button type="button" onClick={() => moveViewerChannel(channel, 1)} disabled={index === channels.length - 1} aria-label={`Move ${channel} later`}>↓</button>
+                      <div className="stream-manager-row-actions">
+                        <button
+                          type="button"
+                          className={`stream-manager-favorite-toggle ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''}`}
+                          onClick={() => toggleFavoriteStreamer(channel)}
+                          aria-label={favoriteStreamers.includes(channel) ? `Remove ${channel} from Favorites` : `Favorite ${channel}`}
+                          title={favoriteStreamers.includes(channel) ? 'Remove from Favorites' : 'Add to Favorites'}
+                        >
+                          {favoriteStreamers.includes(channel) ? <FilledHeart /> : <Heart />}
+                        </button>
+                        <div className="stream-manager-order-buttons">
+                          <button type="button" onClick={() => moveManagerDraftChannel(channel, -1)} disabled={index === 0} aria-label={`Move ${channel} earlier`}>↑</button>
+                          <button type="button" onClick={() => moveManagerDraftChannel(channel, 1)} disabled={index === managerDraftChannels.length - 1} aria-label={`Move ${channel} later`}>↓</button>
+                        </div>
                       </div>
                       <button
                         type="button"
                         className="stream-manager-remove"
-                        onClick={() => removeChannelFromGroup(channel)}
+                        onClick={() => removeChannelFromManagerDraft(channel)}
                         aria-label={`Remove ${channel}`}
                       >
                         <X />
@@ -2893,14 +4238,27 @@ function SquadViewApp() {
                 <div className="stream-manager-section-heading">
                   <div>
                     <strong>Add a stream</strong>
-                    <small>{channels.length < viewerStreamLimit ? `${viewerStreamLimit - channels.length} open spot${viewerStreamLimit - channels.length === 1 ? '' : 's'}` : 'View full. Choose someone to replace.'}</small>
+                    <small>{managerDraftChannels.length < viewerStreamLimit ? `${viewerStreamLimit - managerDraftChannels.length} open spot${viewerStreamLimit - managerDraftChannels.length === 1 ? '' : 's'}` : 'View full. Choose someone to replace.'}</small>
                   </div>
                 </div>
+
+                <label className="automation-toggle stream-manager-automation-toggle">
+                  <span>
+                    <strong>Auto-fill live Favorites</strong>
+                    <small>Fill open slots when a Favorite is live. Existing live streams are never replaced.</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={autoFillFavorites}
+                    onChange={(event) => setAutoFillFavorites(event.target.checked)}
+                  />
+                  <i aria-hidden="true" />
+                </label>
 
                 <div className="stream-manager-tabs" role="tablist" aria-label="Choose a stream source">
                   <button type="button" className={managerSource === 'live' ? 'is-current' : ''} onClick={() => setManagerSource('live')}>
                     Following Live
-                    {followedLiveStreams.length > 0 && <span>{followedLiveStreams.length}</span>}
+                    {orderedFollowedLiveStreams.length > 0 && <span>{orderedFollowedLiveStreams.length}</span>}
                   </button>
                   <button type="button" className={managerSource === 'favorites' ? 'is-current' : ''} onClick={() => setManagerSource('favorites')}>Favorites</button>
                   <button type="button" className={managerSource === 'following' ? 'is-current' : ''} onClick={() => {
@@ -2928,21 +4286,31 @@ function SquadViewApp() {
                       </div>
                     ) : followingStatus === 'loading' ? (
                       <div className="stream-manager-empty compact"><strong>Checking who is live…</strong></div>
-                    ) : followedLiveStreams.length ? (
+                    ) : orderedFollowedLiveStreams.length ? (
                       <div className="stream-manager-source-list">
-                        {followedLiveStreams.map((stream) => {
+                        {orderedFollowedLiveStreams.map((stream) => {
                           const channel = cleanChannel(stream.user_login);
-                          const alreadyAdded = channels.includes(channel);
+                          const alreadyAdded = managerDraftChannels.includes(channel);
                           return (
-                            <article key={stream.id || channel} className="stream-manager-source-row is-live">
+                            <article key={stream.id || channel} className={`stream-manager-source-row is-live ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''}`}>
                               <div>
                                 <strong>{stream.user_name || channel}</strong>
                                 <small><i className="live-dot" aria-hidden="true" /> @{channel} · {stream.game_name || 'Twitch'}</small>
                               </div>
-                              {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
-                              <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
-                              </button>
+                              <div className="stream-manager-source-actions">
+                                <button
+                                  type="button"
+                                  className={`stream-manager-favorite-toggle ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''}`}
+                                  onClick={() => toggleFavoriteStreamer(channel)}
+                                  aria-label={favoriteStreamers.includes(channel) ? `Remove ${channel} from Favorites` : `Favorite ${channel}`}
+                                  title={favoriteStreamers.includes(channel) ? 'Remove from Favorites' : 'Add to Favorites'}
+                                >
+                                  {favoriteStreamers.includes(channel) ? <FilledHeart /> : <Heart />}
+                                </button>
+                                <button type="button" className="stream-manager-add-button" onClick={() => addChannelToManagerDraft(channel)} disabled={alreadyAdded}>
+                                  {alreadyAdded ? 'Added ✓' : managerDraftChannels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
+                                </button>
+                              </div>
                             </article>
                           );
                         })}
@@ -2950,7 +4318,7 @@ function SquadViewApp() {
                     ) : (
                       <div className="stream-manager-empty compact">
                         <strong>No followed channels are live right now</strong>
-                        <p>Try Favorites, Following, or enter any Twitch channel.</p>
+                        <p>Try Favorites, Following, or enter any Twitch channel. Use the heart to favorite creators from here.</p>
                       </div>
                     )
                   )}
@@ -2959,18 +4327,28 @@ function SquadViewApp() {
                     sortedFavoriteStreamers.length ? (
                       <div className="stream-manager-source-list">
                         {sortedFavoriteStreamers.map((channel) => {
-                          const alreadyAdded = channels.includes(channel);
-                          const isLive = liveFavoriteStreamers.has(channel) || followedLiveLogins.has(channel);
+                          const alreadyAdded = managerDraftChannels.includes(channel);
+                          const isLive = knownLiveFavoriteLogins.has(channel);
                           return (
-                            <article key={channel} className={`stream-manager-source-row ${isLive ? 'is-live' : ''}`}>
+                            <article key={channel} className={`stream-manager-source-row is-favorite ${isLive ? 'is-live' : ''}`}>
                               <div>
                                 <strong>{channel}</strong>
                                 <small>{isLive ? <><i className="live-dot" aria-hidden="true" /> Live now</> : 'SquadView favorite'}</small>
                               </div>
-                              <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>
-                              <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
-                              </button>
+                              <div className="stream-manager-source-actions">
+                                <button
+                                  type="button"
+                                  className="stream-manager-favorite-toggle is-favorite"
+                                  onClick={() => toggleFavoriteStreamer(channel)}
+                                  aria-label={`Remove ${channel} from Favorites`}
+                                  title="Remove from Favorites"
+                                >
+                                  <FilledHeart />
+                                </button>
+                                <button type="button" className="stream-manager-add-button" onClick={() => addChannelToManagerDraft(channel)} disabled={alreadyAdded}>
+                                  {alreadyAdded ? 'Added ✓' : managerDraftChannels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
+                                </button>
+                              </div>
                             </article>
                           );
                         })}
@@ -3018,18 +4396,28 @@ function SquadViewApp() {
                         <div className="stream-manager-source-list">
                           {managerFollowedChannels.map((item) => {
                             const channel = cleanChannel(item.broadcaster_login);
-                            const alreadyAdded = channels.includes(channel);
+                            const alreadyAdded = managerDraftChannels.includes(channel);
                             const isLive = followedLiveLogins.has(channel);
                             return (
-                              <article key={item.broadcaster_id || channel} className={`stream-manager-source-row ${isLive ? 'is-live' : ''}`}>
+                              <article key={item.broadcaster_id || channel} className={`stream-manager-source-row ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''} ${isLive ? 'is-live' : ''}`}>
                                 <div>
                                   <strong>{item.broadcaster_name || channel}</strong>
                                   <small>{isLive ? <><i className="live-dot" aria-hidden="true" /> @{channel} · Live now</> : `@${channel}`}</small>
                                 </div>
-                                {favoriteStreamers.includes(channel) && <span className="stream-manager-favorite-pill"><FilledHeart /> Favorite</span>}
-                                <button type="button" onClick={() => addChannelToViewer(channel)} disabled={alreadyAdded}>
-                                  {alreadyAdded ? 'Added ✓' : channels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
-                                </button>
+                                <div className="stream-manager-source-actions">
+                                  <button
+                                    type="button"
+                                    className={`stream-manager-favorite-toggle ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''}`}
+                                    onClick={() => toggleFavoriteStreamer(channel)}
+                                    aria-label={favoriteStreamers.includes(channel) ? `Remove ${channel} from Favorites` : `Favorite ${channel}`}
+                                    title={favoriteStreamers.includes(channel) ? 'Remove from Favorites' : 'Add to Favorites'}
+                                  >
+                                    {favoriteStreamers.includes(channel) ? <FilledHeart /> : <Heart />}
+                                  </button>
+                                  <button type="button" className="stream-manager-add-button" onClick={() => addChannelToManagerDraft(channel)} disabled={alreadyAdded}>
+                                    {alreadyAdded ? 'Added ✓' : managerDraftChannels.length >= viewerStreamLimit ? 'Replace…' : '+ Add'}
+                                  </button>
+                                </div>
                               </article>
                             );
                           })}
@@ -3054,7 +4442,7 @@ function SquadViewApp() {
                           autoCorrect="off"
                         />
                         <button className="primary-button" type="submit" disabled={!cleanChannel(manualManagerChannel)}>
-                          {channels.length >= viewerStreamLimit ? 'Choose replacement' : '+ Add stream'}
+                          {managerDraftChannels.length >= viewerStreamLimit ? 'Choose replacement' : '+ Add stream'}
                         </button>
                       </div>
                       <small>You can add any Twitch channel even if you do not follow or favorite them.</small>
@@ -3071,8 +4459,8 @@ function SquadViewApp() {
                     <p>Choose which current stream you want to replace.</p>
                   </div>
                   <div className="stream-manager-replace-list">
-                    {channels.map((channel) => (
-                      <button type="button" key={channel} onClick={() => replaceChannelInViewer(channel)}>
+                    {managerDraftChannels.map((channel) => (
+                      <button type="button" key={channel} onClick={() => replaceChannelInManagerDraft(channel)}>
                         <span>{channel}</span>
                         <strong>Replace →</strong>
                       </button>
@@ -3084,12 +4472,114 @@ function SquadViewApp() {
 
               <footer className="stream-manager-footer">
                 <div>
-                  <span>{channels.length}/{viewerStreamLimit} streams</span>
-                  <small>Changes apply immediately.</small>
+                  <span>{managerDraftChannels.length}/{viewerStreamLimit} streams</span>
+                  <small>
+                    {!managerDraftChannels.length
+                      ? 'Add at least one stream to continue.'
+                      : managerCommercialPending
+                        ? 'Done plays a short sponsor, then applies your updated view.'
+                        : 'Changes apply when you choose Done.'}
+                  </small>
                 </div>
-                <button className="primary-button" onClick={() => setShowEdit(false)}>Done</button>
+                <div className="stream-manager-footer-actions">
+                  <button
+                    type="button"
+                    className="secondary-button stream-manager-remove-offline"
+                    onClick={removeOfflineManagerStreams}
+                    disabled={!managerOfflineChannels.length}
+                  >
+                    {managerOfflineChannels.length
+                      ? `Remove offline · ${managerOfflineChannels.length}`
+                      : managerUnknownChannels.length
+                        ? 'No confirmed offline'
+                        : 'All live'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button stream-manager-clear-all"
+                    onClick={clearAllViewerStreams}
+                    disabled={!managerDraftChannels.length}
+                  >
+                    Clear all
+                  </button>
+                  <button
+                    className="primary-button"
+                    onClick={finishManageStreams}
+                    disabled={!managerDraftChannels.length}
+                  >
+                    Done
+                  </button>
+                </div>
               </footer>
             </aside>
+          </div>
+        )}
+
+        {showClearAllConfirm && (
+          <div
+            className="modal-backdrop clear-all-confirm-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setShowClearAllConfirm(false);
+              }
+            }}
+          >
+            <section
+              className="modal clear-all-confirm-modal"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="clear-all-confirm-title"
+            >
+              <button
+                type="button"
+                className="modal-close clear-all-confirm-close"
+                onClick={() => setShowClearAllConfirm(false)}
+                aria-label="Close clear all confirmation"
+              >
+                <X />
+              </button>
+
+              <span className="modal-eyebrow">Current SquadView</span>
+
+              <div
+                className="clear-all-confirm-mark"
+                aria-hidden="true"
+              >
+                !
+              </div>
+
+              <h2 id="clear-all-confirm-title">
+                Clear all streams?
+              </h2>
+
+              <p>
+                This will clear all {managerDraftChannels.length}{' '}
+                {managerDraftChannels.length === 1 ? 'stream' : 'streams'} from this Manage Streams draft. Your current viewer will not change until you choose Done.
+              </p>
+
+              <div className="clear-all-confirm-note">
+                Your Twitch follows and SquadView favorites will not be changed. You can rebuild the lineup here before applying anything.
+              </div>
+
+              <div className="clear-all-confirm-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setShowClearAllConfirm(false)}
+                >
+                  Keep streams
+                </button>
+
+                <button
+                  type="button"
+                  className="clear-all-confirm-primary"
+                  onClick={confirmClearAllViewerStreams}
+                >
+                  Clear all
+                </button>
+              </div>
+            </section>
           </div>
         )}
 
@@ -3265,6 +4755,8 @@ function SquadViewApp() {
           </div>
         )}
 
+        {renderFavoriteLiveNotice()}
+
         {referralMessage && (
           <div className="referral-toast" role="status">
             <span>{referralMessage}</span>
@@ -3314,8 +4806,8 @@ function SquadViewApp() {
             onClick={() => openLandingTab('following')}
           >
             Following
-            {followedLiveStreams.length > 0 && (
-              <span className="nav-live-count">{followedLiveStreams.length} live</span>
+            {orderedFollowedLiveStreams.length > 0 && (
+              <span className="nav-live-count">{orderedFollowedLiveStreams.length} live</span>
             )}
           </button>
           <button
@@ -3330,13 +4822,10 @@ function SquadViewApp() {
           </button>
           <button
             type="button"
-            className={landingTab === 'favorites' ? 'is-current' : ''}
-            onClick={() => openLandingTab('favorites')}
+            className="topbar-help-link"
+            onClick={() => setShowHowItWorks(true)}
           >
-            Favorites
-            {liveFavoriteList.length > 0 && (
-              <span className="nav-live-count">{liveFavoriteList.length} live</span>
-            )}
+            How it works
           </button>
         </nav>
 
@@ -3372,28 +4861,18 @@ function SquadViewApp() {
                 <small>{validInputs.length}/{viewerStreamLimit}</small>
               </div>
 
-              <div className="builder-source-toggle" role="radiogroup" aria-label="Choose how to add streams">
-                <label className={builderMode === 'manual' ? 'is-current' : ''}>
-                  <input
-                    type="radio"
-                    name="builder-source"
-                    value="manual"
-                    checked={builderMode === 'manual'}
-                    onChange={() => setBuilderMode('manual')}
-                  />
-                  <span>Enter streamers</span>
-                </label>
-                <label className={builderMode === 'favorites' ? 'is-current' : ''}>
-                  <input
-                    type="radio"
-                    name="builder-source"
-                    value="favorites"
-                    checked={builderMode === 'favorites'}
-                    onChange={() => setBuilderMode('favorites')}
-                  />
-                  <span>Favorites</span>
-                </label>
-              </div>
+              <label className="automation-toggle builder-automation-toggle">
+                <span>
+                  <strong>Auto-fill live Favorites</strong>
+                  <small>Use open slots only. SquadView never replaces a live stream you chose.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={autoFillFavorites}
+                  onChange={(event) => setAutoFillFavorites(event.target.checked)}
+                />
+                <i aria-hidden="true" />
+              </label>
 
               {validInputs.length > 0 && (
                 <div className="builder-quick-watch-dock">
@@ -3404,89 +4883,51 @@ function SquadViewApp() {
                   >
                     Start watching {validInputs.length} <span aria-hidden="true">→</span>
                   </button>
+                  <button
+                    type="button"
+                    className="secondary-button builder-clear-all-button"
+                    onClick={clearAllBuildStreams}
+                  >
+                    Clear all
+                  </button>
                 </div>
               )}
 
-              {builderMode === 'manual' ? (
-                <div className="channel-list">
-                  {inputs.map((value, index) => (
-                    <label key={index}>
-                      <span>{index + 1}</span>
-                      <input
-                        value={value}
-                        onChange={(event) => setInputs((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
-                        placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                      />
-                      {value && (
-                        <button
-                          type="button"
-                          onClick={() => removeBuildInputAt(index)}
-                          aria-label="Clear"
-                        >
-                          <X />
-                        </button>
-                      )}
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <div className="builder-favorites-panel">
-                  <div className="builder-favorites-heading">
-                    <div>
-                      <strong>Favorite streamers</strong>
-                      <small>
-                        {liveFavoriteList.length
-                          ? `${liveFavoriteList.length} live now. Live streamers are shown first.`
-                          : 'Your saved streamers are ready when you are.'}
-                      </small>
-                    </div>
-                    <button type="button" onClick={() => openLandingTab('favorites')}>
-                      Manage favorites →
-                    </button>
-                  </div>
-
-                  {sortedFavoriteStreamers.length ? (
-                    <div className="builder-favorite-list">
-                      {sortedFavoriteStreamers.map((streamer) => {
-                        const alreadyAdded = validInputs.includes(streamer);
-                        const groupIsFull = validInputs.length >= viewerStreamLimit;
-                        const isLive = liveFavoriteStreamers.has(streamer);
-
-                        return (
-                          <article key={streamer} className={isLive ? 'is-live' : ''}>
-                            <div className="favorite-streamer-name">
-                              <FilledHeart />
-                              <span>
-                                <strong>{streamer}</strong>
-                                <small>
-                                  {isLive && <i className="live-dot" aria-hidden="true" />}
-                                  {isLive ? 'Live now' : 'Offline'}
-                                </small>
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              className="favorite-add-button"
-                              onClick={() => addFavoriteToGroup(streamer)}
-                              disabled={alreadyAdded || groupIsFull}
-                            >
-                              {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add'}
-                            </button>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="empty-favorites compact">
-                      <Heart />
-                      <strong>No favorite streamers yet</strong>
-                      <p>Favorite someone while watching and they will appear here.</p>
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="channel-list">
+                {inputs.slice(0, manualBuilderInputCount).map((value, index) => (
+                  <label key={index} className={favoriteStreamers.includes(cleanChannel(value)) ? 'is-favorite' : ''}>
+                    <span>{index + 1}</span>
+                    <input
+                      value={value}
+                      onChange={(event) => handleBuilderInputChange(index, event.target.value)}
+                      placeholder={index === 0 ? 'Twitch username' : 'Add another stream'}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                    />
+                    {cleanChannel(value) && (
+                      <button
+                        type="button"
+                        className={`builder-favorite-toggle ${favoriteStreamers.includes(cleanChannel(value)) ? 'is-favorite' : ''}`}
+                        onClick={() => toggleFavoriteStreamer(cleanChannel(value))}
+                        aria-label={favoriteStreamers.includes(cleanChannel(value)) ? `Remove ${cleanChannel(value)} from Favorites` : `Favorite ${cleanChannel(value)}`}
+                        title={favoriteStreamers.includes(cleanChannel(value)) ? 'Remove from Favorites' : 'Add to Favorites'}
+                      >
+                        {favoriteStreamers.includes(cleanChannel(value)) ? <FilledHeart /> : <Heart />}
+                      </button>
+                    )}
+                    {value && (
+                      <button
+                        type="button"
+                        className="builder-clear-stream"
+                        onClick={() => removeBuildInputAt(index)}
+                        aria-label={`Remove ${cleanChannel(value) || 'stream'}`}
+                      >
+                        <X />
+                      </button>
+                    )}
+                  </label>
+                ))}
+              </div>
 
               {validInputs.length > 0 && (
                 <div className="build-selection-strip">
@@ -3521,81 +4962,7 @@ function SquadViewApp() {
             </section>
 
 
-            {favoriteStreamers.length > 0 && (
-              <section className="live-favorites-section">
-                <div className="section-title">
-                  <div>
-                    <span>Your shortcuts</span>
-                    <h2>
-                      {liveFavoriteList.length
-                        ? `${liveFavoriteList.length} favorite${liveFavoriteList.length === 1 ? '' : 's'} live now`
-                        : 'Favorite streamers'}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    className="favorites-link-button"
-                    onClick={() => openLandingTab('favorites')}
-                  >
-                    View favorites →
-                  </button>
-                </div>
 
-                {liveFavoriteList.length ? (
-                  <div className="live-favorites-preview">
-                    {liveFavoriteList.slice(0, 3).map((streamer) => {
-                      const alreadyAdded = validInputs.includes(streamer);
-                      const groupIsFull = validInputs.length >= viewerStreamLimit;
-                      return (
-                        <article key={streamer}>
-                          <div>
-                            <strong>{streamer}</strong>
-                            <small><i className="live-dot" aria-hidden="true" /> Live now</small>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => addFavoriteToGroup(streamer)}
-                            disabled={alreadyAdded || groupIsFull}
-                          >
-                            {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add to view'}
-                          </button>
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="live-favorites-empty">
-                    <Heart />
-                    <div>
-                      <strong>No favorites are live right now</strong>
-                      <small>You can still build a view from your saved streamers.</small>
-                    </div>
-                    <button type="button" onClick={() => openLandingTab('favorites')}>Open favorites</button>
-                  </div>
-                )}
-              </section>
-            )}
-
-            <section className="how-it-works">
-              <span>Simple by design</span>
-              <h2>Tap. Listen. Focus.</h2>
-              <div className="steps">
-                <article><b>01</b><strong>Focus</strong><p>Choose which stream is linked to chat.</p></article>
-                <article><b>02</b><strong>Listen</strong><p>Choose which visible Twitch stream you want to hear.</p></article>
-                <article><b>03</b><strong>Save</strong><p>Favorite individual streamers and build future views in one tap.</p></article>
-              </div>
-            </section>
-
-            <section className="about-squadview" aria-labelledby="about-squadview-heading">
-              <span>Built for multi stream viewing</span>
-              <h2 id="about-squadview-heading">Follow more of the action without living in browser tabs.</h2>
-              <p>SquadView is an independent viewing interface for Twitch streams. Add the creators you want to follow, keep multiple perspectives visible, and choose which stream you want to hear without rebuilding your setup every time the action moves.</p>
-              <p>The experience is designed for tournaments, creator collaborations, friend groups, watch parties, and any moment where one Twitch stream does not tell the whole story. SquadView provides the layout, audio focus, favorites, and viewing controls while Twitch continues to provide the video and chat.</p>
-              <div className="about-squadview-links">
-                <a href="/about">Learn more about SquadView →</a>
-                <a href="/support">Help and FAQ →</a>
-              </div>
-            </section>
 
           </>
         ) : landingTab === 'following' ? (
@@ -3603,100 +4970,107 @@ function SquadViewApp() {
             <div className="following-page-heading">
               <div>
                 <span>From your Twitch account</span>
-                <h1>Following Live</h1>
-                <p>See channels you follow on Twitch that are live right now. Adding one to a view does not make it a SquadView favorite.</p>
+                <h1>Following</h1>
+                <p>Live Favorites rise to the top automatically. Favorite or unfavorite creators here without maintaining a separate Favorites page.</p>
               </div>
               {accountSession && (
                 <div className="following-heading-actions">
                   <div className="following-live-summary">
-                    <strong>{followedLiveStreams.length}</strong>
+                    <strong>{orderedFollowedLiveStreams.length}</strong>
                     <span>live now</span>
                   </div>
                   <button
                     type="button"
                     className="following-refresh-button"
-                    onClick={() => void refreshFollowedLiveStreams()}
-                    disabled={followingStatus === 'loading'}
+                    onClick={() => followingView === 'all'
+                      ? void refreshFollowedChannels({ force: true })
+                      : void refreshFollowedLiveStreams()}
+                    disabled={followingStatus === 'loading' || followedChannelsStatus === 'loading'}
                   >
-                    {followingStatus === 'loading' ? 'Refreshing…' : 'Refresh'}
+                    {(followingStatus === 'loading' || followedChannelsStatus === 'loading') ? 'Refreshing…' : 'Refresh'}
                   </button>
                 </div>
               )}
             </div>
 
+            {accountSession && (
+              <>
+                <div className="following-view-tabs" role="tablist" aria-label="Following views">
+                  <button type="button" className={followingView === 'live' ? 'is-current' : ''} onClick={() => setFollowingView('live')}>
+                    Live now <span>{orderedFollowedLiveStreams.length}</span>
+                  </button>
+                  <button type="button" className={followingView === 'favorites' ? 'is-current' : ''} onClick={() => setFollowingView('favorites')}>
+                    Favorites <span>{favoriteStreamers.length}/{favoriteStreamerLimit}</span>
+                  </button>
+                  <button type="button" className={followingView === 'all' ? 'is-current' : ''} onClick={() => {
+                    setFollowingView('all');
+                    if (followedChannelsStatus === 'idle') void refreshFollowedChannels();
+                  }}>
+                    All following
+                  </button>
+                </div>
+
+                <div className="following-preferences">
+                  <label className="automation-toggle compact">
+                    <span><strong>Favorite live alerts</strong><small>Show a small alert while SquadView is open.</small></span>
+                    <input type="checkbox" checked={favoriteLiveAlertsEnabled} onChange={(event) => setFavoriteLiveAlertsEnabled(event.target.checked)} />
+                    <i aria-hidden="true" />
+                  </label>
+                  <label className={`automation-toggle compact ${!favoriteLiveAlertsEnabled ? 'is-disabled' : ''}`}>
+                    <span><strong>Alert sound</strong><small>Play a short tone when a Favorite goes live.</small></span>
+                    <input type="checkbox" checked={favoriteLiveAlertSound} disabled={!favoriteLiveAlertsEnabled} onChange={(event) => setFavoriteLiveAlertSound(event.target.checked)} />
+                    <i aria-hidden="true" />
+                  </label>
+                </div>
+              </>
+            )}
+
             {!accountSession ? (
               <div className="following-state-card">
                 <div className="twitch-account-mark">T</div>
-                <strong>Sign in with Twitch to see who is live</strong>
-                <p>SquadView requests the Twitch permissions needed for Following Live and connected chat. It never changes who you follow, and Twitch follows stay separate from SquadView Favorites.</p>
+                <strong>Sign in with Twitch to see who you follow</strong>
+                <p>SquadView uses your Twitch follows for discovery, while SquadView Favorites control priority, live alerts, and optional Auto-fill.</p>
                 <button type="button" className="twitch-login-button" onClick={() => setShowAccount(true)}>
                   Sign in with Twitch
                 </button>
               </div>
-            ) : followingStatus === 'reconnect' ? (
-              <div className="following-state-card">
-                <div className="twitch-account-mark">T</div>
-                <strong>Connect your Twitch follows</strong>
-                <p>{followingError || 'Authorize the follow-list permission once and SquadView can show your live followed channels here.'}</p>
-                <button
-                  type="button"
-                  className="twitch-login-button"
-                  onClick={handleReconnectTwitchFollows}
-                  disabled={authBusy}
-                >
-                  {authBusy ? 'Opening Twitch…' : 'Reconnect Twitch'}
-                </button>
-              </div>
-            ) : followingStatus === 'loading' ? (
-              <div className="following-state-card compact">
-                <strong>Checking your Twitch follows…</strong>
-                <p>This normally takes only a moment.</p>
-              </div>
-            ) : followingStatus === 'error' ? (
-              <div className="following-state-card">
-                <strong>Following Live is temporarily unavailable</strong>
-                <p>{followingError}</p>
-                <button type="button" className="secondary-button" onClick={() => void refreshFollowedLiveStreams()}>
-                  Try again
-                </button>
-              </div>
-            ) : followedLiveStreams.length ? (
-              <>
+            ) : followingView === 'live' ? (
+              followingStatus === 'reconnect' ? (
+                <div className="following-state-card">
+                  <div className="twitch-account-mark">T</div>
+                  <strong>Connect your Twitch follows</strong>
+                  <p>{followingError || 'Authorize the follow-list permission once and SquadView can show your live followed channels here.'}</p>
+                  <button type="button" className="twitch-login-button" onClick={handleReconnectTwitchFollows} disabled={authBusy}>
+                    {authBusy ? 'Opening Twitch…' : 'Reconnect Twitch'}
+                  </button>
+                </div>
+              ) : followingStatus === 'loading' || (favoriteStreamers.length > 0 && !favoriteLiveStatusReady) ? (
+                <div className="following-state-card compact"><strong>Checking your live Favorites and Twitch follows…</strong><p>SquadView is combining both live-status sources so Favorites can be placed first without dropping anyone Twitch already reports as live.</p></div>
+              ) : followingStatus === 'error' ? (
+                <div className="following-state-card"><strong>Following Live is temporarily unavailable</strong><p>{followingError}</p><button type="button" className="secondary-button" onClick={() => void refreshFollowedLiveStreams()}>Try again</button></div>
+              ) : orderedFollowedLiveStreams.length ? (
                 <div className="following-live-grid">
-                  {followedLiveStreams.map((stream) => {
+                  {orderedFollowedLiveStreams.map((stream) => {
                     const channel = cleanChannel(stream.user_login);
                     const alreadyAdded = validInputs.includes(channel);
                     const groupIsFull = validInputs.length >= viewerStreamLimit;
                     const isFavorite = favoriteStreamers.includes(channel);
                     return (
-                      <article key={stream.id || channel} className="following-live-card">
+                      <article key={stream.id || channel} className={`following-live-card ${isFavorite ? 'is-favorite' : ''}`}>
                         <div className="following-live-thumbnail">
-                          {stream.thumbnail_url ? (
-                            <img src={stream.thumbnail_url} alt="" loading="lazy" />
-                          ) : (
-                            <div className="following-thumbnail-fallback">T</div>
-                          )}
+                          {stream.thumbnail_url ? <img src={stream.thumbnail_url} alt="" loading="lazy" /> : <div className="following-thumbnail-fallback">T</div>}
                           <span className="following-live-badge">LIVE</span>
                         </div>
                         <div className="following-live-copy">
                           <div className="following-streamer-line">
-                            <div>
-                              <strong>{stream.user_name || channel}</strong>
-                              <small>@{channel}</small>
-                            </div>
-                            {isFavorite && <span className="following-favorite-badge"><FilledHeart /> Favorite</span>}
+                            <div><strong>{stream.user_name || channel}</strong><small>@{channel}</small></div>
+                            <button type="button" className={`following-favorite-toggle ${isFavorite ? 'is-favorite' : ''}`} onClick={() => toggleFavoriteStreamer(channel)} aria-label={isFavorite ? `Remove ${channel} from Favorites` : `Favorite ${channel}`}>
+                              {isFavorite ? <FilledHeart /> : <Heart />} {isFavorite ? 'Favorite' : 'Favorite'}
+                            </button>
                           </div>
                           <p>{stream.title || 'Live on Twitch'}</p>
-                          <small className="following-stream-meta">
-                            {stream.game_name || 'Twitch'} · {stream.viewer_count.toLocaleString()} viewers
-                          </small>
-                          <button
-                            type="button"
-                            className="favorite-add-button following-add-button"
-                            onClick={() => alreadyAdded ? removeFromBuildList(channel) : addFollowedToGroup(channel)}
-                            disabled={!alreadyAdded && groupIsFull}
-                            data-action={alreadyAdded ? 'remove' : 'add'}
-                          >
+                          <small className="following-stream-meta">{stream.squadviewFavoriteStatusOnly ? `${stream.game_name || 'Twitch'} · Favorite live status` : `${stream.game_name || 'Twitch'} · ${Number(stream.viewer_count || 0).toLocaleString()} viewers`}</small>
+                          <button type="button" className="favorite-add-button following-add-button" onClick={() => alreadyAdded ? removeFromBuildList(channel) : addFollowedToGroup(channel)} disabled={!alreadyAdded && groupIsFull} data-action={alreadyAdded ? 'remove' : 'add'}>
                             {alreadyAdded ? '− Remove from view' : groupIsFull ? 'View full' : '+ Add to view'}
                           </button>
                         </div>
@@ -3704,41 +5078,68 @@ function SquadViewApp() {
                     );
                   })}
                 </div>
-                <div className="favorites-build-dock following-build-dock">
-                  <div>
-                    <span>Current view</span>
-                    <strong>
-                      {validInputs.length
-                        ? `${validInputs.length} streamer${validInputs.length === 1 ? '' : 's'} selected`
-                        : 'Choose live channels to build your view'}
-                    </strong>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      setBuilderMode('manual');
-                      openLandingTab('home');
-                    }}
-                  >
-                    View list
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={!validInputs.length}
-                    onClick={() => beginWatching()}
-                  >
-                    {validInputs.length ? `Start watching ${validInputs.length} →` : 'Start watching →'}
-                  </button>
+              ) : (
+                <div className="following-state-card compact"><strong>No followed channels are live right now</strong><p>Favorite streamers are checked automatically while SquadView is open.</p></div>
+              )
+            ) : followingView === 'favorites' ? (
+              sortedFavoriteStreamers.length ? (
+                <div className="following-directory-list">
+                  {sortedFavoriteStreamers.map((channel) => {
+                    const isLive = knownLiveFavoriteLogins.has(channel);
+                    const alreadyAdded = validInputs.includes(channel);
+                    const groupIsFull = validInputs.length >= viewerStreamLimit;
+                    return (
+                      <article key={channel} className={`is-favorite ${isLive ? 'is-live' : ''}`}>
+                        <div className="following-directory-copy">
+                          <strong>{channel}</strong>
+                          <small>{isLive ? <><i className="live-dot" aria-hidden="true" /> Live now</> : 'Offline'}</small>
+                        </div>
+                        <button type="button" className="following-favorite-toggle is-favorite" onClick={() => toggleFavoriteStreamer(channel)}><FilledHeart /> Favorite</button>
+                        <button type="button" className="favorite-add-button" onClick={() => alreadyAdded ? removeFromBuildList(channel) : addFavoriteToGroup(channel)} disabled={!alreadyAdded && (groupIsFull || !isLive)}>
+                          {alreadyAdded ? '− Remove' : !isLive ? 'Offline' : groupIsFull ? 'View full' : '+ Add'}
+                        </button>
+                      </article>
+                    );
+                  })}
                 </div>
-              </>
-            ) : followingStatus === 'ready' ? (
-              <div className="following-state-card compact">
-                <strong>No followed channels are live right now</strong>
-                <p>When someone you follow goes live, they will appear here automatically.</p>
+              ) : (
+                <div className="following-state-card compact"><strong>No Favorites yet</strong><p>Use the heart on a live or followed creator to prioritize them here.</p></div>
+              )
+            ) : followedChannelsStatus === 'reconnect' || followedChannelsStatus === 'error' ? (
+              <div className="following-state-card"><strong>Could not load all Twitch follows</strong><p>{followedChannelsError}</p><button type="button" className="secondary-button" onClick={() => void refreshFollowedChannels({ force: true })}>Try again</button></div>
+            ) : followedChannelsStatus === 'loading' ? (
+              <div className="following-state-card compact"><strong>Loading everyone you follow…</strong></div>
+            ) : followedChannels.length ? (
+              <div className="following-directory-list">
+                {followedChannels.map((follow) => {
+                  const channel = cleanChannel(follow.broadcaster_login);
+                  const displayName = follow.broadcaster_name || channel;
+                  const isLive = followedLiveLogins.has(channel) || knownLiveFavoriteLogins.has(channel);
+                  const isFavorite = favoriteStreamers.includes(channel);
+                  const alreadyAdded = validInputs.includes(channel);
+                  const groupIsFull = validInputs.length >= viewerStreamLimit;
+                  return (
+                    <article key={follow.broadcaster_id || channel} className={`${isFavorite ? 'is-favorite' : ''} ${isLive ? 'is-live' : ''}`}>
+                      <div className="following-directory-copy"><strong>{displayName}</strong><small>@{channel} · {isLive ? 'Live now' : 'Offline'}</small></div>
+                      <button type="button" className={`following-favorite-toggle ${isFavorite ? 'is-favorite' : ''}`} onClick={() => toggleFavoriteStreamer(channel)}>{isFavorite ? <FilledHeart /> : <Heart />} Favorite</button>
+                      <button type="button" className="favorite-add-button" onClick={() => alreadyAdded ? removeFromBuildList(channel) : addFollowedToGroup(channel)} disabled={!alreadyAdded && (groupIsFull || !isLive)}>
+                        {alreadyAdded ? '− Remove' : !isLive ? 'Offline' : groupIsFull ? 'View full' : '+ Add'}
+                      </button>
+                    </article>
+                  );
+                })}
               </div>
-            ) : null}
+            ) : (
+              <div className="following-state-card compact"><strong>No followed channels found</strong></div>
+            )}
+
+            {accountSession && validInputs.length > 0 && (
+              <div className="favorites-build-dock following-build-dock">
+                <div><span>Current view</span><strong>{validInputs.length} streamer{validInputs.length === 1 ? '' : 's'} selected</strong></div>
+                <button type="button" className="secondary-button" onClick={() => { setBuilderMode('manual'); openLandingTab('home'); }}>View list</button>
+                <button type="button" className="primary-button" onClick={() => beginWatching()}>Start watching {validInputs.length} →</button>
+              </div>
+            )}
           </section>
         ) : landingTab === 'squads' ? (
           <section className="saved-squads-page">
@@ -3852,99 +5253,17 @@ function SquadViewApp() {
             )}
           </section>
         ) : (
-          <section className="favorites-page">
-            <div className="favorites-page-heading">
-              <div>
-                <span>Your shortcuts</span>
-                <h1>Favorites</h1>
-                <p>See who is live, add streamers directly to your current view, and keep your saved list organized.</p>
-              </div>
-              <div className="favorites-live-summary">
-                <strong>{liveFavoriteList.length}</strong>
-                <span>live now</span>
-              </div>
-            </div>
-
-            {sortedFavoriteStreamers.length ? (
-              <div className="favorites-page-list">
-                {sortedFavoriteStreamers.map((streamer) => {
-                  const alreadyAdded = validInputs.includes(streamer);
-                  const groupIsFull = validInputs.length >= viewerStreamLimit;
-                  const isLive = liveFavoriteStreamers.has(streamer);
-
-                  return (
-                    <article key={streamer} className={isLive ? 'is-live' : ''}>
-                      <div className="favorite-streamer-name">
-                        <FilledHeart />
-                        <span>
-                          <strong>{streamer}</strong>
-                          <small>
-                            {isLive && <i className="live-dot" aria-hidden="true" />}
-                            {isLive ? 'Live now' : 'Offline'}
-                          </small>
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="favorite-add-button"
-                        onClick={() => addFavoriteToGroup(streamer)}
-                        disabled={alreadyAdded || groupIsFull}
-                      >
-                        {alreadyAdded ? 'Added ✓' : groupIsFull ? 'View full' : '+ Add'}
-                      </button>
-
-                      <button
-                        type="button"
-                        className="delete-button"
-                        onClick={() => removeFavoriteStreamer(streamer)}
-                        aria-label={`Remove ${streamer} from favorites`}
-                      >
-                        <Trash2 />
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="empty-favorites favorites-page-empty">
-                <Heart />
-                <strong>No favorite streamers yet</strong>
-                <p>While watching, tap the heart beside a streamer. They will appear here for quick group building.</p>
-              </div>
-            )}
-
-            <div className="favorites-build-dock">
-              <div>
-                <span>Current view</span>
-                <strong>
-                  {validInputs.length
-                    ? `${validInputs.length} streamer${validInputs.length === 1 ? '' : 's'} selected`
-                    : 'No streamers selected yet'}
-                </strong>
-              </div>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setBuilderMode('manual');
-                  openLandingTab('home');
-                }}
-              >
-                View list
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={!validInputs.length}
-                onClick={() => beginWatching()}
-              >
-                {validInputs.length ? `Start watching ${validInputs.length} →` : 'Start watching →'}
-              </button>
+          <section className="following-page">
+            <div className="following-state-card compact">
+              <strong>Favorites moved into Following</strong>
+              <p>Manage Favorites alongside the creators you follow on Twitch.</p>
+              <button type="button" className="primary-button" onClick={() => { setFollowingView('favorites'); openLandingTab('following'); }}>Open Following →</button>
             </div>
           </section>
         )}
       </main>
+
+      {renderFavoriteLiveNotice()}
 
       {editingSavedSquad && (
         <div className="modal-backdrop saved-squad-editor-backdrop" onClick={closeSavedSquadEditor}>
@@ -4137,6 +5456,57 @@ function SquadViewApp() {
           </section>
         </div>
       )}
+      {showGuestBenefits && !accountSession && (
+        <div className="modal-backdrop guest-benefits-backdrop" onClick={dismissGuestBenefitsPrompt}>
+          <section className="modal guest-benefits-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={dismissGuestBenefitsPrompt}><X /></button>
+            <div className="twitch-account-mark">T</div>
+            <span className="modal-eyebrow">Optional Twitch connection</span>
+            <h2>Build faster with your Twitch account</h2>
+            <p>You can keep using SquadView as a guest. Connecting Twitch adds the shortcuts that make repeat viewing easier.</p>
+            <div className="guest-benefit-list">
+              <span><b>✓</b> See the channels you already follow</span>
+              <span><b>✓</b> Put live Favorites at the top of Following Live</span>
+              <span><b>✓</b> Keep Favorite live/offline status updated automatically</span>
+              <span><b>✓</b> Use SquadView native Twitch chat</span>
+              <span><b>✓</b> Save Squads and sync Favorites across devices</span>
+            </div>
+            <button
+              type="button"
+              className="twitch-login-button"
+              onClick={() => { setShowGuestBenefits(false); void handleTwitchSignIn(); }}
+              disabled={authBusy || !isSquadViewAuthConfigured}
+            >
+              {authBusy ? 'Opening Twitch…' : 'Connect Twitch'}
+            </button>
+            <button type="button" className="secondary-button account-guest-button" onClick={dismissGuestBenefitsPrompt}>
+              Continue without signing in
+            </button>
+          </section>
+        </div>
+      )}
+
+      {showHowItWorks && (
+        <div className="modal-backdrop" onClick={() => setShowHowItWorks(false)}>
+          <section className="modal how-it-works-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowHowItWorks(false)}><X /></button>
+            <span className="modal-eyebrow">SquadView in one minute</span>
+            <h2>Watch the whole squad without chasing tabs.</h2>
+            <p>Enter Twitch channels, keep several live perspectives visible, and decide which stream you want to hear or focus without rebuilding the view.</p>
+            <div className="how-it-works-modal-grid">
+              <article><b>01</b><strong>Build</strong><span>Add up to {viewerStreamLimit} Twitch channels on your current plan.</span></article>
+              <article><b>02</b><strong>Listen + Focus</strong><span>Control audio independently and jump straight to the stream you want in Focus mode.</span></article>
+              <article><b>03</b><strong>Chat</strong><span>Open chat in a dedicated rail without sacrificing a stream position on desktop.</span></article>
+              <article><b>04</b><strong>Connect Twitch</strong><span>Unlock Following Live, native chat, synced Favorites, and Saved Squads.</span></article>
+            </div>
+            <div className="how-it-works-modal-actions">
+              <button type="button" className="primary-button" onClick={() => setShowHowItWorks(false)}>Start building</button>
+              <a href="/learn">See the full SquadView overview</a>
+            </div>
+          </section>
+        </div>
+      )}
+
       {showAccount && (
         <div className="modal-backdrop" onClick={() => setShowAccount(false)}>
           <section className="modal account-modal" onClick={(event) => event.stopPropagation()}>
@@ -4258,12 +5628,12 @@ function SquadViewApp() {
 export default function App() {
   const route = window.location.pathname.replace(/\/+$/, '') || '/';
 
-  if (route === '/') return <HomePage />;
-  if (route === '/watch') return <SquadViewApp />;
+  if (route === '/' || route === '/watch') return <SquadViewApp />;
+  if (route === '/learn' || route === '/home') return <HomePage />;
   if (route === '/about') return <AboutPage />;
   if (route === '/privacy') return <PrivacyPage />;
   if (route === '/terms') return <TermsPage />;
   if (route === '/support' || route === '/contact') return <SupportPage />;
 
-  return <HomePage />;
+  return <SquadViewApp />;
 }

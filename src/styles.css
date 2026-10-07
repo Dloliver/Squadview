@@ -12,6 +12,9 @@
   --mint: #45e0b5;
   --mint-soft: #9af2d7;
   --orange: #ff9f43;
+  --favorite: #ffbd45;
+  --favorite-soft: #ffe09a;
+  --favorite-glow: rgba(255, 189, 69, .26);
   --muted: #89a69d;
 }
 
@@ -153,10 +156,12 @@ body.viewer-active { overflow: hidden; background: #392724; }
 .remove-stream-chip:hover,.remove-stream-chip:focus-visible { border-color: #7b3d43; background: rgba(255,70,85,.09); color: #ff7b86; }
 .stream-card-actions { margin-left: auto; display: flex; align-items: center; gap: 5px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4655; flex: 0 0 auto; }
-.listen-chip,.focus-chip,.favorite-chip { min-height: 27px; padding: 0 9px; border-radius: 999px; background: #071713; font-size: 9px; font-weight: 800; cursor: pointer; }
+.listen-chip,.focus-chip,.chat-chip,.favorite-chip { min-height: 27px; padding: 0 9px; border-radius: 999px; background: #071713; font-size: 9px; font-weight: 800; cursor: pointer; }
 .listen-chip { border: 1px solid var(--mint); color: var(--mint-soft); }
 .listen-chip.is-listening { background: var(--mint); color: #03100d; }
 .focus-chip { border: 1px solid #315248; color: #c2d8d1; }
+.chat-chip { border: 1px solid rgba(145,71,255,.48); color: #d4c0ff; }
+.chat-chip.is-chatting { background: rgba(145,71,255,.24); border-color: rgba(145,71,255,.82); color: #fff; }
 .favorite-chip { width: 29px; padding: 0; border: 1px solid #315248; color: #9db8af; display: grid; place-items: center; font-size: 14px; line-height: 1; }
 .favorite-chip:hover,.favorite-chip:focus-visible { border-color: var(--mint); color: var(--mint-soft); }
 .favorite-chip.is-favorite { border-color: #f6a23a; color: #f6a23a; background: rgba(246,162,58,.08); }
@@ -250,7 +255,7 @@ body.viewer-active { overflow: hidden; background: #392724; }
   .stream-card-header { min-height: 36px; padding: 4px 6px; }
   .stream-card-header strong { max-width: 24%; font-size: 11px; }
   .remove-stream-chip { width: 23px; height: 23px; font-size: 16px; }
-  .listen-chip,.focus-chip,.favorite-chip { min-height: 24px; padding-inline: 7px; font-size: 8px; }
+  .listen-chip,.focus-chip,.chat-chip,.favorite-chip { min-height: 24px; padding-inline: 7px; font-size: 8px; }
   .favorite-chip { width: 26px; padding: 0; font-size: 13px; }
   .chat-preview { min-height: 145px; }
   .chat-preview .chat-panel { height: 165px; }
@@ -2569,8 +2574,8 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   z-index: 90;
   display: flex;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, .64);
-  backdrop-filter: blur(6px);
+  background: #020c0a;
+  backdrop-filter: none;
 }
 
 .stream-manager-drawer {
@@ -3080,10 +3085,47 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   font-size: 9px;
 }
 
-.stream-manager-footer .primary-button {
-  min-height: 42px;
-  padding-inline: 22px;
+.stream-manager-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+
+.stream-manager-footer .primary-button,
+.stream-manager-footer .stream-manager-clear-all,
+.stream-manager-footer .stream-manager-remove-offline {
+  min-height: 42px;
+  padding-inline: 18px;
+  white-space: nowrap;
+}
+
+.stream-manager-footer .stream-manager-clear-all,
+.stream-manager-footer .stream-manager-remove-offline {
+  border-radius: 11px;
+}
+
+.stream-manager-footer .stream-manager-clear-all {
+  border: 0;
+  background: transparent;
+  color: #88a59c;
+}
+
+.stream-manager-footer .stream-manager-clear-all:hover:not(:disabled) {
+  color: #d9eee7;
+  background: rgba(255, 255, 255, .035);
+}
+
+.stream-manager-footer .stream-manager-remove-offline {
+  border: 1px solid rgba(69, 224, 181, .22);
+  background: rgba(69, 224, 181, .07);
+  color: #bff6e5;
+}
+
+.stream-manager-footer .stream-manager-remove-offline:hover:not(:disabled) {
+  border-color: rgba(69, 224, 181, .42);
+  background: rgba(69, 224, 181, .11);
+}
+
 
 .stream-add-tile {
   order: 99;
@@ -3420,6 +3462,11 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   .stream-manager-footer .primary-button {
     min-height: 42px;
     min-width: 112px;
+  }
+
+  .stream-manager-footer .stream-manager-clear-all {
+    min-width: 94px;
+    padding-inline: 12px;
   }
 
   .stream-manager-replace-card {
@@ -4598,13 +4645,23 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 .builder-quick-watch-dock {
   margin: 14px 0 16px;
   display: flex;
+  gap: 10px;
   width: 100%;
 }
 
 .builder-quick-watch-dock .builder-quick-watch-button {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-height: 48px;
   justify-content: center;
+}
+
+.builder-quick-watch-dock .builder-clear-all-button {
+  flex: 0 0 auto;
+  min-width: 118px;
+  min-height: 48px;
+  padding-inline: 18px;
+  border-radius: 12px;
 }
 
 @media (max-width: 760px) {
@@ -4623,10 +4680,18 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 
   .builder-quick-watch-dock .builder-quick-watch-button {
-    width: 100%;
+    min-width: 0;
     min-height: 54px;
     font-weight: 800;
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+  }
+
+  .builder-quick-watch-dock .builder-clear-all-button {
+    min-width: 104px;
+    min-height: 54px;
+    padding-inline: 13px;
+    background: rgba(7, 22, 18, .98);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34);
   }
 }
 
@@ -4919,16 +4984,22 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     left: 50%;
     bottom: 20px;
     z-index: 40;
-    width: min(640px, calc(100vw - 48px));
+    width: min(760px, calc(100vw - 48px));
     margin: 0;
     transform: translateX(-50%);
   }
 
   .builder-quick-watch-dock .builder-quick-watch-button {
-    width: 100%;
     min-height: 56px;
     font-weight: 800;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+  }
+
+  .builder-quick-watch-dock .builder-clear-all-button {
+    min-width: 132px;
+    min-height: 56px;
+    background: rgba(7, 22, 18, .98);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
   }
 }
 
@@ -4942,91 +5013,94 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 
-/* SquadView mobile stream volume control */
+/* SquadView per-stream volume control. Keep it available on desktop too: the
+   tighter 2x2 grid can hide Twitch's own iframe controls, so SquadView's compact
+   speaker button must remain reachable whenever a stream owns audio. */
 .stream-card {
   position: relative;
 }
 
-.volume-chip,
+.volume-chip {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 1px solid #315248;
+  border-radius: 999px;
+  background: #071713;
+  color: #d6eee7;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.volume-chip.is-open {
+  border-color: var(--mint);
+  background: rgba(69, 224, 181, .12);
+  color: var(--mint-soft);
+}
+
 .stream-volume-popover {
-  display: none;
+  position: absolute;
+  z-index: 18;
+  top: 42px;
+  left: 8px;
+  right: 8px;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid rgba(69, 224, 181, .5);
+  border-radius: 12px;
+  background: rgba(4, 18, 15, .96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 42px 32px;
+  align-items: center;
+  gap: 9px;
+  backdrop-filter: blur(10px);
+}
+
+.stream-volume-popover > span {
+  color: #b8d1c9;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.stream-volume-popover > strong {
+  color: #fff;
+  font-size: 11px;
+  text-align: right;
+}
+
+.stream-volume-popover input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  margin: 0;
+  accent-color: var(--mint);
+  touch-action: pan-x;
+}
+
+.stream-volume-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #315248;
+  border-radius: 999px;
+  background: #0b1b16;
+  color: #c5d9d3;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
 }
 
 @media (max-width: 760px) {
-  .volume-chip {
-    width: 28px;
-    height: 28px;
-    flex: 0 0 28px;
-    padding: 0;
-    border: 1px solid #315248;
-    border-radius: 999px;
-    background: #071713;
-    color: #d6eee7;
-    display: grid;
-    place-items: center;
-    font-size: 13px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .volume-chip.is-open {
-    border-color: var(--mint);
-    background: rgba(69, 224, 181, .12);
-    color: var(--mint-soft);
-  }
-
   .stream-volume-popover {
-    position: absolute;
-    z-index: 18;
     top: 42px;
     left: 8px;
     right: 8px;
-    min-height: 54px;
-    padding: 8px 10px;
-    border: 1px solid rgba(69, 224, 181, .5);
-    border-radius: 12px;
-    background: rgba(4, 18, 15, .96);
-    box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) 42px 32px;
-    align-items: center;
-    gap: 9px;
-    backdrop-filter: blur(10px);
-  }
-
-  .stream-volume-popover > span {
-    color: #b8d1c9;
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  .stream-volume-popover > strong {
-    color: #fff;
-    font-size: 11px;
-    text-align: right;
-  }
-
-  .stream-volume-popover input[type="range"] {
-    width: 100%;
-    min-width: 0;
-    height: 34px;
-    margin: 0;
-    accent-color: var(--mint);
-    touch-action: pan-x;
-  }
-
-  .stream-volume-close {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    border: 1px solid #315248;
-    border-radius: 999px;
-    background: #0b1b16;
-    color: #c5d9d3;
-    display: grid;
-    place-items: center;
-    font-size: 18px;
-    line-height: 1;
   }
 }
 
@@ -5521,5 +5595,1371 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   .referral-promo-later {
     min-height: 32px;
     font-size: 9px;
+  }
+}
+
+/* Viewer Modes Phase 1.1 — desktop Focus becomes one stream + matching chat.
+   Mobile Focus keeps its existing solo behavior. */
+@media (min-width: 1100px) {
+  .viewer-shell.mode-solo .stream-stage.mode-solo {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin-inline: 0;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .stream-stage-players {
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1.35fr) minmax(360px, .65fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .stream-card.is-visible,
+  .viewer-shell.mode-solo .desktop-focus-chat-panel {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .player-viewport {
+    flex: 1 1 auto;
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .viewer-shell.mode-solo .desktop-focus-chat-panel .chat-panel {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .viewer-shell.mode-solo .desktop-focus-chat-panel .chat-panel iframe {
+    width: 100%;
+    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    border: 0;
+  }
+}
+
+@media (max-width: 1099px) {
+  .desktop-focus-chat-panel {
+    display: none !important;
+  }
+}
+
+/* Clear all streams confirmation */
+.clear-all-confirm-backdrop {
+  z-index: 140;
+  place-items: center;
+  padding: 20px;
+  background: rgba(1, 8, 7, .76);
+  backdrop-filter: blur(10px);
+}
+
+.clear-all-confirm-modal {
+  width: min(520px, 100%);
+  overflow: hidden;
+  padding: 28px;
+  border-color: rgba(69, 224, 181, .28);
+  border-radius: 24px;
+  background:
+    radial-gradient(
+      circle at 12% 0%,
+      rgba(69, 224, 181, .10),
+      transparent 34%
+    ),
+    linear-gradient(
+      180deg,
+      #0b1d18 0%,
+      #071410 100%
+    );
+  box-shadow: 0 26px 90px rgba(0, 0, 0, .52);
+  text-align: left;
+}
+
+.clear-all-confirm-modal .modal-eyebrow {
+  color: var(--mint);
+}
+
+.clear-all-confirm-mark {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  margin: 20px 0 16px;
+  border: 1px solid rgba(255, 159, 67, .32);
+  border-radius: 14px;
+  background: rgba(255, 159, 67, .10);
+  color: var(--orange);
+  font: 800 21px 'Space Grotesk';
+}
+
+.clear-all-confirm-modal h2 {
+  margin: 0 42px 8px 0;
+  color: #f3fff9;
+  font: 700 28px/1.1 'Space Grotesk';
+}
+
+.clear-all-confirm-modal > p {
+  margin: 0;
+  color: #9db5ad;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.clear-all-confirm-note {
+  margin-top: 18px;
+  padding: 13px 14px;
+  border: 1px solid rgba(69, 224, 181, .14);
+  border-radius: 13px;
+  background: rgba(69, 224, 181, .055);
+  color: #a8c9be;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.clear-all-confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.clear-all-confirm-actions .secondary-button,
+.clear-all-confirm-primary {
+  width: 100%;
+  min-height: 50px;
+  border-radius: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.clear-all-confirm-primary {
+  border: 1px solid rgba(255, 159, 67, .36);
+  background: rgba(255, 159, 67, .13);
+  color: #ffd1a5;
+}
+
+.clear-all-confirm-primary:hover {
+  border-color: rgba(255, 159, 67, .66);
+  background: rgba(255, 159, 67, .19);
+}
+
+.clear-all-confirm-close {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0a1c17;
+  color: #d6e7e1;
+}
+
+@media (max-width: 640px) {
+  .clear-all-confirm-backdrop {
+    place-items: end center;
+    padding: 12px;
+  }
+
+  .clear-all-confirm-modal {
+    padding: 24px 18px 18px;
+    border-radius: 22px 22px 14px 14px;
+  }
+
+  .clear-all-confirm-modal h2 {
+    font-size: 24px;
+  }
+
+  .clear-all-confirm-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Manage Streams rebuild flow */
+.stream-manager-current-empty {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px;
+  border: 1px dashed rgba(69, 224, 181, .24);
+  border-radius: 18px;
+  background: rgba(69, 224, 181, .035);
+}
+
+.stream-manager-current-empty > span {
+  color: var(--mint);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.stream-manager-current-empty > strong {
+  color: #effbf7;
+  font: 700 22px/1.15 'Space Grotesk';
+}
+
+.stream-manager-current-empty > p {
+  max-width: 380px;
+  margin: 0;
+  color: #8fa69e;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.stream-manager-footer-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+  transform: none;
+}
+
+
+
+/* Manage Streams draft workspace */
+.stream-manager-backdrop {
+  isolation: isolate;
+}
+
+.stream-manager-footer-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .stream-manager-footer-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .stream-manager-footer .stream-manager-remove-offline {
+    grid-column: 1 / -1;
+  }
+
+  .stream-manager-footer .stream-manager-clear-all,
+  .stream-manager-footer .primary-button {
+    width: 100%;
+  }
+}
+
+/* Homepage refresh: link style actions inside compact product cards. */
+.marketing-trust-action {
+  appearance: none;
+  display: inline-block;
+  margin-top: 13px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mint-soft);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+.marketing-trust-action:hover { color: #fff; }
+
+/* ============================================================
+   SquadView UX Refresh Phase 1 — app-first + docked desktop chat
+   ============================================================ */
+
+/* The app switches into the multi-stream grid before the old 1100px desktop
+   breakpoint. This keeps a resized desktop/tablet window in a 2x2 layout
+   instead of dropping to a two-stream mobile carousel with unused space. */
+@media (min-width: 761px) {
+  .viewer-workspace {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .viewer-primary-layout {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .viewer-primary-layout .stream-stage {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    box-sizing: border-box;
+  }
+
+  .viewer-primary-layout .stream-stage.mode-dual,
+  .viewer-primary-layout .stream-stage.mode-chat,
+  .viewer-primary-layout .stream-stage.mode-solo {
+    display: block;
+    height: 100%;
+  }
+
+  .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players,
+  .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .viewer-primary-layout .stream-stage.mode-solo .stream-stage-players {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .viewer-primary-layout .stream-card.is-visible,
+  .viewer-primary-layout .youtube-companion-card.is-visible {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .viewer-primary-layout .stream-card.is-visible .player-viewport,
+  .viewer-primary-layout .youtube-companion-card.is-visible .youtube-companion-player {
+    flex: 1 1 auto;
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .viewer-primary-layout .mobile-chat-tile {
+    display: none !important;
+  }
+
+  .focus-stream-selector {
+    position: absolute;
+    top: 8px;
+    left: 40%;
+    z-index: 26;
+    width: max-content;
+    max-width: min(34vw, 470px);
+    padding: 3px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    overflow-x: auto;
+    transform: translateX(-50%);
+    border: 1px solid rgba(69,224,181,.2);
+    border-radius: 999px;
+    background: rgba(3, 10, 8, .9);
+    box-shadow: 0 8px 26px rgba(0,0,0,.28);
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .focus-stream-selector::-webkit-scrollbar { display: none; }
+
+  .focus-stream-selector button {
+    flex: 0 0 auto;
+    min-height: 27px;
+    max-width: 105px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    border: 1px solid #29493f;
+    border-radius: 999px;
+    background: #071713;
+    color: #b8ccc5;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 800;
+  }
+
+  .focus-stream-selector button.is-current {
+    border-color: var(--mint);
+    background: rgba(69,224,181,.16);
+    color: #effcf7;
+  }
+
+  .focus-stream-selector button .text-icon {
+    color: #f6a23a;
+    flex: 0 0 auto;
+  }
+
+  .focus-stream-selector button span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Full desktop: chat is a slim, dedicated rail. It never occupies a Twitch
+   grid slot, so four Twitch streams remain visible when four are selected. */
+@media (min-width: 1100px) {
+  .viewer-primary-layout.has-chat-rail {
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 340px);
+    grid-template-areas: "stream chat";
+    gap: 6px;
+    padding: 6px;
+    box-sizing: border-box;
+  }
+
+  .viewer-primary-layout.has-chat-rail.chat-dock-left {
+    grid-template-columns: clamp(280px, 22vw, 340px) minmax(0, 1fr);
+    grid-template-areas: "chat stream";
+  }
+
+  .viewer-primary-layout.has-chat-rail .stream-stage {
+    grid-area: stream;
+    padding: 0;
+  }
+
+  .desktop-chat-rail {
+    grid-area: chat;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+
+  .desktop-chat-dock-toolbar {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 4px 6px 4px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(4, 18, 14, .96);
+  }
+
+  .desktop-chat-dock-toolbar span {
+    color: #8ca69d;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  .desktop-chat-dock-toolbar button {
+    min-height: 26px;
+    padding: 0 9px;
+    border: 1px solid #315447;
+    border-radius: 999px;
+    background: #071713;
+    color: #d8eee6;
+    cursor: pointer;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .desktop-chat-dock-toolbar button:hover {
+    border-color: var(--mint);
+    color: #fff;
+  }
+
+  .desktop-chat-rail .chat-panel {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .desktop-chat-rail .chat-panel iframe,
+  .desktop-chat-rail .native-twitch-chat {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  /* The old Grid + Chat quadrant rules must not affect the new rail layout. */
+  .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .viewer-shell.mode-chat.chat-layout-grid .stream-stage.mode-chat {
+    height: 100%;
+  }
+}
+
+/* Any desktop can use Chat as the fourth 2x2 quadrant when the roster has
+   exactly three Twitch streams. Narrow desktop also uses the same tile by
+   default. Keep the tile styling available above the narrow breakpoint so the
+   three-stream layout remains a true 2x2 composition on large monitors. */
+@media (min-width: 761px) {
+  .viewer-primary-layout.has-chat-grid-tile .desktop-chat-grid-tile {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+
+  .viewer-primary-layout.has-chat-grid-tile .desktop-chat-grid-tile .chat-panel,
+  .viewer-primary-layout.has-chat-grid-tile .desktop-chat-grid-tile .native-twitch-chat {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+}
+
+/* Narrow desktop/tablet: Grid + Chat uses the fourth tile for Chat instead
+   of creating a cramped side rail or pushing Chat below the fold. Focus mode
+   keeps its existing stacked stream + chat treatment at these widths. */
+@media (min-width: 761px) and (max-width: 1099px) {
+  .viewer-primary-layout.has-chat-grid-tile {
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .viewer-primary-layout.has-chat-grid-tile .stream-stage {
+    height: 100%;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .desktop-chat-grid-tile {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+
+  .desktop-chat-grid-tile .chat-panel,
+  .desktop-chat-grid-tile .native-twitch-chat {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .viewer-primary-layout.has-chat-rail {
+    height: auto;
+    min-height: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(520px, calc(100dvh - 110px)) 300px;
+    gap: 6px;
+    overflow-y: auto;
+    padding: 6px;
+    box-sizing: border-box;
+  }
+
+  .viewer-primary-layout.has-chat-rail .stream-stage {
+    padding: 0;
+  }
+
+  .desktop-chat-rail {
+    min-height: 300px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+
+  .desktop-chat-rail .chat-panel,
+  .desktop-chat-rail .native-twitch-chat {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+/* Rewards should never replace a stream tile. Keep the existing referral
+   experience, but surface it as a dismissible floating card above the toolbar. */
+.viewer-rewards-popover {
+  position: fixed !important;
+  right: 16px;
+  bottom: calc(64px + max(env(safe-area-inset-bottom), 0px));
+  z-index: 42;
+  width: min(380px, calc(100vw - 32px));
+  height: auto;
+  max-height: min(620px, calc(100dvh - 140px));
+  min-height: 0;
+  padding: 20px;
+  border-width: 1px;
+  box-shadow: 0 18px 60px rgba(0,0,0,.48);
+}
+
+.viewer-rewards-popover .referral-promo-copy > strong { font-size: 22px; }
+.viewer-rewards-popover .referral-promo-copy > p { font-size: 11px; }
+.viewer-rewards-popover .referral-promo-benefits { grid-template-columns: 1fr; }
+
+/* Guest Twitch benefits prompt shown once per browser tab after a signed-out
+   user starts entering a channel. Guest viewing always remains available. */
+.guest-benefits-modal,
+.how-it-works-modal {
+  text-align: left;
+}
+
+.guest-benefits-modal {
+  width: min(520px, 100%);
+}
+
+.guest-benefits-modal > h2,
+.guest-benefits-modal > p,
+.guest-benefits-modal > .modal-eyebrow {
+  text-align: center;
+}
+
+.modal-eyebrow {
+  display: block;
+  color: var(--mint);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.guest-benefit-list {
+  margin: 18px 0;
+  display: grid;
+  gap: 8px;
+}
+
+.guest-benefit-list span {
+  min-height: 40px;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #071310;
+  color: #c9ddd6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.guest-benefit-list b { color: var(--mint); }
+
+.how-it-works-modal {
+  width: min(720px, 100%);
+}
+
+.how-it-works-modal > h2 {
+  margin-right: 28px;
+  font-size: clamp(24px, 4vw, 34px);
+  line-height: 1.04;
+}
+
+.how-it-works-modal > p {
+  max-width: 640px;
+}
+
+.how-it-works-modal-grid {
+  margin: 18px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.how-it-works-modal-grid article {
+  min-height: 118px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: #071310;
+}
+
+.how-it-works-modal-grid article > b,
+.how-it-works-modal-grid article > strong,
+.how-it-works-modal-grid article > span {
+  display: block;
+}
+
+.how-it-works-modal-grid article > b {
+  color: var(--orange);
+  font-size: 10px;
+}
+
+.how-it-works-modal-grid article > strong {
+  margin-top: 9px;
+  color: #effcf7;
+  font-size: 13px;
+}
+
+.how-it-works-modal-grid article > span {
+  margin-top: 5px;
+  color: #8fa59e;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.how-it-works-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.how-it-works-modal-actions .primary-button {
+  width: auto;
+  min-height: 44px;
+  padding-inline: 18px;
+}
+
+.how-it-works-modal-actions a {
+  color: var(--mint-soft);
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .topbar-help-link { grid-column: span 1; }
+  .how-it-works-modal-grid { grid-template-columns: 1fr; }
+  .viewer-rewards-popover {
+    left: 10px;
+    right: 10px;
+    bottom: calc(60px + max(env(safe-area-inset-bottom), 8px));
+    width: auto;
+    max-height: 58dvh;
+  }
+}
+
+/* ============================================================
+   SquadView UX Refresh Phase 1.3 — Focus fill + mobile Focus chat
+   ============================================================ */
+
+/* Focus chat now lives in the dedicated external rail. Remove the legacy
+   two-column Focus grid that reserved an empty in-stage chat column. */
+@media (min-width: 1100px) {
+  .viewer-shell.mode-solo .viewer-primary-layout.has-chat-rail .stream-stage.mode-solo .stream-stage-players {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .viewer-shell.mode-solo .viewer-primary-layout.has-chat-rail .stream-stage.mode-solo .stream-card.is-visible {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .viewer-shell.mode-solo .viewer-primary-layout.has-chat-rail .stream-stage.mode-solo .player-viewport {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+}
+
+/* Mobile Focus is a complete stream workspace: direct stream switching at the
+   top, the focused Twitch player, then that stream's chat filling the remaining
+   height. The browser/device remains the final authority over whether media can
+   actually become audible. */
+@media (max-width: 760px) {
+  .viewer-shell.mode-solo .viewer-workspace {
+    overflow: hidden;
+  }
+
+  .viewer-shell.mode-solo .viewer-primary-layout {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .mobile-focus-stream-selector {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
+    margin: 6px 6px 2px;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    overflow-x: auto;
+    border: 1px solid rgba(69, 224, 181, .22);
+    border-radius: 999px;
+    background: rgba(5, 18, 14, .96);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+    scrollbar-width: none;
+  }
+
+  .mobile-focus-stream-selector::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-focus-stream-selector button {
+    flex: 0 0 auto;
+    min-height: 32px;
+    max-width: 150px;
+    padding: 0 10px 0 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    border: 1px solid #29493f;
+    border-radius: 999px;
+    background: #071713;
+    color: #b8ccc5;
+    cursor: pointer;
+    font: inherit;
+    font-size: 9px;
+    font-weight: 800;
+  }
+
+  .mobile-focus-stream-selector button.is-current {
+    border-color: var(--mint);
+    background: rgba(69, 224, 181, .16);
+    color: #effcf7;
+  }
+
+  .mobile-focus-stream-selector button > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-focus-avatar {
+    width: 23px;
+    height: 23px;
+    flex: 0 0 23px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: rgba(69, 224, 181, .12);
+    color: var(--mint-soft);
+    font-size: 9px;
+    font-weight: 900;
+  }
+
+  .mobile-focus-stream-selector .text-icon {
+    flex: 0 0 auto;
+    color: #f6a23a;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo {
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    padding: 4px 6px 6px;
+    overflow: hidden;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .stream-stage-players {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(280px, 1fr);
+    align-content: stretch;
+    gap: 6px;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .stream-card.is-visible {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+
+  .viewer-shell.mode-solo .stream-stage.mode-solo .stream-card.is-visible .player-viewport {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 16 / 9;
+  }
+
+  .viewer-shell.mode-solo .persistent-mobile-chat.is-active {
+    display: flex;
+    width: 100%;
+    height: auto;
+    min-height: 280px;
+  }
+
+  .viewer-shell.mode-solo .persistent-mobile-chat.is-active .chat-panel,
+  .viewer-shell.mode-solo .persistent-mobile-chat.is-active .native-twitch-chat,
+  .viewer-shell.mode-solo .persistent-mobile-chat.is-active iframe {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+}
+
+/* SquadView Favorites + live automation — Phase 2 */
+.automation-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "copy switch";
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(69,224,181,.18);
+  border-radius: 14px;
+  background: rgba(6,24,20,.7);
+  cursor: pointer;
+}
+.automation-toggle > span { grid-area: copy; min-width: 0; }
+.automation-toggle strong,
+.automation-toggle small { display: block; }
+.automation-toggle strong { color: #e7f8f2; font-size: 12px; }
+.automation-toggle small { margin-top: 3px; color: #7f9c93; font-size: 10px; line-height: 1.45; }
+.automation-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.automation-toggle > i {
+  grid-area: switch;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border: 1px solid #315248;
+  border-radius: 999px;
+  background: #071713;
+  transition: border-color .16s ease, background .16s ease;
+}
+.automation-toggle > i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #78958c;
+  transition: transform .16s ease, background .16s ease;
+}
+.automation-toggle input:checked + i {
+  border-color: rgba(69,224,181,.7);
+  background: rgba(69,224,181,.14);
+}
+.automation-toggle input:checked + i::after {
+  transform: translateX(18px);
+  background: var(--mint);
+}
+.automation-toggle:focus-within { outline: 2px solid rgba(69,224,181,.35); outline-offset: 2px; }
+.automation-toggle.is-disabled { opacity: .5; cursor: default; }
+.automation-toggle.compact { padding: 10px 12px; }
+.automation-toggle.compact strong { font-size: 11px; }
+.automation-toggle.compact small { font-size: 9px; }
+.builder-automation-toggle { margin: 14px 0 2px; }
+.stream-manager-automation-toggle { margin: 0 0 14px; }
+
+.following-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.following-view-tabs::-webkit-scrollbar { display: none; }
+.following-view-tabs button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #071713;
+  color: #8ea79f;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.following-view-tabs button span {
+  min-width: 22px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.05);
+  color: #a7c0b8;
+  font-size: 9px;
+}
+.following-view-tabs button.is-current {
+  border-color: rgba(69,224,181,.45);
+  background: rgba(69,224,181,.12);
+  color: #e7fff7;
+}
+.following-view-tabs button.is-current span { color: var(--mint); }
+.following-preferences {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.following-live-card.is-favorite { border-color: rgba(246,162,58,.34); }
+.following-favorite-toggle {
+  min-height: 31px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid #315248;
+  border-radius: 999px;
+  background: rgba(5,19,16,.9);
+  color: #9db8af;
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.following-favorite-toggle .text-icon { font-size: 13px; }
+.following-favorite-toggle:hover,
+.following-favorite-toggle:focus-visible { border-color: var(--mint); color: var(--mint-soft); }
+.following-favorite-toggle.is-favorite {
+  border-color: rgba(246,162,58,.6);
+  background: rgba(246,162,58,.08);
+  color: #f6a23a;
+}
+
+.following-directory-list { display: grid; gap: 10px; }
+.following-directory-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 70px;
+  padding: 11px 12px 11px 15px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: rgba(7,23,19,.76);
+}
+.following-directory-list article.is-live { border-color: rgba(69,224,181,.34); }
+.following-directory-copy { min-width: 0; }
+.following-directory-copy strong,
+.following-directory-copy small { display: block; }
+.following-directory-copy strong {
+  overflow: hidden;
+  color: #e7f8f2;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.following-directory-copy small { margin-top: 4px; color: #78958c; font-size: 10px; }
+.following-directory-list .favorite-add-button { min-width: 92px; min-height: 38px; border: 1px solid rgba(69,224,181,.24); border-radius: 11px; }
+
+.favorite-live-toast {
+  position: fixed;
+  left: 50%;
+  top: max(72px, calc(env(safe-area-inset-top) + 58px));
+  transform: translateX(-50%);
+  z-index: 3200;
+  width: min(390px, calc(100% - 28px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 12px 13px 15px;
+  border: 1px solid rgba(246,162,58,.42);
+  border-radius: 15px;
+  background: rgba(7,25,21,.98);
+  box-shadow: 0 22px 60px rgba(0,0,0,.5);
+}
+.favorite-live-toast > div { min-width: 0; }
+.favorite-live-toast span,
+.favorite-live-toast strong,
+.favorite-live-toast small { display: block; }
+.favorite-live-toast span { color: #f6a23a; font-size: 9px; font-weight: 950; letter-spacing: .08em; text-transform: uppercase; }
+.favorite-live-toast strong { margin-top: 3px; color: #effff9; font-size: 12px; line-height: 1.35; }
+.favorite-live-toast small { margin-top: 3px; color: #8ba69d; font-size: 9px; line-height: 1.4; }
+.favorite-live-toast > button:not(.favorite-live-toast-dismiss) {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(69,224,181,.34);
+  border-radius: 10px;
+  background: rgba(69,224,181,.1);
+  color: #b9f7e5;
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.favorite-live-toast-dismiss {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.06);
+  color: #adc2bb;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .following-preferences { grid-template-columns: 1fr; }
+  .following-view-tabs { margin-inline: -2px; }
+  .following-directory-list article {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .following-directory-list .favorite-add-button {
+    grid-column: 1 / -1;
+    min-height: 42px;
+  }
+  .favorite-live-toast {
+    top: auto;
+    right: auto;
+    left: 50%;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+  }
+}
+
+/* SquadView UX Refresh Phase 2.1 — Favorites access cleanup */
+.channel-list label {
+  grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
+}
+
+.builder-favorite-toggle,
+.stream-manager-favorite-toggle {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #1d4438;
+  border-radius: 999px;
+  background: #0a1d17;
+  color: #78958c;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
+}
+
+.builder-favorite-toggle:hover,
+.stream-manager-favorite-toggle:hover {
+  border-color: rgba(255, 191, 74, .55);
+  color: #ffd27a;
+  transform: translateY(-1px);
+}
+
+.builder-favorite-toggle.is-favorite,
+.stream-manager-favorite-toggle.is-favorite {
+  border-color: rgba(255, 183, 58, .65);
+  background: rgba(255, 183, 58, .09);
+  color: #ffbd45;
+}
+
+.builder-favorite-toggle svg,
+.stream-manager-favorite-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.channel-list label .builder-clear-stream {
+  width: 32px;
+  height: 32px;
+}
+
+.stream-manager-row-actions,
+.stream-manager-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stream-manager-row-actions {
+  justify-content: flex-end;
+}
+
+.stream-manager-source-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.stream-manager-source-actions {
+  justify-content: flex-end;
+}
+
+.stream-manager-add-button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #225443;
+  border-radius: 9px;
+  background: #0c291f;
+  color: var(--mint-soft);
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.stream-manager-add-button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+@media (max-width: 700px) {
+  .channel-list label {
+    grid-template-columns: 28px minmax(0, 1fr) 32px 32px;
+  }
+
+  .stream-manager-source-actions {
+    gap: 5px;
+  }
+
+  .stream-manager-favorite-toggle {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+
+/* SquadView UX Refresh Phase 2.4 — Favorite visual priority */
+@keyframes squadviewFavoriteGlow {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255,189,69,.28), 0 0 16px rgba(255,189,69,.10), 0 16px 42px rgba(0,0,0,.22); }
+  50% { box-shadow: 0 0 0 1px rgba(255,189,69,.44), 0 0 25px rgba(255,189,69,.18), 0 16px 42px rgba(0,0,0,.22); }
+}
+
+/* Live Now cards: strongest favorite treatment because this is where priority matters most. */
+.following-live-card {
+  position: relative;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.following-live-card.is-favorite {
+  border: 2px solid rgba(255,189,69,.9);
+  background:
+    linear-gradient(180deg, rgba(255,189,69,.055), rgba(8,21,18,0) 32%),
+    #081512;
+  animation: squadviewFavoriteGlow 3.8s ease-in-out infinite;
+}
+.following-live-card.is-favorite::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255,224,154,.18), inset 0 0 24px rgba(255,189,69,.035);
+}
+.following-live-card.is-favorite:hover {
+  transform: translateY(-1px);
+  border-color: var(--favorite-soft);
+}
+.following-live-card.is-favorite .following-favorite-toggle.is-favorite {
+  border-color: rgba(255,189,69,.95);
+  background: rgba(255,189,69,.15);
+  color: var(--favorite-soft);
+  box-shadow: 0 0 14px rgba(255,189,69,.13);
+}
+
+/* Following directory/Favorites list. Live favorites stay brighter than offline favorites. */
+.following-directory-list article.is-favorite {
+  border: 2px solid rgba(255,189,69,.68);
+  background:
+    linear-gradient(90deg, rgba(255,189,69,.065), transparent 35%),
+    rgba(7,23,19,.82);
+  box-shadow: 0 0 0 1px rgba(255,189,69,.10), 0 0 17px rgba(255,189,69,.06);
+}
+.following-directory-list article.is-favorite.is-live {
+  border-color: rgba(255,189,69,.9);
+  box-shadow: 0 0 0 1px rgba(255,189,69,.18), 0 0 22px rgba(255,189,69,.12);
+}
+
+/* Manage Streams: favorite rows are obvious without overpowering drag/order controls. */
+.stream-manager-current-row.is-favorite,
+.stream-manager-source-row.is-favorite {
+  border: 2px solid rgba(255,189,69,.66);
+  background:
+    linear-gradient(90deg, rgba(255,189,69,.055), transparent 42%),
+    #091914;
+  box-shadow: 0 0 14px rgba(255,189,69,.06);
+}
+.stream-manager-source-row.is-favorite.is-live,
+.stream-manager-current-row.is-favorite.is-live {
+  border-color: rgba(255,189,69,.84);
+}
+.stream-manager-favorite-toggle.is-favorite,
+.builder-favorite-toggle.is-favorite {
+  border-color: rgba(255,189,69,.92);
+  background: rgba(255,189,69,.14);
+  color: var(--favorite);
+  box-shadow: 0 0 12px rgba(255,189,69,.12);
+}
+
+/* Progressive builder: the typed favorite row gets the same gold language. */
+.channel-list label.is-favorite {
+  border-color: rgba(255,189,69,.68);
+  background: linear-gradient(90deg, rgba(255,189,69,.055), rgba(13,28,25,.9) 36%);
+  box-shadow: 0 0 14px rgba(255,189,69,.055);
+}
+
+/* Viewer: favorite streams receive a quiet gold halo while active/focus state remains readable. */
+.stream-card.is-favorite {
+  border-color: rgba(255,189,69,.62);
+  box-shadow: 0 0 0 1px rgba(255,189,69,.10), 0 0 16px rgba(255,189,69,.055);
+}
+.stream-card.is-favorite.is-active {
+  border-color: var(--mint);
+  box-shadow:
+    0 0 0 1px rgba(69,224,181,.34),
+    0 0 18px rgba(69,224,181,.10),
+    0 0 28px rgba(255,189,69,.07);
+}
+.stream-card.is-favorite .favorite-chip.is-favorite {
+  border-color: rgba(255,189,69,.95);
+  background: rgba(255,189,69,.14);
+  color: var(--favorite-soft);
+  box-shadow: 0 0 12px rgba(255,189,69,.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .following-live-card.is-favorite { animation: none; }
+}
+
+@media (max-width: 760px) {
+  .following-live-card.is-favorite {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(255,189,69,.28), 0 0 14px rgba(255,189,69,.09), 0 12px 34px rgba(0,0,0,.2);
   }
 }
