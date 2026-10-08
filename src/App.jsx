@@ -2329,14 +2329,17 @@ function SquadViewApp() {
     if (!mobileSingleAudioMode || !player || player.__squadViewReady !== true) return false;
     const nextVolume = Math.max(0.01, clampFocusedAudioVolume(volume, 1));
 
-    // Keep these calls inside the user's tap. iOS WebKit is substantially more
-    // reliable when play + volume + unmute happen synchronously with the gesture
-    // instead of arriving later from a React effect/READY callback.
+    // Keep the unmute itself inside the user's tap. On iOS the selected Twitch
+    // player is normally already playing muted, so do not restart it first.
+    // Replaying before the unmute can cause WebKit/Twitch to treat the action as
+    // a fresh programmatic playback request instead of a simple audio claim.
     try {
       muteOtherMobilePlayers(channel);
-      player.play?.();
+      const wasPaused = player.isPaused?.() === true;
       player.setVolume?.(nextVolume);
       player.setMuted?.(false);
+      if (wasPaused) player.play?.();
+      player.setVolume?.(nextVolume);
       return true;
     } catch {
       return false;
@@ -2399,13 +2402,30 @@ function SquadViewApp() {
     }
 
     if (mobileSingleAudioMode) {
-      const manualOwner = [...listeningChannels].find((candidate) => channels.includes(candidate)) || '';
-      const currentOwner = audioEnabled ? (manualOwner || activeChannel) : '';
+      const player = playersRef.current.get(cleaned);
+      if (!player || player.__squadViewReady !== true) return;
 
-      // Listen is a true single-select toggle on mobile: tap a stream to make
-      // it the sole audible owner, or tap the current owner again for silence.
+      // The button action must follow the button's real state, not remembered
+      // audio intent. If Twitch still reports this tile muted, a visible Listen
+      // tap must retry the audio claim even when audioEnabled was left true by
+      // an earlier iOS attempt. This prevents Listen from accidentally acting
+      // like a second mute tap after WebKit rejected the first unmute.
+      let actuallyAudible = false;
+      try {
+        const muted = player.getMuted?.();
+        const currentVolume = Number(player.getVolume?.());
+        const paused = player.isPaused?.();
+        actuallyAudible = muted === false && Number.isFinite(currentVolume) && currentVolume > 0 && paused !== true;
+      } catch {
+        actuallyAudible = false;
+      }
+
+      // Listening -> Listen always means silence on mobile. Derive the owner
+      // from live Twitch audibility so a failed iOS claim cannot turn a visible
+      // Listen button into an accidental mute action on the next tap.
+      const currentOwner = actuallyAudible ? cleaned : '';
       if (currentOwner === cleaned) {
-        const currentPlayer = playersRef.current.get(cleaned);
+        const currentPlayer = player;
         try {
           currentPlayer?.setMuted?.(true);
           currentPlayer?.setVolume?.(0);
@@ -2418,52 +2438,51 @@ function SquadViewApp() {
         reconcileViewerAudio({
           listeningChannels: nextListening,
           audioEnabled: false,
-        });
+        }, { captureCurrent: false });
         return;
       }
 
-      const player = playersRef.current.get(cleaned);
+      // Listen -> Listening always selects this tile as the one mobile audio
+      // owner. Never record a fake Listening state in the UI: the label still
+      // comes from Twitch's live mute/volume report. Keep the selection retryable
+      // even if iOS refuses this particular unmute; the label remains Listen until
+      // Twitch actually reports sound.
       if (cleaned === activeChannel) {
         if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
           focusedAudioVolumeRef.current = 1;
-          if (player) player.__squadViewPreferredVolume = 1;
         }
-      } else if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
-        player.__squadViewManualVolume = 1;
+        player.__squadViewPreferredVolume = clampFocusedAudioVolume(
+          focusedAudioVolumeRef.current,
+          1,
+        );
+      } else {
+        if (clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
+          player.__squadViewManualVolume = 1;
+        }
       }
 
       const nextListening = cleaned === activeChannel
         ? new Set()
         : new Set([cleaned]);
 
-      const claimed = claimMobileAudioFromGesture(
+      setListeningChannels(nextListening);
+      setAudioEnabled(true);
+
+      // Apply the one-owner policy while this tap is still on the call stack,
+      // then make the direct Twitch audio claim. Do not clear the selection on
+      // a rejected claim: a second Listen tap should retry rather than toggle off.
+      const nextPolicy = reconcileViewerAudio({
+        listeningChannels: nextListening,
+        audioEnabled: true,
+      }, { captureCurrent: false });
+
+      claimMobileAudioFromGesture(
         cleaned,
         player,
         cleaned === activeChannel
           ? focusedAudioVolumeRef.current
-          : player?.__squadViewManualVolume ?? 1,
+          : player.__squadViewManualVolume ?? 1,
       );
-
-      // Never record a fake Listening state. If iOS rejects the direct claim,
-      // stay silent and leave the control as Listen so the next user tap can retry.
-      if (!claimed) {
-        const silentListening = new Set();
-        setListeningChannels(silentListening);
-        setAudioEnabled(false);
-        reconcileViewerAudio({
-          listeningChannels: silentListening,
-          audioEnabled: false,
-        });
-        return;
-      }
-
-      setListeningChannels(nextListening);
-      setAudioEnabled(true);
-
-      const nextPolicy = reconcileViewerAudio({
-        listeningChannels: nextListening,
-        audioEnabled: true,
-      });
       resumeAudioSelectedPlayers(nextPolicy);
       return;
     }
@@ -4039,6 +4058,15 @@ function SquadViewApp() {
 
               {!isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
                 <div className="mobile-focus-stream-selector" aria-label="Choose focused stream">
+                  <button
+                    type="button"
+                    className="mobile-focus-return-dual"
+                    onClick={returnToDual}
+                    title="Return to Dual view"
+                  >
+                    <span aria-hidden="true">▦</span>
+                    <span>Dual</span>
+                  </button>
                   {channels.map((channel) => (
                     <button
                       type="button"

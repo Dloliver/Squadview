@@ -7309,3 +7309,30 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     font-size: 24px;
   }
 }
+
+/* ============================================================
+   SquadView UX Refresh Phase 3.1.3 — mobile Listen + chat space
+   ============================================================ */
+@media (max-width: 760px) {
+  /* Focus/Chat already exposes its return control in the horizontal stream
+     selector. Remove the separate bottom toolbar from layout entirely so the
+     Twitch/native chat panel receives the reclaimed vertical space. */
+  .viewer-shell.mode-solo .viewer-toolbar,
+  .viewer-shell.mode-chat .viewer-toolbar {
+    display: none !important;
+  }
+
+  .mobile-focus-stream-selector .mobile-focus-return-dual {
+    min-width: 70px;
+    max-width: none;
+    padding-inline: 10px;
+    border-color: rgba(69, 224, 181, .34);
+    background: rgba(69, 224, 181, .08);
+    color: var(--mint-soft);
+  }
+
+  .mobile-focus-stream-selector .mobile-focus-return-dual > span:first-child {
+    font-size: 12px;
+    line-height: 1;
+  }
+}
