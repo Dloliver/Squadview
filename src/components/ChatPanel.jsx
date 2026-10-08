@@ -200,7 +200,7 @@ function statusCopy(status) {
   return 'Live messages will appear here.';
 }
 
-export default function ChatPanel({ channel, compact = false }) {
+export default function ChatPanel({ channel, compact = false, mentionCandidates = [] }) {
   const [nativeEnabled, setNativeEnabled] = useState(null);
   const [status, setStatus] = useState('resolving');
   const [error, setError] = useState('');
@@ -215,6 +215,8 @@ export default function ChatPanel({ channel, compact = false }) {
   const [emoteErrorCode, setEmoteErrorCode] = useState('');
   const [emotes, setEmotes] = useState([]);
   const [emoteSearch, setEmoteSearch] = useState('');
+  const [composerCursor, setComposerCursor] = useState(0);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const composerRef = useRef(null);
   const endRef = useRef(null);
 
@@ -222,6 +224,66 @@ export default function ChatPanel({ channel, compact = false }) {
     () => String(channel || '').trim().toLowerCase(),
     [channel],
   );
+
+  const mentionUsers = useMemo(() => {
+    const users = [];
+    const seen = new Set();
+
+    const addUser = (loginValue, displayValue = '') => {
+      const login = String(loginValue || '').trim().toLowerCase();
+      if (!login || seen.has(login)) return;
+      seen.add(login);
+      users.push({
+        login,
+        displayName: String(displayValue || login).trim() || login,
+      });
+    };
+
+    // Recent chatters are the most useful @ targets, so keep them first.
+    [...messages].reverse().forEach((message) => {
+      addUser(message?.chatterLogin, message?.chatterName);
+    });
+
+    addUser(broadcaster?.login || normalizedChannel, broadcaster?.display_name || normalizedChannel);
+
+    // Also include the current Squad creators. This makes it possible to type
+    // @ and quickly pick another streamer even before they have spoken in chat.
+    (Array.isArray(mentionCandidates) ? mentionCandidates : []).forEach((candidate) => {
+      addUser(candidate, candidate);
+    });
+
+    return users;
+  }, [messages, broadcaster?.login, broadcaster?.display_name, normalizedChannel, mentionCandidates]);
+
+  const mentionContext = useMemo(() => {
+    const cursor = Math.max(0, Math.min(Number(composerCursor) || 0, draft.length));
+    const beforeCursor = draft.slice(0, cursor);
+    const match = beforeCursor.match(/(^|\s)@([A-Za-z0-9_]{0,25})$/);
+    if (!match) return null;
+
+    const query = String(match[2] || '').toLowerCase();
+    return {
+      cursor,
+      query,
+      start: Math.max(0, cursor - query.length - 1),
+    };
+  }, [draft, composerCursor]);
+
+  const mentionSuggestions = useMemo(() => {
+    if (!mentionContext) return [];
+    const query = mentionContext.query;
+    return mentionUsers
+      .filter((user) => (
+        !query ||
+        user.login.includes(query) ||
+        user.displayName.toLowerCase().includes(query)
+      ))
+      .slice(0, 6);
+  }, [mentionContext, mentionUsers]);
+
+  useEffect(() => {
+    setMentionActiveIndex(0);
+  }, [mentionContext?.query, mentionSuggestions.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,6 +306,8 @@ export default function ChatPanel({ channel, compact = false }) {
     setMessages([]);
     setBroadcaster(null);
     setDraft('');
+    setComposerCursor(0);
+    setMentionActiveIndex(0);
     setSendError('');
     setEmotePickerOpen(false);
     setEmoteSearch('');
@@ -468,11 +532,48 @@ export default function ChatPanel({ channel, compact = false }) {
     );
 
     setDraft(next);
+    setComposerCursor(cursor);
     setSendError('');
 
     window.requestAnimationFrame(() => {
       input?.focus?.();
       input?.setSelectionRange?.(cursor, cursor);
+    });
+  };
+
+  const insertMention = (loginValue) => {
+    const login = String(loginValue || '').trim().replace(/^@+/, '').toLowerCase();
+    if (!login) return;
+
+    const input = composerRef.current;
+    const cursor = Math.max(0, Math.min(
+      Number.isFinite(input?.selectionStart) ? input.selectionStart : composerCursor,
+      draft.length,
+    ));
+    const end = Math.max(cursor, Math.min(
+      Number.isFinite(input?.selectionEnd) ? input.selectionEnd : cursor,
+      draft.length,
+    ));
+    const context = mentionContext && mentionContext.cursor === cursor
+      ? mentionContext
+      : null;
+    const start = context ? context.start : cursor;
+    const before = draft.slice(0, start);
+    const after = draft.slice(context ? cursor : end);
+    const prefix = context || !before || /\s$/.test(before) ? '' : ' ';
+    const suffix = after && /^\s/.test(after) ? '' : ' ';
+    const token = `${prefix}@${login}${suffix}`;
+    const next = `${before}${token}${after}`.slice(0, 500);
+    const nextCursor = Math.min(next.length, before.length + token.length);
+
+    setDraft(next);
+    setComposerCursor(nextCursor);
+    setMentionActiveIndex(0);
+    setSendError('');
+
+    window.requestAnimationFrame(() => {
+      input?.focus?.();
+      input?.setSelectionRange?.(nextCursor, nextCursor);
     });
   };
 
@@ -626,14 +727,15 @@ export default function ChatPanel({ channel, compact = false }) {
                   overflowWrap: 'anywhere',
                 }}
               >
-                <span
-                  style={{
-                    fontWeight: 700,
-                    color: message.color || '#bf94ff',
-                  }}
+                <button
+                  type="button"
+                  className="native-chat-username"
+                  onClick={() => insertMention(message.chatterLogin || message.chatterName)}
+                  title={`Mention @${message.chatterLogin || message.chatterName || 'viewer'}`}
+                  style={{ color: message.color || '#bf94ff' }}
                 >
                   {message.chatterName || message.chatterLogin || 'viewer'}
-                </span>
+                </button>
                 <span style={{ color: '#adadb8' }}>:</span>{' '}
                 <span><ChatMessageBody message={message} /></span>
               </div>
@@ -828,6 +930,24 @@ export default function ChatPanel({ channel, compact = false }) {
       )}
 
 
+      {mentionSuggestions.length > 0 && (
+        <div className="native-chat-mention-suggestions" role="listbox" aria-label="Mention a Twitch user">
+          {mentionSuggestions.map((user, index) => (
+            <button
+              type="button"
+              key={user.login}
+              className={index === mentionActiveIndex ? 'is-active' : ''}
+              role="option"
+              aria-selected={index === mentionActiveIndex}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => insertMention(user.login)}
+            >
+              <strong>@{user.login}</strong>
+              {user.displayName.toLowerCase() !== user.login && <span>{user.displayName}</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         className="native-chat-composer"
@@ -854,6 +974,8 @@ export default function ChatPanel({ channel, compact = false }) {
                 message,
               });
               setDraft('');
+              setComposerCursor(0);
+              setMentionActiveIndex(0);
             } catch (nextError) {
               setSendError(nextError?.message || 'Twitch could not send that message.');
             } finally {
@@ -869,7 +991,14 @@ export default function ChatPanel({ channel, compact = false }) {
           <textarea
             ref={composerRef}
             value={draft}
-            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
+            onChange={(event) => {
+              const next = event.target.value.slice(0, 500);
+              setDraft(next);
+              setComposerCursor(Math.min(event.target.selectionStart ?? next.length, next.length));
+            }}
+            onSelect={(event) => {
+              setComposerCursor(event.currentTarget.selectionStart ?? draft.length);
+            }}
             onFocus={(event) => {
               // Keep the bottom composer visible when the software keyboard
               // opens. The 16px font also avoids iOS Safari input zoom.
@@ -882,6 +1011,24 @@ export default function ChatPanel({ channel, compact = false }) {
               }, 50);
             }}
             onKeyDown={(event) => {
+              if (mentionSuggestions.length && !event.nativeEvent?.isComposing) {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setMentionActiveIndex((current) => (current + 1) % mentionSuggestions.length);
+                  return;
+                }
+                if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setMentionActiveIndex((current) => (current - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                  return;
+                }
+                if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+                  event.preventDefault();
+                  insertMention(mentionSuggestions[Math.min(mentionActiveIndex, mentionSuggestions.length - 1)]?.login);
+                  return;
+                }
+              }
+
               if (
                 event.key === 'Enter' &&
                 !event.shiftKey &&

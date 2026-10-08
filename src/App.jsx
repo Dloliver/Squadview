@@ -492,6 +492,11 @@ function SquadViewApp() {
   // audio ownership separate: all visible videos remain independent, while iOS
   // uses one audible Twitch owner at a time. Other platforms keep additive Listen.
   const iosSingleAudioMode = useMemo(() => isIOSLikeDevice(), []);
+  // Mobile browsers are far more reliable when exactly one Twitch embed owns
+  // audio at a time. Keep multiple videos visible, but make Listen a
+  // single-select control on every phone-sized viewer. The user can also
+  // select the current owner again to return to an all-muted state.
+  const mobileSingleAudioMode = !isDesktopGrid;
   const playersRef = useRef(new Map());
   // The focused stream owns the primary audio level. Keep that level stable
   // while paging, opening/closing chat, or moving focus to another stream.
@@ -540,7 +545,7 @@ function SquadViewApp() {
 
   const audioModeKey = viewMode === 'solo'
     ? 'solo'
-    : (iosSingleAudioMode && !isDesktopGrid && viewMode === 'chat')
+    : (!isDesktopGrid && viewMode === 'chat')
       ? 'mobile-chat'
       : 'mix';
 
@@ -551,6 +556,7 @@ function SquadViewApp() {
       listeningChannels: new Set(overrides.listeningChannels ?? listeningChannels),
       audioEnabled: overrides.audioEnabled ?? audioEnabled,
       iosSingleAudioMode: overrides.iosSingleAudioMode ?? iosSingleAudioMode,
+      mobileSingleAudioMode: overrides.mobileSingleAudioMode ?? mobileSingleAudioMode,
       mode: overrides.mode ?? audioModeKey,
     };
   }
@@ -567,7 +573,7 @@ function SquadViewApp() {
       return cleaned === policy.activeChannel;
     }
 
-    if (policy.iosSingleAudioMode) {
+    if (policy.mobileSingleAudioMode) {
       const manualOwner = [...policy.listeningChannels].find((candidate) =>
         policy.channels.includes(candidate),
       );
@@ -755,6 +761,11 @@ function SquadViewApp() {
   // and pauses while off page so returning can resume without rebuilding every
   // Twitch embed. A completely new viewer session resets this cache.
   const mountedPlayerChannelsRef = useRef(new Set());
+  // iOS/WebKit visibly restarts Twitch embeds after SquadView pauses an
+  // off-page player and later calls play() again. Keep only the immediately
+  // previous mobile layout warm so a normal page-back/page-forward action can
+  // return instantly without keeping the entire 16-stream roster decoding.
+  const mobileWarmPlaybackHistoryRef = useRef({ key: '', current: [], previous: [] });
 
   const viewerSessionActiveRef = useRef(Boolean(initialViewer));
   const viewerStreamLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, entitlements.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
@@ -1083,7 +1094,7 @@ function SquadViewApp() {
     // audioModeKey, activeChannel, or listeningChannels, so merely switching
     // chat targets never causes an audio rewrite.
     reconcileViewerAudio({}, { captureCurrent: true });
-  }, [listeningChannels, audioEnabled, activeChannel, channels, iosSingleAudioMode, audioModeKey]);
+  }, [listeningChannels, audioEnabled, activeChannel, channels, iosSingleAudioMode, mobileSingleAudioMode, audioModeKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1104,6 +1115,7 @@ function SquadViewApp() {
         return displayed && audioPolicySelectsChannel(audioPolicyRef.current, channel);
       }),
       iosSingleAudioMode,
+      mobileSingleAudioMode,
       isDesktopGrid,
       viewMode,
       desktopPage,
@@ -1124,6 +1136,7 @@ function SquadViewApp() {
     audioEnabled,
     audioModeKey,
     iosSingleAudioMode,
+    mobileSingleAudioMode,
     isDesktopGrid,
     viewMode,
     desktopPage,
@@ -1143,7 +1156,7 @@ function SquadViewApp() {
       ...listeningChannels,
     ].filter((channel) => allowed.has(channel));
     const nextListening = new Set(
-      iosSingleAudioMode ? allowedListening.slice(0, 1) : allowedListening,
+      mobileSingleAudioMode ? allowedListening.slice(0, 1) : allowedListening,
     );
 
     if (
@@ -1158,7 +1171,7 @@ function SquadViewApp() {
     if (!nextListening.size && !focusedChannelStillAvailable && audioEnabled) {
       setAudioEnabled(false);
     }
-  }, [channels, listeningChannels, audioEnabled, activeChannel, iosSingleAudioMode]);
+  }, [channels, listeningChannels, audioEnabled, activeChannel, mobileSingleAudioMode]);
 
   useEffect(() => {
     document.body.classList.toggle('viewer-active', screen === 'viewer');
@@ -2110,13 +2123,16 @@ function SquadViewApp() {
 
   function commitViewerStart(unique) {
     mountedPlayerChannelsRef.current = new Set();
+    mobileWarmPlaybackHistoryRef.current = { key: '', current: [], previous: [] };
 
     setChannels(unique);
     setActiveChannel(unique[0]);
     setListeningChannels(new Set());
-    // Focus implies Listen: the lead stream is the primary audio source as soon
-    // as the viewer starts. Other streams remain silent until Listen is chosen.
-    setAudioEnabled(Boolean(unique[0]));
+    // Desktop keeps its established lead-stream audio behavior. Mobile starts
+    // fully muted so iOS/Android audio is claimed only by a real user gesture.
+    // This avoids the first Twitch embed looking selected for audio even when
+    // WebKit rejected its automatic unmute during startup.
+    setAudioEnabled(isDesktopGrid ? Boolean(unique[0]) : false);
     const startWithGridChat = false;
     const initialViewMode = defaultLayout === 'smart'
       ? (startWithGridChat ? 'chat' : 'dual')
@@ -2296,59 +2312,196 @@ function SquadViewApp() {
     });
   }, []);
 
+  function muteOtherMobilePlayers(nextOwner = '') {
+    if (!mobileSingleAudioMode) return;
+    playersRef.current.forEach((player, playerChannel) => {
+      if (playerChannel === nextOwner) return;
+      try {
+        player?.setMuted?.(true);
+        player?.setVolume?.(0);
+      } catch {
+        // Twitch may still be initializing. The central controller retries.
+      }
+    });
+  }
+
+  function claimMobileAudioFromGesture(channel, player, volume = 1) {
+    if (!mobileSingleAudioMode || !player || player.__squadViewReady !== true) return false;
+    const nextVolume = Math.max(0.01, clampFocusedAudioVolume(volume, 1));
+
+    // Keep these calls inside the user's tap. iOS WebKit is substantially more
+    // reliable when play + volume + unmute happen synchronously with the gesture
+    // instead of arriving later from a React effect/READY callback.
+    try {
+      muteOtherMobilePlayers(channel);
+      player.play?.();
+      player.setVolume?.(nextVolume);
+      player.setMuted?.(false);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function listenToChannel(channel) {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
 
     if (viewMode === 'solo') {
-      // Solo Focus owns audio until the viewer exits Focus. Listen choices are
-      // intentionally preserved underneath and are not rewritten here.
+      // Listen is a real toggle in Focus on both desktop and mobile. Mobile
+      // claims audio directly from the user's tap; desktop keeps the established
+      // controller path. In either case, the label is driven by real Twitch
+      // mute/volume state, so Listening always means the embed is actually audible.
+      if (cleaned !== activeChannel) return;
+
+      const player = playersRef.current.get(cleaned);
+      if (!player) return;
+      if (mobileSingleAudioMode && player.__squadViewReady !== true) return;
+
+      let actuallyAudible = audibleChannels.has(cleaned);
+      try {
+        const muted = player.getMuted?.();
+        const volume = Number(player.getVolume?.());
+        if (typeof muted === 'boolean' && Number.isFinite(volume)) {
+          actuallyAudible = muted === false && volume > 0 && player.isPaused?.() !== true;
+        }
+      } catch {
+        // Fall back to the live audible status already tracked by the viewer.
+      }
+
+      if (actuallyAudible) {
+        focusedAudioVolumeRef.current = 0;
+        player.__squadViewPreferredVolume = 0;
+        try {
+          player.setMuted?.(true);
+          player.setVolume?.(0);
+        } catch {}
+        setAudioEnabled(false);
+        reconcileViewerAudio({ audioEnabled: false, mode: 'solo' });
+      } else if (mobileSingleAudioMode) {
+        if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
+          focusedAudioVolumeRef.current = 1;
+          player.__squadViewPreferredVolume = 1;
+        }
+        const claimed = claimMobileAudioFromGesture(cleaned, player, focusedAudioVolumeRef.current);
+        setAudioEnabled(Boolean(claimed));
+        reconcileViewerAudio({ audioEnabled: Boolean(claimed), activeChannel: cleaned, mode: 'solo' });
+      } else {
+        if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
+          focusedAudioVolumeRef.current = 1;
+          player.__squadViewPreferredVolume = 1;
+        }
+        setAudioEnabled(true);
+        const nextPolicy = reconcileViewerAudio({ audioEnabled: true, activeChannel: cleaned, mode: 'solo' });
+        resumeAudioSelectedPlayers(nextPolicy);
+      }
       return;
     }
 
-    if (iosSingleAudioMode) {
-      const manualOwner = [...listeningChannels][0] || '';
-      let nextListening;
+    if (mobileSingleAudioMode) {
+      const manualOwner = [...listeningChannels].find((candidate) => channels.includes(candidate)) || '';
+      const currentOwner = audioEnabled ? (manualOwner || activeChannel) : '';
 
+      // Listen is a true single-select toggle on mobile: tap a stream to make
+      // it the sole audible owner, or tap the current owner again for silence.
+      if (currentOwner === cleaned) {
+        const currentPlayer = playersRef.current.get(cleaned);
+        try {
+          currentPlayer?.setMuted?.(true);
+          currentPlayer?.setVolume?.(0);
+        } catch {
+          // The controller below still clears the audio owner.
+        }
+        const nextListening = new Set();
+        setListeningChannels(nextListening);
+        setAudioEnabled(false);
+        reconcileViewerAudio({
+          listeningChannels: nextListening,
+          audioEnabled: false,
+        });
+        return;
+      }
+
+      const player = playersRef.current.get(cleaned);
       if (cleaned === activeChannel) {
         if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
           focusedAudioVolumeRef.current = 1;
-          const player = playersRef.current.get(cleaned);
           if (player) player.__squadViewPreferredVolume = 1;
         }
-        nextListening = new Set();
-      } else if (manualOwner === cleaned) {
-        const player = playersRef.current.get(cleaned);
-        const currentVolume = clampFocusedAudioVolume(player?.__squadViewManualVolume, 1);
-        if (currentVolume <= 0) {
-          if (player) player.__squadViewManualVolume = 1;
-          nextListening = new Set([cleaned]);
-        } else {
-          nextListening = new Set();
-        }
-      } else {
-        const player = playersRef.current.get(cleaned);
-        if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
-          player.__squadViewManualVolume = 1;
-        }
-        nextListening = new Set([cleaned]);
+      } else if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
+        player.__squadViewManualVolume = 1;
+      }
+
+      const nextListening = cleaned === activeChannel
+        ? new Set()
+        : new Set([cleaned]);
+
+      const claimed = claimMobileAudioFromGesture(
+        cleaned,
+        player,
+        cleaned === activeChannel
+          ? focusedAudioVolumeRef.current
+          : player?.__squadViewManualVolume ?? 1,
+      );
+
+      // Never record a fake Listening state. If iOS rejects the direct claim,
+      // stay silent and leave the control as Listen so the next user tap can retry.
+      if (!claimed) {
+        const silentListening = new Set();
+        setListeningChannels(silentListening);
+        setAudioEnabled(false);
+        reconcileViewerAudio({
+          listeningChannels: silentListening,
+          audioEnabled: false,
+        });
+        return;
       }
 
       setListeningChannels(nextListening);
-      setAudioEnabled(Boolean(activeChannel));
+      setAudioEnabled(true);
 
       const nextPolicy = reconcileViewerAudio({
         listeningChannels: nextListening,
-        audioEnabled: Boolean(activeChannel),
+        audioEnabled: true,
       });
       resumeAudioSelectedPlayers(nextPolicy);
       return;
     }
 
     if (cleaned === activeChannel) {
-      if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
+      const player = playersRef.current.get(cleaned);
+      let actuallyAudible = audibleChannels.has(cleaned);
+      try {
+        const muted = player?.getMuted?.();
+        const volume = Number(player?.getVolume?.());
+        if (typeof muted === 'boolean' && Number.isFinite(volume)) {
+          actuallyAudible = muted === false && volume > 0 && player?.isPaused?.() !== true;
+        }
+      } catch {
+        // Fall back to the live audible status already tracked by the viewer.
+      }
+
+      // The active desktop stream used to be one-way: Listen could enable it,
+      // but clicking Listening could not mute it. Treat it like every other
+      // stream. A 0 focused volume deselects only this stream while preserving
+      // any other desktop Listen selections.
+      if (actuallyAudible) {
+        focusedAudioVolumeRef.current = 0;
+        if (player) player.__squadViewPreferredVolume = 0;
+        try {
+          player?.setMuted?.(true);
+          player?.setVolume?.(0);
+        } catch {}
+        const hasOtherDesktopAudio = [...listeningChannels].some((candidate) =>
+          candidate !== cleaned && channels.includes(candidate),
+        );
+        setAudioEnabled(hasOtherDesktopAudio);
+        reconcileViewerAudio({ audioEnabled: hasOtherDesktopAudio });
+        return;
+      }
+
+      if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
         focusedAudioVolumeRef.current = 1;
-        const player = playersRef.current.get(cleaned);
         if (player) player.__squadViewPreferredVolume = 1;
       }
       setAudioEnabled(true);
@@ -2507,9 +2660,21 @@ function SquadViewApp() {
 
     // Focus is the intentional temporary audio override: one stream, one audio
     // owner. listeningChannels stays untouched underneath so Grid can restore
-    // the user's mix exactly when Focus closes.
+    // the user's mix exactly when Focus closes. Desktop keeps the existing
+    // automatic Focus audio behavior. Mobile only reports audio enabled if the
+    // user's tap could claim a READY Twitch player; a never-visited stream stays
+    // muted until its Listen control becomes ready for a second real gesture.
+    let nextFocusAudioEnabled = true;
+    if (!isDesktopGrid) {
+      nextFocusAudioEnabled = claimMobileAudioFromGesture(
+        cleaned,
+        nextFocusedPlayer,
+        inheritedFocusedVolume,
+      );
+    }
+
     setActiveChannel(cleaned);
-    setAudioEnabled(true);
+    setAudioEnabled(nextFocusAudioEnabled);
     setChatChannel(cleaned);
     setChatLayout('single');
     setViewMode('solo');
@@ -2522,7 +2687,7 @@ function SquadViewApp() {
 
     reconcileViewerAudio({
       activeChannel: cleaned,
-      audioEnabled: true,
+      audioEnabled: nextFocusAudioEnabled,
       mode: 'solo',
     });
   }
@@ -2596,17 +2761,10 @@ function SquadViewApp() {
       return;
     }
 
-    // Mobile Chat is one displayed Twitch stream plus that same stream's chat.
-    // The mobile single-owner audio policy follows the displayed stream.
-    setChatChannel(cleaned);
-    setActiveChannel(cleaned);
-    setChatLayout('single');
-    setViewMode('chat');
-
-    reconcileViewerAudio({
-      activeChannel: cleaned,
-      mode: iosSingleAudioMode ? 'mobile-chat' : 'mix',
-    });
+    // On mobile, Chat is effectively Focus + Chat. Enter the same focused
+    // workspace so the selected stream fills the stage, chat is immediately
+    // available, and the horizontal channel switcher stays on top.
+    focusChannel(cleaned);
   }
 
   function enterChatMode() {
@@ -3699,6 +3857,28 @@ function SquadViewApp() {
         ? (isDesktopGrid ? desktopChannels : [activeChatChannel])
         : [activeChannel];
 
+    // iOS warm-resume cache: keep only the immediately previous mobile layout
+    // decoding offscreen and muted. Twitch's iOS embed otherwise shows its
+    // startup screen every time a scheduler-paused player is resumed. Android
+    // stays on the existing pause/resume policy until we validate it separately.
+    let mobileWarmPlaybackChannels = new Set();
+    if (!isDesktopGrid && iosSingleAudioMode) {
+      const nextKey = visibleChannels.join('|');
+      const history = mobileWarmPlaybackHistoryRef.current;
+      if (history.key !== nextKey) {
+        history.previous = history.current.slice(0, 2);
+        history.current = visibleChannels.slice(0, 2);
+        history.key = nextKey;
+      }
+      mobileWarmPlaybackChannels = new Set(
+        history.previous.filter(
+          (channel) => channels.includes(channel) && !visibleChannels.includes(channel),
+        ).slice(0, 2),
+      );
+    } else if (mobileWarmPlaybackHistoryRef.current.key) {
+      mobileWarmPlaybackHistoryRef.current = { key: '', current: [], previous: [] };
+    }
+
     // Only instantiate Twitch embeds as the user actually visits channels.
     // Previously visited channels remain mounted but receive visible={false},
     // which pauses them in TwitchPlayer until their page becomes active again.
@@ -3710,11 +3890,11 @@ function SquadViewApp() {
       mountedPlayerChannelsRef.current.has(channel),
     );
 
-    const iosManualAudioOwner = iosSingleAudioMode
+    const mobileManualAudioOwner = mobileSingleAudioMode
       ? [...listeningChannels][0] || ''
       : '';
-    const selectedAudioOwner = iosSingleAudioMode
-      ? (iosManualAudioOwner || activeChannel)
+    const selectedAudioOwner = mobileSingleAudioMode && audioEnabled
+      ? (mobileManualAudioOwner || activeChannel)
       : '';
 
     const desktopTileCount = viewMode === 'solo'
@@ -3892,7 +4072,7 @@ function SquadViewApp() {
                     }
                     focusActive={viewMode === 'solo' && activeChannel === channel}
                     audioSelected={
-                      iosSingleAudioMode
+                      mobileSingleAudioMode
                         ? selectedAudioOwner === channel
                         : viewMode === 'solo'
                           ? activeChannel === channel
@@ -3901,6 +4081,12 @@ function SquadViewApp() {
                     audioEnabled={audioEnabled}
                     audioAudible={audibleChannels.has(channel)}
                     preserveAudibleSession={iosSingleAudioMode}
+                    mobileSingleAudioMode={mobileSingleAudioMode}
+                    keepPlaybackWarm={
+                      iosSingleAudioMode &&
+                      !visibleChannels.includes(channel) &&
+                      mobileWarmPlaybackChannels.has(channel)
+                    }
                     allowBackgroundAudio={false}
                     focusVolume={focusedAudioVolumeRef.current}
                     audioVolume={
@@ -3939,7 +4125,7 @@ function SquadViewApp() {
 
                 {desktopChatUsesGridTile && activeChatChannel && (
                   <section className="desktop-chat-grid-tile" aria-label={`Chat with ${activeChatChannel}`}>
-                    <ChatPanel channel={activeChatChannel} />
+                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} />
                   </section>
                 )}
 
@@ -4033,7 +4219,7 @@ function SquadViewApp() {
                     className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' || viewMode === 'solo' ? 'is-active' : 'is-parked'}`}
                     aria-hidden={viewMode !== 'chat' && viewMode !== 'solo'}
                   >
-                    <ChatPanel channel={activeChatChannel} />
+                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} />
                   </section>
                 )}
               </div>
@@ -4054,7 +4240,7 @@ function SquadViewApp() {
                       </button>
                     </div>
                   )}
-                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} />
+                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={channels} />
                 </aside>
               )}
             </div>

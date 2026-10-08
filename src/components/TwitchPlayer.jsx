@@ -279,6 +279,27 @@ function chooseGridQuality(
   );
 }
 
+function applyWarmHiddenQuality(player) {
+  const qualities = getQualities(player);
+  if (!qualities.length) return player?.__squadViewQualityTarget || '';
+
+  const target =
+    qualityAtHeight(qualities, 160) ||
+    qualityAtHeight(qualities, 360) ||
+    qualities.find((quality) => quality.toLowerCase() === 'auto') ||
+    qualities[0] ||
+    '';
+
+  if (!target || target === player.__squadViewQualityTarget) return target;
+  try {
+    player.setQuality?.(target);
+    player.__squadViewQualityTarget = target;
+  } catch {
+    // Twitch can populate quality choices a moment after READY.
+  }
+  return player.__squadViewQualityTarget || target;
+}
+
 function applyQualityPolicy(
   player,
   active,
@@ -569,6 +590,7 @@ function applyPlayerState(
     audioSelected,
     audioEnabled,
     allowBackgroundAudio = false,
+    keepPlaybackWarm = false,
     visible,
     visibleCount = 1,
   } = state;
@@ -587,6 +609,32 @@ function applyPlayerState(
 
   if (!visible) {
     clearLiveEdgeTimers(player);
+
+    if (keepPlaybackWarm) {
+      try {
+        if (player.isPaused?.() === true) player.play?.();
+        player.setMuted?.(true);
+        player.setVolume?.(0);
+      } catch {
+        // WebKit may be finishing the page transition. Keep the player mounted.
+      }
+
+      applyWarmHiddenQuality(player);
+      player.__squadViewPausedByScheduler = false;
+      player.__squadViewWasVisible = false;
+      player.__squadViewWarmHidden = true;
+      player.__squadViewAwaitingLiveEdge = false;
+      player.__squadViewLiveEdgeStatus = 'warm_off_page';
+      player.__squadViewState = {
+        channel, active, audioSelected, audioEnabled, allowBackgroundAudio,
+        keepPlaybackWarm, visible, visibleCount,
+        targetQuality: player.__squadViewQualityTarget || '',
+      };
+      state.reconcileAudio?.(channel, player);
+      return;
+    }
+
+    player.__squadViewWarmHidden = false;
 
     if (keepAliveForAudio) {
       try {
@@ -610,6 +658,7 @@ function applyPlayerState(
         audioSelected,
         audioEnabled,
         allowBackgroundAudio,
+        keepPlaybackWarm,
         visible,
         visibleCount,
         targetQuality: player.__squadViewQualityTarget || '',
@@ -638,6 +687,7 @@ function applyPlayerState(
       audioSelected,
       audioEnabled,
       allowBackgroundAudio,
+      keepPlaybackWarm,
       visible,
       visibleCount,
       targetQuality: player.__squadViewQualityTarget || '',
@@ -648,9 +698,13 @@ function applyPlayerState(
   }
 
   const returningFromHiddenPage = wasVisible === false || schedulerPaused;
+  const returningFromWarmPage = Boolean(player.__squadViewWarmHidden && !schedulerPaused);
 
   if (returningFromHiddenPage) {
-    if (keepAliveForAudio && !schedulerPaused) {
+    if (returningFromWarmPage) {
+      player.__squadViewAwaitingLiveEdge = false;
+      player.__squadViewLiveEdgeStatus = 'warm_returned';
+    } else if (keepAliveForAudio && !schedulerPaused) {
       player.__squadViewAwaitingLiveEdge = false;
       player.__squadViewLiveEdgeStatus = 'audible_stream_returned';
     } else {
@@ -678,6 +732,7 @@ function applyPlayerState(
 
   player.__squadViewPausedByScheduler = false;
   player.__squadViewWasVisible = true;
+  player.__squadViewWarmHidden = false;
 
   player.__squadViewState = {
     channel,
@@ -685,6 +740,7 @@ function applyPlayerState(
     audioSelected,
     audioEnabled,
     allowBackgroundAudio,
+    keepPlaybackWarm,
     visible,
     visibleCount,
     targetQuality: player.__squadViewQualityTarget || '',
@@ -817,6 +873,8 @@ export default function TwitchPlayer({
   audioEnabled,
   audioAudible = false,
   preserveAudibleSession = false,
+  mobileSingleAudioMode = false,
+  keepPlaybackWarm = false,
   allowBackgroundAudio = false,
   focusVolume = 1,
   audioVolume = 1,
@@ -848,6 +906,7 @@ export default function TwitchPlayer({
     audioEnabled,
     preserveAudibleSession,
     allowBackgroundAudio,
+    keepPlaybackWarm,
     focusVolume,
     audioVolume,
     visible,
@@ -857,6 +916,7 @@ export default function TwitchPlayer({
 
   const [status, setStatus] =
     useState('Loading');
+  const [playerReady, setPlayerReady] = useState(false);
   const [showVolumeControl, setShowVolumeControl] =
     useState(false);
   const [mobileVolumePercent, setMobileVolumePercent] =
@@ -982,6 +1042,7 @@ export default function TwitchPlayer({
       audioEnabled,
       preserveAudibleSession,
       allowBackgroundAudio,
+      keepPlaybackWarm,
       focusVolume,
       audioVolume,
       visible,
@@ -1000,6 +1061,7 @@ export default function TwitchPlayer({
     audioEnabled,
     preserveAudibleSession,
     allowBackgroundAudio,
+    keepPlaybackWarm,
     focusVolume,
     audioVolume,
     visible,
@@ -1070,6 +1132,9 @@ export default function TwitchPlayer({
         player.__squadViewForcedResyncCount =
           0;
 
+        player.__squadViewReady = false;
+        player.__squadViewWarmHidden = false;
+
         player.__squadViewLiveEdgeStatus =
           'initializing';
 
@@ -1099,6 +1164,8 @@ export default function TwitchPlayer({
         player.addEventListener(
           Twitch.Player.READY,
           () => {
+            player.__squadViewReady = true;
+            setPlayerReady(true);
             setStatus('Ready');
 
             refreshPlayerState();
@@ -1235,6 +1302,7 @@ export default function TwitchPlayer({
         // Twitch may already have disposed the iframe.
       }
 
+      if (playerRef.current) playerRef.current.__squadViewReady = false;
       playerRef.current = null;
     };
   }, [
@@ -1248,6 +1316,8 @@ export default function TwitchPlayer({
   const listening = Boolean(visible && liveAudible);
 
   function handleListen() {
+    if (mobileSingleAudioMode && !playerReady) return;
+
     /*
      * The parent owns the complete audio mix. Keep this click as a direct user
      * gesture, but do not pre-mute or otherwise rewrite Twitch audio here.
@@ -1289,7 +1359,9 @@ export default function TwitchPlayer({
       className={`stream-card ${
         visible
           ? 'is-visible'
-          : 'is-hidden'
+          : keepPlaybackWarm
+            ? 'is-hidden is-warm-hidden'
+            : 'is-hidden'
       } ${
         highlightActive
           ? 'is-active'
@@ -1353,10 +1425,14 @@ export default function TwitchPlayer({
                 : ''
             }`}
             onClick={handleListen}
+            disabled={Boolean(mobileSingleAudioMode && !playerReady)}
+            aria-disabled={Boolean(mobileSingleAudioMode && !playerReady)}
           >
-            {listening
-              ? 'Listening'
-              : 'Listen'}
+            {mobileSingleAudioMode && !playerReady
+              ? 'Starting…'
+              : listening
+                ? 'Listening'
+                : 'Listen'}
           </button>
 
           <button
