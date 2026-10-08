@@ -747,6 +747,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
 
       {emotePickerOpen && (
         <section
+          className="native-chat-emote-picker"
           aria-label="Twitch emote picker"
           style={{
             flexShrink: 0,
@@ -759,6 +760,19 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             background: '#18181b',
           }}
         >
+          <div className="native-chat-emote-picker-header">
+            <strong>Emotes</strong>
+            <button
+              type="button"
+              className="native-chat-emote-picker-close"
+              onClick={() => setEmotePickerOpen(false)}
+              aria-label="Close Twitch emote picker"
+              title="Close emotes"
+            >
+              ×
+            </button>
+          </div>
+
           <input
             type="search"
             value={emoteSearch}

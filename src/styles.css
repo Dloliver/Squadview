@@ -7170,3 +7170,142 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     padding-bottom: 5px;
   }
 }
+
+/* SquadView UX Refresh — Phase 3.1.2
+   Mobile readability + compact viewer footer + explicit native emote close. */
+.native-chat-emote-picker-header {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.native-chat-emote-picker-header strong {
+  color: #efeff1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.native-chat-emote-picker-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 999px;
+  background: #26262c;
+  color: #efeff1;
+  font-size: 21px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.native-chat-emote-picker-close:hover,
+.native-chat-emote-picker-close:focus-visible {
+  border-color: rgba(145,71,255,.75);
+  background: #3b2066;
+}
+
+@media (max-width: 760px) {
+  /* Give important mobile labels a little more breathing room without
+     increasing the height of the player controls. */
+  .viewer-header > div:nth-child(2) strong {
+    font-size: 18px;
+  }
+
+  .viewer-header span {
+    font-size: 12px;
+  }
+
+  .mobile-focus-stream-selector button {
+    min-height: 36px;
+    max-width: 170px;
+    font-size: 11px;
+  }
+
+  .mobile-focus-avatar {
+    width: 25px;
+    height: 25px;
+    flex-basis: 25px;
+    font-size: 10px;
+  }
+
+  .stream-card-header strong {
+    max-width: 30%;
+    font-size: 12px;
+  }
+
+  .listen-chip,
+  .focus-chip,
+  .chat-chip,
+  .favorite-chip {
+    font-size: 9px;
+  }
+
+  .native-twitch-chat > header > strong {
+    font-size: 15px !important;
+  }
+
+  .native-twitch-chat > header > span {
+    font-size: 12px !important;
+  }
+
+  .native-twitch-chat [role="log"] {
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+  }
+
+  .native-twitch-chat [role="log"] > div:first-child {
+    font-size: 14px;
+  }
+
+  /* The only mobile footer action is returning to Dual. Keep that action
+     reachable without dedicating a large strip of the viewport to it. */
+  .viewer-toolbar {
+    flex: 0 0 auto;
+    min-height: calc(36px + max(env(safe-area-inset-bottom), 4px));
+    padding: 0 8px max(env(safe-area-inset-bottom), 4px);
+    grid-template-columns: 1fr;
+    align-items: center;
+    background: rgba(7, 19, 17, .98);
+  }
+
+  .viewer-toolbar button {
+    width: auto;
+    min-width: 92px;
+    min-height: 30px;
+    justify-self: start;
+    padding: 0 12px;
+    border: 1px solid rgba(69,224,181,.14);
+    border-radius: 999px;
+    font-size: 11px;
+  }
+
+  .viewer-toolbar button.is-current {
+    border-top-color: rgba(69,224,181,.14);
+    border-color: rgba(69,224,181,.28);
+  }
+
+  .native-chat-emote-picker {
+    max-height: min(42dvh, 360px) !important;
+    padding-top: 6px !important;
+  }
+
+  .native-chat-emote-picker-header {
+    min-height: 36px;
+  }
+
+  .native-chat-emote-picker-header strong {
+    font-size: 14px;
+  }
+
+  .native-chat-emote-picker-close {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+    font-size: 24px;
+  }
+}
