@@ -2465,25 +2465,35 @@ function SquadViewApp() {
         ? new Set()
         : new Set([cleaned]);
 
-      setListeningChannels(nextListening);
-      setAudioEnabled(true);
-
-      // Apply the one-owner policy while this tap is still on the call stack,
-      // then make the direct Twitch audio claim. Do not clear the selection on
-      // a rejected claim: a second Listen tap should retry rather than toggle off.
-      const nextPolicy = reconcileViewerAudio({
-        listeningChannels: nextListening,
-        audioEnabled: true,
-      }, { captureCurrent: false });
-
-      claimMobileAudioFromGesture(
+      // On mobile the Twitch audio claim itself must be the first audio-changing
+      // work performed by the user's tap. Reconcile-after-claim is important on
+      // iOS: writing the controller state before the direct Twitch call can cause
+      // WebKit/Twitch to treat the later unmute as programmatic and ignore it.
+      const claimed = claimMobileAudioFromGesture(
         cleaned,
         player,
         cleaned === activeChannel
           ? focusedAudioVolumeRef.current
           : player.__squadViewManualVolume ?? 1,
       );
-      resumeAudioSelectedPlayers(nextPolicy);
+
+      if (!claimed) {
+        const silentListening = new Set();
+        setListeningChannels(silentListening);
+        setAudioEnabled(false);
+        reconcileViewerAudio({
+          listeningChannels: silentListening,
+          audioEnabled: false,
+        }, { captureCurrent: false });
+        return;
+      }
+
+      setListeningChannels(nextListening);
+      setAudioEnabled(true);
+      reconcileViewerAudio({
+        listeningChannels: nextListening,
+        audioEnabled: true,
+      }, { captureCurrent: false });
       return;
     }
 
