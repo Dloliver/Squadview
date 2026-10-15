@@ -10,8 +10,33 @@ import {
 } from '../services/twitchNativeChatService';
 
 const MAX_NATIVE_MESSAGES = 250;
+const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
 const emoteCache = new Map();
 // Native chat bottom composer QOL: keep live messages above the message composer.
+
+function nativeChatDraftKey(channel) {
+  return `${NATIVE_CHAT_DRAFT_PREFIX}${String(channel || '').trim().toLowerCase()}`;
+}
+
+function readNativeChatDraft(channel) {
+  if (!channel) return '';
+  try {
+    return String(sessionStorage.getItem(nativeChatDraftKey(channel)) || '').slice(0, 500);
+  } catch {
+    return '';
+  }
+}
+
+function writeNativeChatDraft(channel, value) {
+  if (!channel) return;
+  try {
+    const key = nativeChatDraftKey(channel);
+    if (value) sessionStorage.setItem(key, String(value).slice(0, 500));
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Native chat remains usable when session storage is unavailable.
+  }
+}
 
 const TWITCH_EMOTE_TEMPLATE = 'https://static-cdn.jtvnw.net/emoticons/v2';
 
@@ -123,9 +148,23 @@ function IframeChat({
   channel,
   compact = false,
   onUseNative,
+  onActivity,
 }) {
+  const iframeRef = useRef(null);
   const parent = window.location.hostname;
   const src = `https://www.twitch.tv/embed/${encodeURIComponent(channel)}/chat?parent=${encodeURIComponent(parent)}&darkpopout`;
+
+  useEffect(() => {
+    if (typeof onActivity !== 'function') return undefined;
+
+    const interval = window.setInterval(() => {
+      if (document.activeElement === iframeRef.current) {
+        onActivity({ type: 'twitch_iframe_focus', channel });
+      }
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [channel, onActivity]);
 
   return (
     <section
@@ -175,8 +214,12 @@ function IframeChat({
         />
       </header>
 
-      <div style={{ flex: '1 1 auto', minHeight: 0 }}>
+      <div
+        style={{ flex: '1 1 auto', minHeight: 0 }}
+        onPointerDownCapture={() => onActivity?.({ type: 'twitch_iframe_pointer', channel })}
+      >
         <iframe
+          ref={iframeRef}
           title={`${channel} chat`}
           src={src}
           allow="clipboard-write"
@@ -200,7 +243,7 @@ function statusCopy(status) {
   return 'Live messages will appear here.';
 }
 
-export default function ChatPanel({ channel, compact = false, mentionCandidates = [] }) {
+export default function ChatPanel({ channel, compact = false, mentionCandidates = [], onActivity }) {
   const [nativeEnabled, setNativeEnabled] = useState(null);
   const [status, setStatus] = useState('resolving');
   const [error, setError] = useState('');
@@ -219,6 +262,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const composerRef = useRef(null);
   const endRef = useRef(null);
+  const draftLoadedChannelRef = useRef('');
+  const restoredDraftNeedsFocusRef = useRef(false);
 
   const normalizedChannel = useMemo(
     () => String(channel || '').trim().toLowerCase(),
@@ -305,8 +350,11 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
 
     setMessages([]);
     setBroadcaster(null);
-    setDraft('');
-    setComposerCursor(0);
+    const restoredDraft = readNativeChatDraft(normalizedChannel);
+    draftLoadedChannelRef.current = normalizedChannel;
+    restoredDraftNeedsFocusRef.current = Boolean(restoredDraft);
+    setDraft(restoredDraft);
+    setComposerCursor(restoredDraft.length);
     setMentionActiveIndex(0);
     setSendError('');
     setEmotePickerOpen(false);
@@ -343,6 +391,29 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
       controller.close();
     };
   }, [nativeEnabled, normalizedChannel]);
+
+  useEffect(() => {
+    if (!normalizedChannel || draftLoadedChannelRef.current !== normalizedChannel) return;
+    writeNativeChatDraft(normalizedChannel, draft);
+  }, [draft, normalizedChannel]);
+
+  useEffect(() => {
+    if (
+      nativeEnabled !== true ||
+      status !== 'ready' ||
+      !restoredDraftNeedsFocusRef.current ||
+      !draft
+    ) {
+      return;
+    }
+
+    restoredDraftNeedsFocusRef.current = false;
+    window.requestAnimationFrame(() => {
+      const input = composerRef.current;
+      input?.focus?.({ preventScroll: true });
+      input?.setSelectionRange?.(draft.length, draft.length);
+    });
+  }, [draft, nativeEnabled, status]);
 
   useEffect(() => {
     if (!nativeEnabled || !messages.length) return;
@@ -534,6 +605,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setDraft(next);
     setComposerCursor(cursor);
     setSendError('');
+    onActivity?.({ type: 'native_input', channel: normalizedChannel });
 
     window.requestAnimationFrame(() => {
       input?.focus?.();
@@ -570,6 +642,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setComposerCursor(nextCursor);
     setMentionActiveIndex(0);
     setSendError('');
+    onActivity?.({ type: 'native_input', channel: normalizedChannel });
 
     window.requestAnimationFrame(() => {
       input?.focus?.();
@@ -603,6 +676,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
         channel={normalizedChannel || channel}
         compact={compact}
         onUseNative={switchToNativeChat}
+        onActivity={onActivity}
       />
     );
   }
@@ -979,8 +1053,10 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             const message = draft.trim();
             if (!message || sendBusy) return;
 
+            onActivity?.({ type: 'native_send', channel: normalizedChannel });
             setSendBusy(true);
             setSendError('');
+            let sentSuccessfully = false;
 
             try {
               await sendNativeTwitchChatMessage({
@@ -990,10 +1066,22 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               setDraft('');
               setComposerCursor(0);
               setMentionActiveIndex(0);
+              sentSuccessfully = true;
             } catch (nextError) {
               setSendError(nextError?.message || 'Twitch could not send that message.');
             } finally {
               setSendBusy(false);
+              if (sentSuccessfully) {
+                // Twitch chat is conversational. After Enter/send, put focus
+                // straight back in the native composer so the next message can
+                // be typed without another click/tap. Waiting one frame lets
+                // React remove the temporary disabled state first.
+                window.requestAnimationFrame(() => {
+                  const input = composerRef.current;
+                  input?.focus?.({ preventScroll: true });
+                  input?.setSelectionRange?.(0, 0);
+                });
+              }
             }
           }}
           style={{
@@ -1009,6 +1097,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               const next = event.target.value.slice(0, 500);
               setDraft(next);
               setComposerCursor(Math.min(event.target.selectionStart ?? next.length, next.length));
+              onActivity?.({ type: 'native_input', channel: normalizedChannel });
             }}
             onSelect={(event) => {
               setComposerCursor(event.currentTarget.selectionStart ?? draft.length);

@@ -1319,12 +1319,14 @@ export default function TwitchPlayer({
     if (mobileSingleAudioMode && !playerReady) return;
 
     /*
-     * The parent owns the complete audio mix. Keep this click as a direct user
-     * gesture, but do not pre-mute or otherwise rewrite Twitch audio here.
-     * That lets Listen add/remove this stream without disrupting focused audio
-     * or another stream the viewer is already listening to.
+     * The parent owns the complete audio mix. Pass the exact state of the
+     * control the viewer clicked so a slightly stale Twitch getMuted/getVolume
+     * read cannot turn a visible Listening button into another unmute attempt.
      */
-    onListen();
+    onListen?.({
+      listening,
+      volume: Math.max(0, Math.min(1, mobileVolumePercent / 100)),
+    });
   }
 
   function openMobileVolumeControl() {

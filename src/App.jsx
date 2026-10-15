@@ -53,10 +53,15 @@ const FAVORITE_STREAMERS_KEY = 'squadview:favorite-streamers:v2';
 const LEGACY_FAVORITES_KEY = 'squadview:favorites:v1';
 const LAST_CHANNELS_KEY = 'squadview:last-channels:v1';
 const VIEWER_SESSION_KEY = 'squadview:viewer-session:v1';
+const VIEWER_HEARTBEAT_KEY = 'squadview:viewer-heartbeat:v1';
+const VIEWER_HEARTBEAT_MS = 60 * 1000;
+const VIEWER_SUSPENSION_RESET_MS = 60 * 60 * 1000;
 const GUEST_BENEFITS_SESSION_KEY = 'squadview:guest-benefits-dismissed:v1';
 const REFERRAL_PROMO_DISMISSED_KEY = 'squadview:referral-promo-dismissed:v1';
 const REFERRAL_PROMO_WATCH_MS = 5 * 60 * 1000;
+const REFERRAL_PROMO_CHAT_IDLE_MS = 30 * 1000;
 const REFERRAL_PROMO_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 const MAX_SUPPORTED_VIEWER_STREAMS = 16;
 const AUTO_FILL_FAVORITES_KEY = 'squadview:auto-fill-favorites:v1';
@@ -138,6 +143,47 @@ function cleanChannel(value) {
   return String(value || '').trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 }
 
+function readViewerHeartbeat() {
+  try {
+    return Number(sessionStorage.getItem(VIEWER_HEARTBEAT_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeViewerHeartbeat(value = Date.now()) {
+  try {
+    sessionStorage.setItem(VIEWER_HEARTBEAT_KEY, String(value));
+  } catch {
+    // Session recovery remains best-effort in restricted browsing contexts.
+  }
+}
+
+async function loadLiveStatusForChannels(channels) {
+  const targets = [...new Set((channels || []).map(cleanChannel).filter(Boolean))];
+  if (!LIVE_STATUS_API_URL || !targets.length) return null;
+
+  const batches = [];
+  for (let index = 0; index < targets.length; index += 40) {
+    batches.push(targets.slice(index, index + 40));
+  }
+
+  const results = await Promise.all(batches.map(async (batch) => {
+    const url = new URL(LIVE_STATUS_API_URL);
+    batch.forEach((channel) => url.searchParams.append('login', channel));
+    const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`Live status request failed with ${response.status}`);
+    return response.json();
+  }));
+
+  return new Set(
+    results
+      .flatMap((result) => Array.isArray(result?.live) ? result.live : [])
+      .map(cleanChannel)
+      .filter(Boolean),
+  );
+}
+
 function isIOSLikeDevice() {
   try {
     const userAgent = navigator.userAgent || '';
@@ -169,6 +215,19 @@ function referralPromoCooldownActive() {
     return dismissedAt > 0 && Date.now() - dismissedAt < REFERRAL_PROMO_COOLDOWN_MS;
   } catch {
     return false;
+  }
+}
+
+function clearNativeChatDrafts() {
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(NATIVE_CHAT_DRAFT_PREFIX)) {
+        sessionStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Draft cleanup is best-effort when browser storage is restricted.
   }
 }
 
@@ -290,6 +349,13 @@ function readSharedViewerLink() {
 
 function readViewerSession() {
   try {
+    const lastHeartbeat = readViewerHeartbeat();
+    if (lastHeartbeat && Date.now() - lastHeartbeat > VIEWER_SUSPENSION_RESET_MS) {
+      sessionStorage.removeItem(VIEWER_SESSION_KEY);
+      sessionStorage.removeItem(VIEWER_HEARTBEAT_KEY);
+      return null;
+    }
+
     const saved = JSON.parse(sessionStorage.getItem(VIEWER_SESSION_KEY) || 'null');
     const restoredChannels = Array.isArray(saved?.channels)
       ? [...new Set(saved.channels.map(cleanChannel).filter(Boolean))].slice(0, MAX_SUPPORTED_VIEWER_STREAMS)
@@ -411,6 +477,8 @@ function SquadViewApp() {
   const guestBenefitsPromptedRef = useRef(false);
   const [accountSession, setAccountSession] = useState(null);
   const [accountReady, setAccountReady] = useState(false);
+  const [rememberedLineupStatus, setRememberedLineupStatus] = useState('idle');
+  const rememberedLineupReconciledRef = useRef(false);
   const [accountProfile, setAccountProfile] = useState(null);
   const [accountError, setAccountError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
@@ -421,8 +489,11 @@ function SquadViewApp() {
   const [shareFeedback, setShareFeedback] = useState('');
   const [referralPromoReady, setReferralPromoReady] = useState(false);
   const [referralPromoSuppressed, setReferralPromoSuppressed] = useState(referralPromoCooldownActive);
+  const [referralPromoRailOpen, setReferralPromoRailOpen] = useState(false);
+  const [lastViewerChatActivityAt, setLastViewerChatActivityAt] = useState(0);
   const referralPromoWatchMsRef = useRef(0);
   const referralPromoLastTickRef = useRef(Date.now());
+  const referralPromoShownThisSessionRef = useRef(false);
   const [defaultLayout, setDefaultLayout] = useState('smart');
   const [followedLiveStreams, setFollowedLiveStreams] = useState([]);
   const [followingStatus, setFollowingStatus] = useState('idle');
@@ -455,6 +526,11 @@ function SquadViewApp() {
   const loadingAdRef = useRef(null);
   const accountHydratedUserRef = useRef('');
   const sharedViewStartedRef = useRef(false);
+  // A shared URL is a launch instruction, not a permanent owner of the viewer.
+  // Once the shared view reaches the viewer, normal session state becomes the
+  // source of truth so refreshes, offline removal, Auto-fill, and user edits
+  // are not replaced by the original shared roster.
+  const sharedViewConsumedRef = useRef(false);
   const [viewMode, setViewMode] = useState(() => initialViewer?.viewMode || 'dual');
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
   // audio after a hard refresh until the user interacts with the page again.
@@ -498,6 +574,10 @@ function SquadViewApp() {
   // select the current owner again to return to an all-muted state.
   const mobileSingleAudioMode = !isDesktopGrid;
   const playersRef = useRef(new Map());
+  // Keep per-channel volume only for the current viewer run. This survives
+  // paging, Focus, Chat, reordering, and temporary player remounts, but a new
+  // Start watching session deliberately begins from the normal default again.
+  const sessionVolumeByChannelRef = useRef(new Map());
   // The focused stream owns the primary audio level. Keep that level stable
   // while paging, opening/closing chat, or moving focus to another stream.
   const focusedAudioVolumeRef = useRef(1);
@@ -513,6 +593,36 @@ function SquadViewApp() {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
     return Math.max(0, Math.min(1, numeric));
+  }
+
+  function getSessionChannelVolume(channel, fallback = 1) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned) return clampFocusedAudioVolume(fallback, 1);
+    return clampFocusedAudioVolume(
+      sessionVolumeByChannelRef.current.get(cleaned),
+      clampFocusedAudioVolume(fallback, 1),
+    );
+  }
+
+  function rememberSessionChannelVolume(channel, value) {
+    const cleaned = cleanChannel(channel);
+    const nextVolume = clampFocusedAudioVolume(value, 1);
+    // Muting with Listen should not erase the level the viewer chose. A later
+    // Listen in this same SquadView session restores the last audible level.
+    if (cleaned && nextVolume > 0) {
+      sessionVolumeByChannelRef.current.set(cleaned, nextVolume);
+    }
+    return nextVolume;
+  }
+
+  function resetSessionChannelVolumes() {
+    sessionVolumeByChannelRef.current = new Map();
+    focusedAudioVolumeRef.current = 1;
+    playersRef.current.forEach((player) => {
+      if (!player) return;
+      delete player.__squadViewPreferredVolume;
+      delete player.__squadViewManualVolume;
+    });
   }
 
   function rememberFocusedAudioVolume(channel = activeChannel) {
@@ -531,7 +641,7 @@ function SquadViewApp() {
         Number.isFinite(currentVolume) &&
         currentVolume >= 0
       ) {
-        const remembered = clampFocusedAudioVolume(currentVolume, 1);
+        const remembered = rememberSessionChannelVolume(channel, currentVolume);
         focusedAudioVolumeRef.current = remembered;
         player.__squadViewPreferredVolume = remembered;
       }
@@ -594,7 +704,7 @@ function SquadViewApp() {
         const currentVolume = Number(player?.getVolume?.());
         if (muted !== false || !Number.isFinite(currentVolume) || currentVolume < 0) return;
 
-        const rememberedVolume = clampFocusedAudioVolume(currentVolume, 1);
+        const rememberedVolume = rememberSessionChannelVolume(channel, currentVolume);
         if (channel === policy.activeChannel) {
           focusedAudioVolumeRef.current = rememberedVolume;
           player.__squadViewPreferredVolume = rememberedVolume;
@@ -618,12 +728,13 @@ function SquadViewApp() {
       false
     );
     const selected = displayed && audioPolicySelectsChannel(policy, channel);
+    const rememberedVolume = getSessionChannelVolume(channel, 1);
     const targetVolume = channel === policy.activeChannel
       ? clampFocusedAudioVolume(
           player.__squadViewPreferredVolume ?? focusedAudioVolumeRef.current,
-          1,
+          rememberedVolume,
         )
-      : clampFocusedAudioVolume(player.__squadViewManualVolume, 1);
+      : clampFocusedAudioVolume(player.__squadViewManualVolume, rememberedVolume);
 
     return {
       displayed,
@@ -701,6 +812,8 @@ function SquadViewApp() {
     const nativeVolume = clampFocusedAudioVolume(nativeState.volume, 0);
     const wantsAudio = nativeState.muted !== true && nativeVolume > 0;
     const player = playersRef.current.get(cleaned);
+
+    if (wantsAudio) rememberSessionChannelVolume(cleaned, nativeVolume);
 
     if (cleaned === activeChannel) {
       const nextFocusedVolume = wantsAudio ? nativeVolume : 0;
@@ -801,8 +914,17 @@ function SquadViewApp() {
   }, []);
 
   const registerPlayer = useCallback((channel, player) => {
-    if (player) playersRef.current.set(channel, player);
-    else playersRef.current.delete(channel);
+    if (player) {
+      const cleaned = cleanChannel(channel);
+      const rememberedVolume = sessionVolumeByChannelRef.current.get(cleaned);
+      if (Number.isFinite(rememberedVolume) && rememberedVolume > 0) {
+        player.__squadViewPreferredVolume = rememberedVolume;
+        player.__squadViewManualVolume = rememberedVolume;
+      }
+      playersRef.current.set(channel, player);
+    } else {
+      playersRef.current.delete(channel);
+    }
   }, []);
 
   useEffect(() => {
@@ -867,7 +989,7 @@ function SquadViewApp() {
         setEntitlements(access);
 
         const accountViewerLimit = Math.max(1, Math.min(MAX_SUPPORTED_VIEWER_STREAMS, access.viewerMaxStreams || FREE_ENTITLEMENTS.viewerMaxStreams));
-        if (sharedViewer?.channels?.length) {
+        if (sharedViewer?.channels?.length && !sharedViewConsumedRef.current) {
           const allowedSharedChannels = sharedViewer.channels.slice(0, accountViewerLimit);
           const sharedActive = allowedSharedChannels.includes(sharedViewer.activeChannel)
             ? sharedViewer.activeChannel
@@ -962,6 +1084,61 @@ function SquadViewApp() {
       cancelled = true;
     };
   }, [accountSession?.user?.id]);
+
+  // Refresh the remembered Build roster once account state has settled. The
+  // previous lineup is convenience state, not a Saved Squad: confirmed offline
+  // channels are removed so the home screen never advertises a dead roster.
+  // If the live-status service is unavailable, keep the remembered list rather
+  // than destructively clearing it.
+  useEffect(() => {
+    if (screen !== 'home' || !accountReady || rememberedLineupReconciledRef.current) return undefined;
+
+    const remembered = [...new Set(inputs.map(cleanChannel).filter(Boolean))]
+      .slice(0, viewerStreamLimit);
+    rememberedLineupReconciledRef.current = true;
+
+    if (!remembered.length) {
+      setRememberedLineupStatus('ready');
+      return undefined;
+    }
+
+    if (!LIVE_STATUS_API_URL) {
+      setRememberedLineupStatus('unavailable');
+      return undefined;
+    }
+
+    let cancelled = false;
+    setRememberedLineupStatus('checking');
+
+    async function refreshRememberedLineup() {
+      try {
+        const live = await loadLiveStatusForChannels(remembered);
+        if (cancelled || !live) return;
+
+        const liveRemembered = remembered.filter((channel) => live.has(channel));
+        setInputs(padViewerInputs(liveRemembered, viewerStreamLimit));
+        saveLastChannels(liveRemembered);
+        setRememberedLineupStatus('ready');
+
+        trackEvent('remembered_lineup_reconciled', {
+          previous_count_bucket: getStreamCountBucket(remembered.length),
+          live_count_bucket: getStreamCountBucket(liveRemembered.length),
+          removed_count_bucket: getStreamCountBucket(Math.max(0, remembered.length - liveRemembered.length)),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setRememberedLineupStatus('unavailable');
+        if (import.meta.env.DEV) {
+          console.info('[SquadView remembered lineup] live refresh unavailable', error);
+        }
+      }
+    }
+
+    void refreshRememberedLineup();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, accountReady, viewerStreamLimit]);
 
   useEffect(() => {
     if (!showAccount || !accountSession?.user?.id || !accountReady) return;
@@ -1090,6 +1267,97 @@ function SquadViewApp() {
   ]);
 
   useEffect(() => {
+    const blockedByViewerUi =
+      showEdit ||
+      showShareSquad ||
+      showAccount ||
+      showSaveSquad ||
+      Boolean(editingSavedSquad) ||
+      showYoutubeCompanion ||
+      showSharedArrival;
+
+    const canOpenPromoRail =
+      screen === 'viewer' &&
+      accountReady &&
+      !entitlements.isPremium &&
+      channels.length >= 2 &&
+      referralPromoReady &&
+      !referralPromoSuppressed &&
+      !referralPromoRailOpen &&
+      !referralPromoShownThisSessionRef.current &&
+      !blockedByViewerUi;
+
+    if (!canOpenPromoRail) return undefined;
+
+    const chatSurfaceOpen = viewMode === 'chat' || viewMode === 'solo';
+    const elapsedSinceChatActivity = lastViewerChatActivityAt > 0
+      ? Date.now() - lastViewerChatActivityAt
+      : REFERRAL_PROMO_CHAT_IDLE_MS;
+    const remainingChatIdleMs = chatSurfaceOpen
+      ? Math.max(0, REFERRAL_PROMO_CHAT_IDLE_MS - elapsedSinceChatActivity)
+      : 0;
+
+    let timer = null;
+
+    const openWhenSafe = () => {
+      if (document.visibilityState !== 'visible') return;
+
+      const latestElapsed = lastViewerChatActivityAt > 0
+        ? Date.now() - lastViewerChatActivityAt
+        : REFERRAL_PROMO_CHAT_IDLE_MS;
+      const stillNeedsIdleTime = chatSurfaceOpen && latestElapsed < REFERRAL_PROMO_CHAT_IDLE_MS;
+
+      if (stillNeedsIdleTime) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(openWhenSafe, REFERRAL_PROMO_CHAT_IDLE_MS - latestElapsed);
+        return;
+      }
+
+      referralPromoShownThisSessionRef.current = true;
+      setReferralPromoRailOpen(true);
+      trackEvent('referral_promo_shown', {
+        placement: 'viewer_rail',
+        signed_in: Boolean(accountSession?.user?.id),
+        stream_count_bucket: getStreamCountBucket(channels.length),
+        replaced_chat_surface: chatSurfaceOpen,
+      });
+    };
+
+    timer = window.setTimeout(openWhenSafe, remainingChatIdleMs);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') openWhenSafe();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    accountReady,
+    accountSession?.user?.id,
+    channels.length,
+    editingSavedSquad,
+    entitlements.isPremium,
+    lastViewerChatActivityAt,
+    referralPromoRailOpen,
+    referralPromoReady,
+    referralPromoSuppressed,
+    screen,
+    showAccount,
+    showEdit,
+    showSaveSquad,
+    showShareSquad,
+    showSharedArrival,
+    showYoutubeCompanion,
+    viewMode,
+  ]);
+
+  const noteViewerChatActivity = useCallback(() => {
+    setLastViewerChatActivityAt(Date.now());
+  }, []);
+
+  useEffect(() => {
     // Final mute/volume reconciliation lives here. Desktop Chat does not change
     // audioModeKey, activeChannel, or listeningChannels, so merely switching
     // chat targets never causes an audio rewrite.
@@ -1187,6 +1455,34 @@ function SquadViewApp() {
     });
   }, [screen, sharedViewer, incomingReferralCode]);
 
+  // Consume shared-view roster parameters after they have done their job. Keep
+  // referral/other query parameters intact, but remove channels + active from
+  // the current history entry. A refresh now restores the current viewer
+  // session instead of re-imposing the original shared roster. This also means
+  // offline removal, Auto-fill Favorites, and Manage Streams edits survive a
+  // refresh. Opening the original shared URL again still seeds that shared view.
+  useEffect(() => {
+    if (screen !== 'viewer' || !sharedViewer?.channels?.length || sharedViewConsumedRef.current) return;
+    sharedViewConsumedRef.current = true;
+
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('channels')) return;
+
+      url.searchParams.delete('channels');
+      url.searchParams.delete('active');
+      const query = url.searchParams.toString();
+      const nextUrl = `${url.pathname}${query ? `?${query}` : ''}${url.hash || ''}`;
+      window.history.replaceState(window.history.state, '', nextUrl);
+      trackEvent('shared_view_handed_off_to_session', {
+        stream_count_bucket: getStreamCountBucket(sharedViewer.channels.length),
+        referral_attached: Boolean(incomingReferralCode),
+      });
+    } catch {
+      // If URL rewriting is unavailable, the active viewer still keeps working.
+    }
+  }, [screen, sharedViewer, incomingReferralCode]);
+
   // Preserve the active viewer layout across a browser refresh. Session storage
   // intentionally expires with the tab, so reopening SquadView later still
   // starts on the normal home screen.
@@ -1203,10 +1499,64 @@ function SquadViewApp() {
         desktopLeadChannel,
         chatLayout,
       }));
+      writeViewerHeartbeat();
     } catch {
       // Storage can be unavailable in private or restricted browsing contexts.
     }
   }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout]);
+
+  // Do not expire a viewer merely because the tab/app is hidden. A streamer may
+  // intentionally keep SquadView running in the background for hours. Instead,
+  // maintain a heartbeat while JavaScript is actually alive. A long heartbeat
+  // gap means the browser/device really suspended the page (sleep, discarded tab,
+  // long mobile background suspension). Only then return to Build Your View.
+  useEffect(() => {
+    if (screen !== 'viewer' || !channels.length) return undefined;
+
+    let resetTriggered = false;
+
+    const resetAfterSuspension = () => {
+      if (resetTriggered) return;
+      const now = Date.now();
+      const lastHeartbeat = readViewerHeartbeat();
+
+      if (lastHeartbeat && now - lastHeartbeat > VIEWER_SUSPENSION_RESET_MS) {
+        resetTriggered = true;
+        rememberedLineupReconciledRef.current = false;
+        setRememberedLineupStatus('idle');
+        setInputs(padViewerInputs(channels, viewerStreamLimit));
+
+        trackEvent('viewer_suspension_reset', {
+          stream_count_bucket: getStreamCountBucket(channels.length),
+          suspension_minutes_bucket: Math.max(60, Math.round((now - lastHeartbeat) / 60000)),
+        });
+
+        exitViewer('suspension_timeout');
+        return;
+      }
+
+      writeViewerHeartbeat(now);
+    };
+
+    if (!readViewerHeartbeat()) writeViewerHeartbeat();
+
+    const interval = window.setInterval(resetAfterSuspension, VIEWER_HEARTBEAT_MS);
+    const handleResume = () => {
+      if (document.visibilityState === 'hidden') return;
+      resetAfterSuspension();
+    };
+
+    window.addEventListener('focus', handleResume);
+    window.addEventListener('pageshow', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleResume);
+      window.removeEventListener('pageshow', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [screen, channels, viewerStreamLimit]);
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 761px)');
@@ -2124,6 +2474,15 @@ function SquadViewApp() {
   function commitViewerStart(unique) {
     mountedPlayerChannelsRef.current = new Set();
     mobileWarmPlaybackHistoryRef.current = { key: '', current: [], previous: [] };
+    resetSessionChannelVolumes();
+    clearNativeChatDrafts();
+    referralPromoWatchMsRef.current = 0;
+    referralPromoLastTickRef.current = Date.now();
+    referralPromoShownThisSessionRef.current = false;
+    setReferralPromoReady(false);
+    setReferralPromoRailOpen(false);
+    setLastViewerChatActivityAt(0);
+    setReferralPromoSuppressed(referralPromoCooldownActive());
 
     setChannels(unique);
     setActiveChannel(unique[0]);
@@ -2149,6 +2508,7 @@ function SquadViewApp() {
     setChatLayout(initialChatLayout);
     saveLastChannels(unique);
     viewerSessionActiveRef.current = true;
+    writeViewerHeartbeat();
     trackEvent('viewer_started', {
       stream_count_bucket: getStreamCountBucket(unique.length),
     });
@@ -2270,6 +2630,7 @@ function SquadViewApp() {
     snapshotAudioLevels(lastAppliedAudioPolicyRef.current || audioPolicyRef.current);
 
     const nextVolume = clampFocusedAudioVolume(value, 1);
+    if (nextVolume > 0) rememberSessionChannelVolume(cleaned, nextVolume);
     const player = playersRef.current.get(cleaned);
 
     if (cleaned === activeChannel) {
@@ -2346,7 +2707,7 @@ function SquadViewApp() {
     }
   }
 
-  function listenToChannel(channel) {
+  function listenToChannel(channel, controlState = {}) {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
 
@@ -2383,16 +2744,18 @@ function SquadViewApp() {
         reconcileViewerAudio({ audioEnabled: false, mode: 'solo' });
       } else if (mobileSingleAudioMode) {
         if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
-          focusedAudioVolumeRef.current = 1;
-          player.__squadViewPreferredVolume = 1;
+          const restoredVolume = getSessionChannelVolume(cleaned, 1);
+          focusedAudioVolumeRef.current = restoredVolume;
+          player.__squadViewPreferredVolume = restoredVolume;
         }
         const claimed = claimMobileAudioFromGesture(cleaned, player, focusedAudioVolumeRef.current);
         setAudioEnabled(Boolean(claimed));
         reconcileViewerAudio({ audioEnabled: Boolean(claimed), activeChannel: cleaned, mode: 'solo' });
       } else {
         if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
-          focusedAudioVolumeRef.current = 1;
-          player.__squadViewPreferredVolume = 1;
+          const restoredVolume = getSessionChannelVolume(cleaned, 1);
+          focusedAudioVolumeRef.current = restoredVolume;
+          player.__squadViewPreferredVolume = restoredVolume;
         }
         setAudioEnabled(true);
         const nextPolicy = reconcileViewerAudio({ audioEnabled: true, activeChannel: cleaned, mode: 'solo' });
@@ -2448,16 +2811,16 @@ function SquadViewApp() {
       // even if iOS refuses this particular unmute; the label remains Listen until
       // Twitch actually reports sound.
       if (cleaned === activeChannel) {
-        if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1) <= 0) {
-          focusedAudioVolumeRef.current = 1;
+        if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
+          focusedAudioVolumeRef.current = getSessionChannelVolume(cleaned, 1);
         }
         player.__squadViewPreferredVolume = clampFocusedAudioVolume(
           focusedAudioVolumeRef.current,
-          1,
+          getSessionChannelVolume(cleaned, 1),
         );
       } else {
-        if (clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
-          player.__squadViewManualVolume = 1;
+        if (clampFocusedAudioVolume(player.__squadViewManualVolume, 0) <= 0) {
+          player.__squadViewManualVolume = getSessionChannelVolume(cleaned, 1);
         }
       }
 
@@ -2499,15 +2862,22 @@ function SquadViewApp() {
 
     if (cleaned === activeChannel) {
       const player = playersRef.current.get(cleaned);
-      let actuallyAudible = audibleChannels.has(cleaned);
-      try {
-        const muted = player?.getMuted?.();
-        const volume = Number(player?.getVolume?.());
-        if (typeof muted === 'boolean' && Number.isFinite(volume)) {
-          actuallyAudible = muted === false && volume > 0 && player?.isPaused?.() !== true;
+      // Follow the state of the control the viewer actually clicked. Twitch's
+      // getMuted/getVolume reads can lag the visible Listening label by a tick,
+      // which previously made grid #1 look clickable without actually muting.
+      let actuallyAudible = typeof controlState.listening === 'boolean'
+        ? controlState.listening
+        : audibleChannels.has(cleaned);
+      if (typeof controlState.listening !== 'boolean') {
+        try {
+          const muted = player?.getMuted?.();
+          const volume = Number(player?.getVolume?.());
+          if (typeof muted === 'boolean' && Number.isFinite(volume)) {
+            actuallyAudible = muted === false && volume > 0 && player?.isPaused?.() !== true;
+          }
+        } catch {
+          // Fall back to the live audible status already tracked by the viewer.
         }
-      } catch {
-        // Fall back to the live audible status already tracked by the viewer.
       }
 
       // The active desktop stream used to be one-way: Listen could enable it,
@@ -2515,6 +2885,12 @@ function SquadViewApp() {
       // stream. A 0 focused volume deselects only this stream while preserving
       // any other desktop Listen selections.
       if (actuallyAudible) {
+        try {
+          const currentVolume = Number(player?.getVolume?.());
+          if (Number.isFinite(currentVolume) && currentVolume > 0) {
+            rememberSessionChannelVolume(cleaned, currentVolume);
+          }
+        } catch {}
         focusedAudioVolumeRef.current = 0;
         if (player) player.__squadViewPreferredVolume = 0;
         try {
@@ -2530,8 +2906,9 @@ function SquadViewApp() {
       }
 
       if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
-        focusedAudioVolumeRef.current = 1;
-        if (player) player.__squadViewPreferredVolume = 1;
+        const restoredVolume = getSessionChannelVolume(cleaned, 1);
+        focusedAudioVolumeRef.current = restoredVolume;
+        if (player) player.__squadViewPreferredVolume = restoredVolume;
       }
       setAudioEnabled(true);
       const nextPolicy = reconcileViewerAudio({ audioEnabled: true });
@@ -2541,26 +2918,36 @@ function SquadViewApp() {
 
     const nextListening = new Set(listeningChannels);
     const player = playersRef.current.get(cleaned);
-    if (nextListening.has(cleaned)) {
-      const currentVolume = clampFocusedAudioVolume(player?.__squadViewManualVolume, 1);
-      if (currentVolume <= 0) {
-        if (player) player.__squadViewManualVolume = 1;
-      } else {
-        nextListening.delete(cleaned);
-      }
+    const displayedListening = typeof controlState.listening === 'boolean'
+      ? controlState.listening
+      : nextListening.has(cleaned);
+
+    if (displayedListening) {
+      try {
+        const currentVolume = Number(player?.getVolume?.());
+        if (Number.isFinite(currentVolume) && currentVolume > 0) {
+          rememberSessionChannelVolume(cleaned, currentVolume);
+        }
+      } catch {}
+      nextListening.delete(cleaned);
+      try {
+        player?.setMuted?.(true);
+        player?.setVolume?.(0);
+      } catch {}
     } else {
       nextListening.add(cleaned);
-      if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 1) <= 0) {
-        player.__squadViewManualVolume = 1;
+      if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 0) <= 0) {
+        player.__squadViewManualVolume = getSessionChannelVolume(cleaned, 1);
       }
     }
 
     setListeningChannels(nextListening);
-    setAudioEnabled(true);
+    const nextAudioEnabled = Boolean(nextListening.size || focusedAudioVolumeRef.current > 0);
+    setAudioEnabled(nextAudioEnabled);
 
     const nextPolicy = reconcileViewerAudio({
       listeningChannels: nextListening,
-      audioEnabled: true,
+      audioEnabled: nextAudioEnabled,
     });
     resumeAudioSelectedPlayers(nextPolicy);
   }
@@ -2637,6 +3024,7 @@ function SquadViewApp() {
   function exitViewer(exitMethod = 'back_button') {
     try {
       sessionStorage.removeItem(VIEWER_SESSION_KEY);
+      sessionStorage.removeItem(VIEWER_HEARTBEAT_KEY);
     } catch {
       // Leaving the viewer should still work when storage is unavailable.
     }
@@ -2650,6 +3038,15 @@ function SquadViewApp() {
     }
     setYoutubeCompanion(null);
     setShowYoutubeCompanion(false);
+    clearNativeChatDrafts();
+    referralPromoWatchMsRef.current = 0;
+    referralPromoLastTickRef.current = Date.now();
+    referralPromoShownThisSessionRef.current = false;
+    setReferralPromoReady(false);
+    setReferralPromoRailOpen(false);
+    setLastViewerChatActivityAt(0);
+    setReferralPromoSuppressed(referralPromoCooldownActive());
+    resetSessionChannelVolumes();
     setScreen('home');
   }
 
@@ -2680,12 +3077,13 @@ function SquadViewApp() {
       };
     }
 
-    const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+    rememberFocusedAudioVolume(activeChannel);
+    const nextFocusedVolume = getSessionChannelVolume(cleaned, 1);
     const nextFocusedPlayer = playersRef.current.get(cleaned);
     if (nextFocusedPlayer) {
-      nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+      nextFocusedPlayer.__squadViewPreferredVolume = nextFocusedVolume;
     }
-    focusedAudioVolumeRef.current = inheritedFocusedVolume;
+    focusedAudioVolumeRef.current = nextFocusedVolume;
 
     // Focus is the intentional temporary audio override: one stream, one audio
     // owner. listeningChannels stays untouched underneath so Grid can restore
@@ -2698,7 +3096,7 @@ function SquadViewApp() {
       nextFocusAudioEnabled = claimMobileAudioFromGesture(
         cleaned,
         nextFocusedPlayer,
-        inheritedFocusedVolume,
+        nextFocusedVolume,
       );
     }
 
@@ -2728,6 +3126,16 @@ function SquadViewApp() {
   function toggleChatForChannel(channel) {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
+
+    if (referralPromoRailOpen) {
+      suppressReferralPromo('chat_requested');
+      if (
+        (viewMode === 'chat' && chatChannel === cleaned) ||
+        (viewMode === 'solo' && activeChannel === cleaned)
+      ) {
+        return;
+      }
+    }
 
     if (
       (viewMode === 'chat' && chatChannel === cleaned) ||
@@ -2831,6 +3239,11 @@ function SquadViewApp() {
     });
 
     if (leavingSolo) {
+      const restoredFocusedVolume = getSessionChannelVolume(restoredActive, 1);
+      const restoredPlayer = playersRef.current.get(restoredActive);
+      focusedAudioVolumeRef.current = restoredFocusedVolume;
+      if (restoredPlayer) restoredPlayer.__squadViewPreferredVolume = restoredFocusedVolume;
+
       const restoredPolicy = makeAudioPolicy({
         activeChannel: restoredActive,
         audioEnabled: restoredAudioEnabled,
@@ -3335,14 +3748,15 @@ function SquadViewApp() {
     const nextActive = unique.includes(requestedActive) ? requestedActive : unique[0];
 
     if (activeChannel && nextActive !== activeChannel) {
-      const inheritedFocusedVolume = rememberFocusedAudioVolume(activeChannel);
+      rememberFocusedAudioVolume(activeChannel);
+      const nextFocusedVolume = getSessionChannelVolume(nextActive, 1);
       const nextFocusedPlayer = playersRef.current.get(nextActive);
 
       if (nextFocusedPlayer) {
-        nextFocusedPlayer.__squadViewPreferredVolume = inheritedFocusedVolume;
+        nextFocusedPlayer.__squadViewPreferredVolume = nextFocusedVolume;
       }
 
-      focusedAudioVolumeRef.current = inheritedFocusedVolume;
+      focusedAudioVolumeRef.current = nextFocusedVolume;
     }
 
     const retainedSlots = slotChannels.filter((channel) => unique.includes(channel));
@@ -3674,6 +4088,7 @@ function SquadViewApp() {
 
   function suppressReferralPromo(reason) {
     setReferralPromoReady(false);
+    setReferralPromoRailOpen(false);
     setReferralPromoSuppressed(true);
     try {
       localStorage.setItem(REFERRAL_PROMO_DISMISSED_KEY, String(Date.now()));
@@ -3820,6 +4235,21 @@ function SquadViewApp() {
 
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
+    const referralPromoBlocked =
+      showEdit ||
+      showShareSquad ||
+      showAccount ||
+      showSaveSquad ||
+      Boolean(editingSavedSquad) ||
+      showYoutubeCompanion ||
+      showSharedArrival;
+    const referralPromoVisible = Boolean(
+      referralPromoRailOpen &&
+      !referralPromoSuppressed &&
+      !entitlements.isPremium &&
+      !referralPromoBlocked &&
+      channels.length >= 2
+    );
 
     // Desktop page order is anchored separately from activeChannel. In normal
     // Grid the saved desktop lead stays pinned. In Grid + Chat, the channel that
@@ -3840,19 +4270,23 @@ function SquadViewApp() {
     // squeezing all three streams sideways for an unnecessary rail.
     const narrowDesktopGridChat = desktopGridChat && !isWideDesktopChat;
     const threeStreamDesktopChat = desktopGridChat && !youtubeVisible && channels.length === 3;
-    const desktopChatUsesGridTile = narrowDesktopGridChat || threeStreamDesktopChat;
-    const showDesktopChatRail = isDesktopGrid && (
+    const desktopChatUsesGridTile = !referralPromoVisible && (narrowDesktopGridChat || threeStreamDesktopChat);
+    const showDesktopChatRail = !referralPromoVisible && isDesktopGrid && (
       viewMode === 'solo' ||
       (viewMode === 'chat' && !desktopChatUsesGridTile)
     );
     // Preserve the responsive capacity rule from Phase 1.1, then specialize the
     // wide three-stream case so the otherwise-empty fourth quadrant becomes Chat.
-    const responsiveDesktopVisibleTwitchLimit = youtubeVisible
-      ? (narrowDesktopGridChat ? 2 : 3)
-      : (narrowDesktopGridChat ? 3 : 4);
-    const desktopVisibleTwitchLimit = threeStreamDesktopChat
-      ? 3
-      : responsiveDesktopVisibleTwitchLimit;
+    const responsiveDesktopVisibleTwitchLimit = referralPromoVisible
+      ? (youtubeVisible ? 3 : 4)
+      : youtubeVisible
+        ? (narrowDesktopGridChat ? 2 : 3)
+        : (narrowDesktopGridChat ? 3 : 4);
+    const desktopVisibleTwitchLimit = referralPromoVisible
+      ? responsiveDesktopVisibleTwitchLimit
+      : threeStreamDesktopChat
+        ? 3
+        : responsiveDesktopVisibleTwitchLimit;
     const desktopPageCount = desktopGridChat
       ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
       : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
@@ -3957,23 +4391,6 @@ function SquadViewApp() {
       };
     };
 
-    const referralPromoBlocked =
-      viewMode !== 'dual' ||
-      showEdit ||
-      showShareSquad ||
-      showAccount ||
-      showSaveSquad ||
-      Boolean(editingSavedSquad) ||
-      showYoutubeCompanion ||
-      showSharedArrival;
-
-    const referralPromoVisible = Boolean(
-      referralPromoReady &&
-      !referralPromoSuppressed &&
-      !entitlements.isPremium &&
-      !referralPromoBlocked &&
-      visibleChannels.length >= 2
-    );
     const referralPromoCopy = getReferralPromoCopy(
       referralSummary,
       Boolean(accountSession?.user?.id),
@@ -4048,7 +4465,7 @@ function SquadViewApp() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} chat-dock-${chatDockSide}`}>
+            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} ${referralPromoVisible ? 'has-premium-rail' : ''} chat-dock-${chatDockSide}`}>
               {isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
                 <div className="focus-stream-selector" aria-label="Choose focused stream">
                   {channels.map((channel) => (
@@ -4132,11 +4549,11 @@ function SquadViewApp() {
                         ? clampFocusedAudioVolume(focusedAudioVolumeRef.current, 1)
                         : clampFocusedAudioVolume(
                             playersRef.current.get(channel)?.__squadViewManualVolume,
-                            1,
+                            getSessionChannelVolume(channel, 1),
                           )
                     }
                     onVolumeChange={(value) => setStreamVolume(channel, value)}
-                    onListen={() => listenToChannel(channel)}
+                    onListen={(controlState) => listenToChannel(channel, controlState)}
                     onFocus={() => focusChannel(channel)}
                     onChat={() => toggleChatForChannel(channel)}
                     onAudioReconcile={reconcilePlayerAudio}
@@ -4163,64 +4580,10 @@ function SquadViewApp() {
 
                 {desktopChatUsesGridTile && activeChatChannel && (
                   <section className="desktop-chat-grid-tile" aria-label={`Chat with ${activeChatChannel}`}>
-                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} />
+                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
                   </section>
                 )}
 
-                {referralPromoVisible && (
-                  <section
-                    className="referral-promo-tile viewer-rewards-popover"
-                    role="dialog"
-                    aria-label="SquadView Premium referral rewards"
-                  >
-                    <button
-                      type="button"
-                      className="referral-promo-close"
-                      onClick={() => suppressReferralPromo('closed')}
-                      aria-label="Dismiss SquadView rewards"
-                    >
-                      ×
-                    </button>
-
-                    <div className="referral-promo-copy">
-                      <span>{referralPromoCopy.eyebrow}</span>
-                      <strong>{referralPromoCopy.title}</strong>
-                      <p>{referralPromoCopy.body}</p>
-                    </div>
-
-                    {accountSession?.user?.id && referralSummary?.available && (
-                      <div className="referral-promo-progress">
-                        <div>
-                          <span>Next free month</span>
-                          <strong>{referralNextProgress}/5</strong>
-                        </div>
-                        <div className="referral-promo-progress-track" aria-hidden="true">
-                          <span style={{ width: `${(referralNextProgress / 5) * 100}%` }} />
-                        </div>
-                        <div>
-                          <span>Lifetime Premium</span>
-                          <strong>{Math.min(referralQualifiedCount, 100)}/100</strong>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="referral-promo-benefits" aria-label="SquadView Premium benefits">
-                      <span>No SquadView ads</span>
-                      <span>Up to 16 Twitch streams</span>
-                      <span>Unlimited Saved Squads</span>
-                      <span>YouTube Companion</span>
-                    </div>
-
-                    <div className="referral-promo-actions">
-                      <button type="button" className="primary-button" onClick={handleReferralPromoAction}>
-                        {accountSession?.user?.id ? 'Share My Squad' : 'Sign in to earn Premium'}
-                      </button>
-                      <button type="button" className="referral-promo-later" onClick={() => suppressReferralPromo('maybe_later')}>
-                        Maybe later
-                      </button>
-                    </div>
-                  </section>
-                )}
 
                 {youtubeCompanion && (
                   <YouTubeCompanion
@@ -4252,16 +4615,67 @@ function SquadViewApp() {
                 )}
 
 
-                {!isDesktopGrid && activeChannel && (
+                {!isDesktopGrid && !referralPromoVisible && activeChannel && (
                   <section
                     className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' || viewMode === 'solo' ? 'is-active' : 'is-parked'}`}
                     aria-hidden={viewMode !== 'chat' && viewMode !== 'solo'}
                   >
-                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} />
+                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
                   </section>
                 )}
               </div>
               </section>
+
+              {referralPromoVisible && (
+                <aside className="referral-promo-tile viewer-premium-rail" aria-label="SquadView Premium rewards">
+                  <button
+                    type="button"
+                    className="referral-promo-close"
+                    onClick={() => suppressReferralPromo('closed')}
+                    aria-label="Dismiss SquadView Premium"
+                  >
+                    ×
+                  </button>
+
+                  <div className="referral-promo-copy">
+                    <span>{referralPromoCopy.eyebrow}</span>
+                    <strong>{referralPromoCopy.title}</strong>
+                    <p>{referralPromoCopy.body}</p>
+                  </div>
+
+                  {accountSession?.user?.id && referralSummary?.available && (
+                    <div className="referral-promo-progress">
+                      <div>
+                        <span>Next free month</span>
+                        <strong>{referralNextProgress}/5</strong>
+                      </div>
+                      <div className="referral-promo-progress-track" aria-hidden="true">
+                        <span style={{ width: `${(referralNextProgress / 5) * 100}%` }} />
+                      </div>
+                      <div>
+                        <span>Lifetime Premium</span>
+                        <strong>{Math.min(referralQualifiedCount, 100)}/100</strong>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="referral-promo-benefits" aria-label="SquadView Premium benefits">
+                    <span>No SquadView ads</span>
+                    <span>Up to 16 Twitch streams</span>
+                    <span>Unlimited Saved Squads</span>
+                    <span>YouTube Companion</span>
+                  </div>
+
+                  <div className="referral-promo-actions">
+                    <button type="button" className="primary-button" onClick={handleReferralPromoAction}>
+                      {accountSession?.user?.id ? 'Share My Squad' : 'Sign in to earn Premium'}
+                    </button>
+                    <button type="button" className="referral-promo-later" onClick={() => suppressReferralPromo('maybe_later')}>
+                      Maybe later
+                    </button>
+                  </div>
+                </aside>
+              )}
 
               {showDesktopChatRail && (activeChatChannel || activeChannel) && (
                 <aside className="desktop-chat-rail" aria-label="Twitch chat">
@@ -4278,7 +4692,7 @@ function SquadViewApp() {
                       </button>
                     </div>
                   )}
-                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={channels} />
+                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
                 </aside>
               )}
             </div>
@@ -4468,8 +4882,8 @@ function SquadViewApp() {
 
                 <label className="automation-toggle stream-manager-automation-toggle">
                   <span>
-                    <strong>Auto-fill live Favorites</strong>
-                    <small>Fill open slots when a Favorite is live. Existing live streams are never replaced.</small>
+                    <strong>Auto-fill live SquadView Favorites</strong>
+                    <small>Fills open slots with streamers you heart in SquadView when they are live — not every Twitch follow.</small>
                   </span>
                   <input
                     type="checkbox"
@@ -4478,6 +4892,17 @@ function SquadViewApp() {
                   />
                   <i aria-hidden="true" />
                 </label>
+                {autoFillFavorites && (
+                  <div className={`automation-status ${favoriteLiveStatusReady && !liveFavoriteList.length ? 'is-empty' : ''}`} role="status">
+                    {!favoriteStreamers.length
+                      ? 'No SquadView Favorites yet. Heart a streamer to make them eligible for Auto-fill.'
+                      : !favoriteLiveStatusReady
+                        ? 'Checking which of your SquadView Favorites are live…'
+                        : liveFavoriteList.length
+                          ? `${liveFavoriteList.length} live Favorite${liveFavoriteList.length === 1 ? '' : 's'} available for open slots.`
+                          : 'None of your SquadView Favorites are live right now.'}
+                  </div>
+                )}
 
                 <div className="stream-manager-tabs" role="tablist" aria-label="Choose a stream source">
                   <button type="button" className={managerSource === 'live' ? 'is-current' : ''} onClick={() => setManagerSource('live')}>
@@ -5087,8 +5512,8 @@ function SquadViewApp() {
 
               <label className="automation-toggle builder-automation-toggle">
                 <span>
-                  <strong>Auto-fill live Favorites</strong>
-                  <small>Use open slots only. SquadView never replaces a live stream you chose.</small>
+                  <strong>Auto-fill live SquadView Favorites</strong>
+                  <small>Uses streamers you heart in SquadView — not every Twitch follow. It only fills open slots.</small>
                 </span>
                 <input
                   type="checkbox"
@@ -5097,6 +5522,21 @@ function SquadViewApp() {
                 />
                 <i aria-hidden="true" />
               </label>
+              {autoFillFavorites && (
+                <div className={`automation-status builder-automation-status ${favoriteLiveStatusReady && !liveFavoriteList.length ? 'is-empty' : ''}`} role="status">
+                  {!favoriteStreamers.length
+                    ? 'No SquadView Favorites yet. Heart a streamer to make them eligible for Auto-fill.'
+                    : !favoriteLiveStatusReady
+                      ? 'Checking which of your SquadView Favorites are live…'
+                      : liveFavoriteList.length
+                        ? `${liveFavoriteList.length} live Favorite${liveFavoriteList.length === 1 ? '' : 's'} available for open slots.`
+                        : 'None of your SquadView Favorites are live right now.'}
+                </div>
+              )}
+
+              {rememberedLineupStatus === 'checking' && (
+                <p className="ad-note">Checking your last view and removing streams that are no longer live…</p>
+              )}
 
               {validInputs.length > 0 && (
                 <div className="builder-quick-watch-dock">
