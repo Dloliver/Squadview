@@ -26,7 +26,7 @@ import { loadFollowedChannels, loadFollowedLiveStreams } from './services/twitch
 import { FREE_ENTITLEMENTS, PREMIUM_PRICING, PREMIUM_TRIAL_DAYS } from './config/plans';
 import { AD_CONFIG, isLoadingAdConfigured, markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 import { loadSquadViewEntitlements } from './services/premiumService';
-import { createPremiumBillingPortalSession, createPremiumCheckoutSession } from './services/billingService';
+import { createPremiumBillingPortalSession, createPremiumCheckoutSession, loadPremiumBillingStatus } from './services/billingService';
 import { createSavedSquad, deleteSavedSquad, loadSavedSquads, updateSavedSquad } from './services/savedSquadService';
 import {
   capturePendingReferralFromLocation,
@@ -209,6 +209,19 @@ function formatRewardDate(value) {
     day: 'numeric',
     year: 'numeric',
   }).format(parsed);
+}
+
+function premiumSubscriptionStatusLabel(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'trialing') return 'Free trial';
+  if (normalized === 'active') return 'Active';
+  if (normalized === 'past_due') return 'Payment needs attention';
+  if (normalized === 'unpaid') return 'Payment overdue';
+  if (normalized === 'incomplete') return 'Setup incomplete';
+  if (normalized === 'incomplete_expired') return 'Setup expired';
+  if (normalized === 'paused') return 'Paused';
+  if (normalized === 'canceled') return 'Canceled';
+  return normalized ? normalized.replaceAll('_', ' ') : 'Not subscribed';
 }
 
 function referralPromoCooldownActive() {
@@ -511,6 +524,9 @@ function SquadViewApp() {
   const [pendingReplacement, setPendingReplacement] = useState('');
   const [draggedManagerChannel, setDraggedManagerChannel] = useState('');
   const [showAccount, setShowAccount] = useState(false);
+  const [showPremiumBilling, setShowPremiumBilling] = useState(false);
+  const [premiumBillingStatus, setPremiumBillingStatus] = useState(null);
+  const [premiumBillingStatusBusy, setPremiumBillingStatusBusy] = useState(false);
   const [showGuestBenefits, setShowGuestBenefits] = useState(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const guestBenefitsPromptedRef = useRef(false);
@@ -1001,6 +1017,8 @@ function SquadViewApp() {
         setLiveSavedSquadStreamers(new Set());
         setReferralSummary(null);
         setReferralMessage('');
+        setPremiumBillingStatus(null);
+        setShowPremiumBilling(false);
         accountHydratedUserRef.current = '';
       }
     });
@@ -1140,8 +1158,13 @@ function SquadViewApp() {
 
     if (premiumReturnState === 'billing_returned') {
       if (accountSession?.user?.id) {
-        void loadSquadViewEntitlements(accountSession.user.id).then((access) => {
-          if (!cancelled) setEntitlements(access);
+        void Promise.all([
+          loadSquadViewEntitlements(accountSession.user.id),
+          loadPremiumBillingStatus(),
+        ]).then(([access, billingStatus]) => {
+          if (cancelled) return;
+          setEntitlements(access);
+          setPremiumBillingStatus(billingStatus);
         }).catch(() => {});
       }
       setFavoriteLiveNotice({ kind: 'message', message: 'Billing settings updated.' });
@@ -1270,6 +1293,36 @@ function SquadViewApp() {
   }, [showAccount, accountReady, accountSession?.user?.id]);
 
   useEffect(() => {
+    if (!showPremiumBilling || !accountSession?.user?.id || !accountReady) return undefined;
+    let cancelled = false;
+    setPremiumBillingStatusBusy(true);
+    setBillingError('');
+
+    async function refreshPremiumBillingState() {
+      try {
+        const [status, access, summary] = await Promise.all([
+          loadPremiumBillingStatus(),
+          loadSquadViewEntitlements(accountSession.user.id),
+          loadSquadViewReferralSummary().catch(() => referralSummary),
+        ]);
+        if (cancelled) return;
+        setPremiumBillingStatus(status);
+        setEntitlements(access);
+        if (summary) setReferralSummary(summary);
+      } catch (error) {
+        if (!cancelled) setBillingError(error?.message || 'Could not refresh Premium billing details.');
+      } finally {
+        if (!cancelled) setPremiumBillingStatusBusy(false);
+      }
+    }
+
+    void refreshPremiumBillingState();
+    return () => {
+      cancelled = true;
+    };
+  }, [showPremiumBilling, accountReady, accountSession?.user?.id]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(AUTO_FILL_FAVORITES_KEY, String(autoFillFavorites));
       localStorage.setItem(FAVORITE_LIVE_ALERTS_KEY, String(favoriteLiveAlertsEnabled));
@@ -1323,6 +1376,7 @@ function SquadViewApp() {
     const watchEligible =
       screen === 'viewer' &&
       accountReady &&
+      Boolean(accountSession?.user?.id) &&
       !entitlements.isPremium &&
       channels.length >= 2 &&
       !referralPromoReady &&
@@ -1382,6 +1436,7 @@ function SquadViewApp() {
     const canOpenPromoRail =
       screen === 'viewer' &&
       accountReady &&
+      Boolean(accountSession?.user?.id) &&
       !entitlements.isPremium &&
       channels.length >= 2 &&
       referralPromoReady &&
@@ -3641,6 +3696,8 @@ function SquadViewApp() {
     try {
       await signOutOfSquadView();
       setShowAccount(false);
+      setShowPremiumBilling(false);
+      setPremiumBillingStatus(null);
     } catch (error) {
       setAccountError(error?.message || 'Could not sign out.');
     } finally {
@@ -4230,6 +4287,21 @@ function SquadViewApp() {
     if (accountSession?.user?.id) void refreshReferralRewards();
   }
 
+  function openPremiumBillingDetails(source = 'account') {
+    if (!accountSession?.user?.id) {
+      setShowAccount(true);
+      return;
+    }
+    setBillingError('');
+    setShowAccount(false);
+    setReferralPromoRailOpen(false);
+    setShowPremiumBilling(true);
+    trackEvent('premium_billing_modal_opened', {
+      source,
+      is_premium: Boolean(entitlements.isPremium),
+    });
+  }
+
   async function startPremiumCheckout(plan, source = 'premium_ui') {
     const normalizedPlan = normalizePremiumPlan(plan);
     if (!normalizedPlan || billingBusy) return;
@@ -4589,6 +4661,25 @@ function SquadViewApp() {
     );
     const referralQualifiedCount = Math.max(0, Number(referralSummary?.qualifiedReferrals) || 0);
     const referralNextProgress = Math.max(0, Math.min(5, Number(referralSummary?.nextMonthProgress) || (referralQualifiedCount % 5)));
+    const stripeSubscriptionStatus = String(premiumBillingStatus?.status || '').toLowerCase();
+    const stripeSubscriptionDate = formatRewardDate(premiumBillingStatus?.currentPeriodEnd);
+    const stripePlanLabel = premiumBillingStatus?.billingInterval === 'annual'
+      ? 'Annual Premium'
+      : premiumBillingStatus?.billingInterval === 'monthly'
+        ? 'Monthly Premium'
+        : 'SquadView Premium';
+    const promotionalPremiumActive = Boolean(
+      entitlements.promoPremiumUntil && entitlements.isPremium && entitlements.planKey === 'free',
+    );
+    const premiumAccessLabel = entitlements.lifetimePremium
+      ? 'Lifetime Premium'
+      : promotionalPremiumActive
+        ? 'Referral Premium'
+        : premiumBillingStatus?.hasStripeSubscription
+          ? stripePlanLabel
+          : entitlements.isPremium
+            ? 'Premium'
+            : 'Free';
 
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
@@ -4858,35 +4949,16 @@ function SquadViewApp() {
                     <span>YouTube Companion</span>
                   </div>
 
-                  <small className="premium-trial-copy">Try Premium free for {PREMIUM_TRIAL_DAYS} days. Payment method required; cancel before the trial ends to avoid a charge.</small>
-
-                  <div className="premium-rail-pricing" aria-label="SquadView Premium plans">
-                    <button
-                      type="button"
-                      className="premium-price-option"
-                      onClick={() => void startPremiumCheckout('monthly', 'viewer_rail')}
-                      disabled={Boolean(billingBusy)}
-                    >
-                      <span>{PREMIUM_PRICING.monthly.label}</span>
-                      <strong>{PREMIUM_PRICING.monthly.price}<small>{PREMIUM_PRICING.monthly.cadence}</small></strong>
-                    </button>
-                    <button
-                      type="button"
-                      className="premium-price-option is-best"
-                      onClick={() => void startPremiumCheckout('annual', 'viewer_rail')}
-                      disabled={Boolean(billingBusy)}
-                    >
-                      <span>{PREMIUM_PRICING.annual.label} · {PREMIUM_PRICING.annual.savings}</span>
-                      <strong>{PREMIUM_PRICING.annual.price}<small>{PREMIUM_PRICING.annual.cadence}</small></strong>
-                      <em>{PREMIUM_PRICING.annual.equivalent}</em>
-                    </button>
-                  </div>
+                  <small className="premium-trial-copy">Try Premium free for {PREMIUM_TRIAL_DAYS} days, then choose {PREMIUM_PRICING.monthly.price}{PREMIUM_PRICING.monthly.cadence} or {PREMIUM_PRICING.annual.price}{PREMIUM_PRICING.annual.cadence}.</small>
 
                   {billingError && <div className="premium-billing-error">{billingError}</div>}
 
-                  <div className="referral-promo-actions">
+                  <div className="referral-promo-actions premium-promo-actions">
+                    <button type="button" className="primary-button premium-options-button" onClick={() => openPremiumBillingDetails('viewer_rail')}>
+                      See Premium options
+                    </button>
                     <button type="button" className="secondary-button premium-earn-button" onClick={handleReferralPromoAction} disabled={Boolean(billingBusy)}>
-                      {accountSession?.user?.id ? 'Earn Premium free by sharing' : 'Connect Twitch to earn Premium'}
+                      Earn Premium free by sharing
                     </button>
                     <button type="button" className="referral-promo-later" onClick={() => suppressReferralPromo('maybe_later')}>
                       Maybe later
@@ -6457,36 +6529,14 @@ function SquadViewApp() {
                 </div>
                 {billingError && <div className="account-error">{billingError}</div>}
 
-                {!entitlements.isPremium && (
-                  <div className="account-premium-purchase">
-                    <div className="account-premium-purchase-heading">
-                      <div>
-                        <small>Paid Premium</small>
-                        <strong>Upgrade to Premium</strong>
-                      </div>
-                      <span>Secure by Stripe</span>
-                    </div>
-                    <small className="account-premium-trial">{PREMIUM_TRIAL_DAYS}-day free trial · Payment method required · Cancel before the trial ends to avoid a charge.</small>
-                    <div className="account-premium-prices">
-                      <button type="button" onClick={() => void startPremiumCheckout('monthly', 'account')} disabled={Boolean(billingBusy)}>
-                        <span>Monthly</span>
-                        <strong>{PREMIUM_PRICING.monthly.price}<small>{PREMIUM_PRICING.monthly.cadence}</small></strong>
-                      </button>
-                      <button type="button" className="is-best" onClick={() => void startPremiumCheckout('annual', 'account')} disabled={Boolean(billingBusy)}>
-                        <span>Annual · {PREMIUM_PRICING.annual.savings}</span>
-                        <strong>{PREMIUM_PRICING.annual.price}<small>{PREMIUM_PRICING.annual.cadence}</small></strong>
-                        <em>{PREMIUM_PRICING.annual.equivalent}</em>
-                      </button>
-                    </div>
-                    <small>Up to 16 streams · No SquadView ads · Higher Favorites limit · Premium workspace</small>
-                  </div>
-                )}
-
-                {entitlements.planKey !== 'free' && (
-                  <button type="button" className="secondary-button account-billing-button" onClick={() => void openPremiumBillingPortal()} disabled={Boolean(billingBusy)}>
-                    {billingBusy === 'portal' ? 'Opening billing…' : 'Manage Premium billing'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`secondary-button account-billing-button ${entitlements.isPremium ? 'is-premium' : ''}`}
+                  onClick={() => openPremiumBillingDetails('account')}
+                >
+                  <span>{entitlements.isPremium ? 'Premium & Billing' : 'View Premium plans'}</span>
+                  <small>{entitlements.isPremium ? 'Plan details, billing and cancellation' : `${PREMIUM_TRIAL_DAYS}-day trial · ${PREMIUM_PRICING.monthly.price}${PREMIUM_PRICING.monthly.cadence}`}</small>
+                </button>
                 {referralSummary?.available && (
                   <div className="account-rewards-summary">
                     <div className="account-rewards-heading">
@@ -6529,6 +6579,147 @@ function SquadViewApp() {
                 </button>
               </>
             )}
+          </section>
+        </div>
+      )}
+
+      {showPremiumBilling && accountSession?.user?.id && (
+        <div className="modal-backdrop premium-billing-backdrop" onClick={() => setShowPremiumBilling(false)}>
+          <section className="modal premium-billing-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowPremiumBilling(false)}><X /></button>
+
+            <header className="premium-billing-header">
+              <div>
+                <small>SquadView Premium</small>
+                <h2>Premium & Billing</h2>
+                <p>Upgrade, review your current access, or manage an existing Stripe subscription.</p>
+              </div>
+              <span className={`premium-access-pill ${entitlements.isPremium ? 'is-premium' : ''}`}>{premiumAccessLabel}</span>
+            </header>
+
+            {billingError && <div className="premium-billing-error">{billingError}</div>}
+            {premiumBillingStatusBusy && !premiumBillingStatus && (
+              <div className="premium-billing-loading">Refreshing billing details…</div>
+            )}
+
+            <div className={`premium-billing-access-card ${entitlements.isPremium ? 'is-premium' : ''}`}>
+              <div>
+                <small>Current access</small>
+                <strong>{premiumAccessLabel}</strong>
+              </div>
+              <span>
+                {entitlements.lifetimePremium
+                  ? 'Lifetime Premium is permanently attached to this SquadView account.'
+                  : promotionalPremiumActive
+                    ? `Premium earned through referrals is active through ${formatRewardDate(entitlements.promoPremiumUntil)}.`
+                    : premiumBillingStatus?.hasStripeSubscription
+                      ? premiumBillingStatus.cancelAtPeriodEnd && stripeSubscriptionDate
+                        ? `Your subscription stays Premium through ${stripeSubscriptionDate}, then ends automatically.`
+                        : stripeSubscriptionStatus === 'trialing' && stripeSubscriptionDate
+                          ? `Your free trial runs through ${stripeSubscriptionDate}.`
+                          : stripeSubscriptionDate
+                            ? `Your current billing period runs through ${stripeSubscriptionDate}.`
+                            : 'Your Stripe Premium subscription is connected to this account.'
+                      : entitlements.isPremium
+                        ? 'Premium access is active on this account.'
+                        : 'Free includes the full Twitch viewer. Premium adds more room and removes SquadView ads.'}
+              </span>
+            </div>
+
+            {premiumBillingStatus?.hasStripeSubscription ? (
+              <>
+                <div className="premium-billing-details-grid">
+                  <div>
+                    <span>Plan</span>
+                    <strong>{stripePlanLabel}</strong>
+                    <small>{premiumBillingStatus.billingInterval === 'annual' ? `${PREMIUM_PRICING.annual.price}${PREMIUM_PRICING.annual.cadence}` : `${PREMIUM_PRICING.monthly.price}${PREMIUM_PRICING.monthly.cadence}`}</small>
+                  </div>
+                  <div>
+                    <span>Status</span>
+                    <strong>{premiumSubscriptionStatusLabel(stripeSubscriptionStatus)}</strong>
+                    <small>{premiumBillingStatus.cancelAtPeriodEnd ? 'Cancellation scheduled' : 'Managed securely by Stripe'}</small>
+                  </div>
+                  <div>
+                    <span>{premiumBillingStatus.cancelAtPeriodEnd ? 'Access through' : stripeSubscriptionStatus === 'trialing' ? 'Trial ends' : 'Current period ends'}</span>
+                    <strong>{stripeSubscriptionDate || 'Syncing…'}</strong>
+                    <small>{premiumBillingStatus.cancelAtPeriodEnd ? 'No renewal after this date' : stripeSubscriptionStatus === 'trialing' ? 'First charge follows unless canceled' : 'Use billing portal for payment details'}</small>
+                  </div>
+                </div>
+
+                {premiumBillingStatus.cancelAtPeriodEnd && (
+                  <div className="premium-cancel-notice">
+                    <strong>Cancellation scheduled</strong>
+                    <span>Premium stays active until {stripeSubscriptionDate || 'the end of the current period'}. You can reverse the cancellation from Stripe before then.</span>
+                  </div>
+                )}
+
+                <button type="button" className="primary-button premium-manage-button" onClick={() => void openPremiumBillingPortal()} disabled={Boolean(billingBusy)}>
+                  {billingBusy === 'portal' ? 'Opening Stripe…' : premiumBillingStatus.cancelAtPeriodEnd ? 'Manage or undo cancellation' : 'Manage Premium billing'}
+                </button>
+              </>
+            ) : entitlements.lifetimePremium ? (
+              <div className="premium-reward-access-card">
+                <strong>Lifetime Premium is already unlocked.</strong>
+                <span>There is no Stripe subscription to manage for this Premium access.</span>
+              </div>
+            ) : promotionalPremiumActive ? (
+              <div className="premium-reward-access-card">
+                <strong>Premium earned through SquadView Rewards.</strong>
+                <span>Your reward access does not create a Stripe subscription, so there is no billing portal to manage.</span>
+              </div>
+            ) : entitlements.isPremium ? (
+              <div className="premium-reward-access-card">
+                <strong>Premium is active.</strong>
+                <span>Billing details are still syncing. Close and reopen this panel in a moment if you just completed checkout.</span>
+              </div>
+            ) : (
+              <>
+                <div className="premium-upgrade-intro">
+                  <div>
+                    <small>{premiumBillingStatus?.trialEligible === false ? 'Premium' : `${PREMIUM_TRIAL_DAYS}-day free trial`}</small>
+                    <strong>More streams. Less rebuilding. No SquadView ads.</strong>
+                  </div>
+                  <span>{premiumBillingStatus?.trialEligible === false ? 'Your account has already used its introductory trial.' : 'Payment method required. Cancel before the trial ends to avoid a charge.'}</span>
+                </div>
+
+                <div className="premium-benefit-grid" aria-label="SquadView Premium benefits">
+                  <div><strong>16 streams</strong><span>Double the Free viewer roster.</span></div>
+                  <div><strong>No SquadView ads</strong><span>Twitch and YouTube still control their own players.</span></div>
+                  <div><strong>50 Favorites</strong><span>Keep a larger creator watchlist ready.</span></div>
+                  <div><strong>Unlimited Saved Squads</strong><span>Reuse your favorite viewing groups.</span></div>
+                </div>
+
+                <div className="account-premium-prices premium-billing-plan-options" aria-label="Choose a Premium plan">
+                  <button type="button" onClick={() => void startPremiumCheckout('monthly', 'premium_modal')} disabled={Boolean(billingBusy)}>
+                    <span>Monthly</span>
+                    <strong>{PREMIUM_PRICING.monthly.price}<small>{PREMIUM_PRICING.monthly.cadence}</small></strong>
+                    <em>Flexible month to month</em>
+                  </button>
+                  <button type="button" className="is-best" onClick={() => void startPremiumCheckout('annual', 'premium_modal')} disabled={Boolean(billingBusy)}>
+                    <span>Annual · {PREMIUM_PRICING.annual.savings}</span>
+                    <strong>{PREMIUM_PRICING.annual.price}<small>{PREMIUM_PRICING.annual.cadence}</small></strong>
+                    <em>{PREMIUM_PRICING.annual.equivalent}</em>
+                  </button>
+                </div>
+              </>
+            )}
+
+            {referralSummary?.available && !entitlements.lifetimePremium && !premiumBillingStatus?.hasStripeSubscription && (
+              <div className="premium-rewards-note">
+                <div>
+                  <small>Prefer to earn Premium?</small>
+                  <strong>{referralQualifiedCount} qualified {referralQualifiedCount === 1 ? 'referral' : 'referrals'}</strong>
+                  <span>Every 5 qualified new users adds 30 days. 100 unlocks Lifetime Premium.</span>
+                </div>
+                {channels.length > 0 && (
+                  <button type="button" className="secondary-button" onClick={() => { setShowPremiumBilling(false); openShareSquad(); }}>
+                    Share this SquadView
+                  </button>
+                )}
+              </div>
+            )}
+
+            <small className="premium-billing-footnote">Checkout, payment methods, invoices and cancellation are handled securely by Stripe.</small>
           </section>
         </div>
       )}

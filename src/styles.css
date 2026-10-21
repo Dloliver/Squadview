@@ -7812,3 +7812,395 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     gap: 3px;
   }
 }
+
+/* SquadView Premium Phase 4.1 — dedicated Premium & Billing workspace */
+.account-modal.is-signed-in .account-billing-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  text-align: left;
+  padding: 11px 13px;
+  border-color: rgba(151, 92, 255, .28);
+  background: linear-gradient(145deg, rgba(99, 63, 180, .10), rgba(14, 44, 36, .22));
+}
+
+.account-modal.is-signed-in .account-billing-button::after {
+  content: '→';
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: #bda8ff;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.account-modal.is-signed-in .account-billing-button > span,
+.account-modal.is-signed-in .account-billing-button > small {
+  grid-column: 1;
+}
+
+.account-modal.is-signed-in .account-billing-button > span {
+  color: #f5f0ff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.account-modal.is-signed-in .account-billing-button > small {
+  color: #a9bbb5;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.account-modal.is-signed-in .account-billing-button.is-premium {
+  border-color: rgba(69, 224, 181, .34);
+  background: linear-gradient(145deg, rgba(69, 224, 181, .09), rgba(112, 68, 210, .10));
+}
+
+.premium-billing-backdrop {
+  z-index: 1080;
+}
+
+.premium-billing-modal {
+  box-sizing: border-box;
+  width: min(820px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: grid;
+  gap: 14px;
+  padding: 26px;
+  border: 1px solid rgba(140, 93, 255, .30);
+  background:
+    radial-gradient(circle at 90% 0%, rgba(118, 72, 220, .15), transparent 30%),
+    radial-gradient(circle at 5% 15%, rgba(69, 224, 181, .08), transparent 28%),
+    #07100d;
+}
+
+.premium-billing-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-right: 36px;
+}
+
+.premium-billing-header > div {
+  min-width: 0;
+}
+
+.premium-billing-header small,
+.premium-upgrade-intro small,
+.premium-rewards-note small,
+.premium-billing-access-card small {
+  color: #8fa9a0;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.premium-billing-header h2 {
+  margin: 3px 0 5px;
+  color: #f5fff9;
+  font-size: clamp(1.35rem, 2.3vw, 1.8rem);
+}
+
+.premium-billing-header p {
+  margin: 0;
+  max-width: 560px;
+  color: #a7bbb4;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.premium-access-pill {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 999px;
+  background: rgba(255,255,255,.04);
+  color: #b8c7c2;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.premium-access-pill.is-premium {
+  border-color: rgba(69,224,181,.34);
+  background: rgba(69,224,181,.09);
+  color: #aef7df;
+}
+
+.premium-billing-loading {
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,.025);
+  color: #a8bbb5;
+  font-size: 10px;
+}
+
+.premium-billing-access-card {
+  display: grid;
+  grid-template-columns: minmax(140px, .45fr) minmax(0, 1.55fr);
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 14px;
+  background: rgba(255,255,255,.025);
+}
+
+.premium-billing-access-card.is-premium {
+  border-color: rgba(69,224,181,.24);
+  background: linear-gradient(120deg, rgba(69,224,181,.065), rgba(112,68,210,.055));
+}
+
+.premium-billing-access-card > div {
+  display: grid;
+  gap: 2px;
+}
+
+.premium-billing-access-card strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.premium-billing-access-card > span {
+  color: #b0c1bb;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.premium-billing-details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.premium-billing-details-grid > div,
+.premium-benefit-grid > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  background: rgba(255,255,255,.025);
+}
+
+.premium-billing-details-grid span,
+.premium-benefit-grid span {
+  display: block;
+  color: #8fa49d;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.premium-billing-details-grid strong,
+.premium-benefit-grid strong {
+  display: block;
+  margin: 4px 0 3px;
+  color: #f3fff9;
+  font-size: 12px;
+}
+
+.premium-billing-details-grid small {
+  color: #7e938c;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.premium-cancel-notice,
+.premium-reward-access-card {
+  display: grid;
+  gap: 4px;
+  padding: 11px 13px;
+  border-radius: 12px;
+}
+
+.premium-cancel-notice {
+  border: 1px solid rgba(255, 184, 77, .28);
+  background: rgba(120, 75, 14, .12);
+}
+
+.premium-cancel-notice strong {
+  color: #ffd798;
+  font-size: 10px;
+}
+
+.premium-cancel-notice span {
+  color: #cbbda7;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.premium-reward-access-card {
+  border: 1px solid rgba(69,224,181,.24);
+  background: rgba(69,224,181,.055);
+}
+
+.premium-reward-access-card strong {
+  color: #b8f5e2;
+  font-size: 11px;
+}
+
+.premium-reward-access-card span {
+  color: #a4bbb3;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.premium-manage-button {
+  min-height: 46px;
+}
+
+.premium-upgrade-intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 2px;
+}
+
+.premium-upgrade-intro > div {
+  display: grid;
+  gap: 3px;
+}
+
+.premium-upgrade-intro strong {
+  color: #f4fff9;
+  font-size: 13px;
+}
+
+.premium-upgrade-intro > span {
+  max-width: 330px;
+  color: #9eb2ab;
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.premium-benefit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.premium-benefit-grid strong {
+  color: #dffbf1;
+  font-size: 10px;
+}
+
+.premium-billing-plan-options {
+  gap: 10px;
+}
+
+.premium-billing-plan-options button {
+  min-height: 86px;
+}
+
+.premium-rewards-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 13px;
+  border: 1px solid rgba(146, 92, 255, .18);
+  border-radius: 12px;
+  background: rgba(100, 62, 170, .055);
+}
+
+.premium-rewards-note > div {
+  display: grid;
+  gap: 2px;
+}
+
+.premium-rewards-note strong {
+  color: #e4d8ff;
+  font-size: 10px;
+}
+
+.premium-rewards-note span {
+  color: #a99fba;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.premium-rewards-note .secondary-button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  margin: 0;
+}
+
+.premium-billing-footnote {
+  color: #71857e;
+  font-size: 8px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.premium-promo-actions {
+  align-items: stretch;
+}
+
+.premium-options-button {
+  width: auto;
+  min-width: 150px;
+}
+
+@media (max-width: 760px) {
+  .premium-billing-modal {
+    width: min(100%, calc(100vw - 20px));
+    max-height: calc(100dvh - 20px);
+    gap: 11px;
+    padding: 22px 15px 16px;
+  }
+
+  .premium-billing-header,
+  .premium-upgrade-intro,
+  .premium-rewards-note {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .premium-upgrade-intro > span {
+    max-width: none;
+    text-align: left;
+  }
+
+  .premium-billing-access-card {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .premium-billing-details-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-benefit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .premium-rewards-note .secondary-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .premium-billing-header {
+    padding-right: 28px;
+  }
+
+  .premium-access-pill {
+    align-self: flex-start;
+  }
+
+  .premium-benefit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-promo-actions .premium-options-button,
+  .premium-promo-actions .premium-earn-button {
+    width: 100%;
+  }
+}

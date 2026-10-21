@@ -131,6 +131,18 @@ async function findOrCreateCustomer(admin: ReturnType<typeof createAdminClient>,
   return customer.id as string;
 }
 
+async function findExistingCustomer(admin: ReturnType<typeof createAdminClient>, userId: string) {
+  const { data, error } = await admin
+    .from('squadview_billing_customers')
+    .select('provider_customer_id')
+    .eq('user_id', userId)
+    .eq('provider', stripeProvider())
+    .maybeSingle();
+
+  if (error) throw new ApiError(500, 'billing_customer_lookup_failed', error.message);
+  return String(data?.provider_customer_id || '').trim();
+}
+
 async function hasActivePaidSubscription(admin: ReturnType<typeof createAdminClient>, userId: string) {
   const { data, error } = await admin
     .from('squadview_subscriptions')
@@ -154,6 +166,35 @@ async function hasUsedPaidTrial(admin: ReturnType<typeof createAdminClient>, use
   return Boolean(data?.length);
 }
 
+async function readPremiumBillingStatus(admin: ReturnType<typeof createAdminClient>, userId: string) {
+  const { data, error } = await admin
+    .from('squadview_subscriptions')
+    .select('provider_subscription_id, plan_key, status, billing_interval, cancel_at_period_end, current_period_start, current_period_end, updated_at')
+    .eq('user_id', userId)
+    .eq('provider', stripeProvider())
+    .order('updated_at', { ascending: false });
+
+  if (error) throw new ApiError(500, 'subscription_lookup_failed', error.message);
+
+  const rows = data || [];
+  const current = rows.find((row) => ACTIVE_PAID_STATUSES.has(String(row.status || '').toLowerCase())) || rows[0] || null;
+  const customerId = await findExistingCustomer(admin, userId);
+
+  return {
+    environment: stripeProvider() === 'stripe_live' ? 'live' : 'test',
+    hasStripeSubscription: Boolean(current?.provider_subscription_id),
+    canManageBilling: Boolean(current?.provider_subscription_id && customerId),
+    trialEligible: rows.length === 0,
+    status: String(current?.status || ''),
+    billingInterval: current?.billing_interval || null,
+    cancelAtPeriodEnd: Boolean(current?.cancel_at_period_end),
+    currentPeriodStart: current?.current_period_start || null,
+    currentPeriodEnd: current?.current_period_end || null,
+    updatedAt: current?.updated_at || null,
+    customerId,
+  };
+}
+
 function appUrl() {
   return optionalEnv('SQUADVIEW_APP_URL', 'https://squadview.app').replace(/\/$/, '');
 }
@@ -173,9 +214,15 @@ Deno.serve(async (req) => {
     const user = await authenticateUser(req, admin);
     const body = await req.json().catch(() => ({}));
     const action = String(body?.action || '').trim();
-    const customerId = await findOrCreateCustomer(admin, user);
+
+    if (action === 'get_status') {
+      const status = await readPremiumBillingStatus(admin, user.id);
+      const { customerId: _customerId, ...publicStatus } = status;
+      return json({ ok: true, ...publicStatus });
+    }
 
     if (action === 'create_checkout') {
+      const customerId = await findOrCreateCustomer(admin, user);
       if (await hasActivePaidSubscription(admin, user.id)) {
         throw new ApiError(409, 'already_premium', 'Paid Premium is already active. Use Manage billing instead.');
       }
@@ -211,8 +258,12 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'create_portal') {
+      const status = await readPremiumBillingStatus(admin, user.id);
+      if (!status.hasStripeSubscription || !status.customerId) {
+        throw new ApiError(409, 'no_paid_subscription', 'There is no Stripe Premium subscription to manage for this account.');
+      }
       const params = new URLSearchParams();
-      params.set('customer', customerId);
+      params.set('customer', status.customerId);
       params.set('return_url', `${appUrl()}/?billing=returned`);
       const portal = await stripeRequest('/billing_portal/sessions', params);
       if (!portal?.url) throw new ApiError(502, 'portal_url_missing', 'Stripe Billing Portal did not return a URL.');

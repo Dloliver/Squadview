@@ -49,3 +49,19 @@ export async function createPremiumBillingPortalSession() {
   if (!data.url) throw new Error('Stripe did not return a billing portal URL.');
   return data;
 }
+
+export async function loadPremiumBillingStatus() {
+  const data = await invokeBilling('get_status');
+  return {
+    environment: data.environment || 'test',
+    hasStripeSubscription: Boolean(data.hasStripeSubscription),
+    canManageBilling: Boolean(data.canManageBilling),
+    trialEligible: data.trialEligible !== false,
+    status: String(data.status || ''),
+    billingInterval: data.billingInterval || null,
+    cancelAtPeriodEnd: Boolean(data.cancelAtPeriodEnd),
+    currentPeriodStart: data.currentPeriodStart || null,
+    currentPeriodEnd: data.currentPeriodEnd || null,
+    updatedAt: data.updatedAt || null,
+  };
+}
