@@ -14,6 +14,10 @@ export default function PrivacyPage() {
       <p>You can use the core viewer without creating a SquadView account. If you choose to sign in with Twitch, SquadView uses Twitch authentication through its account provider and may store limited account information such as your Twitch user ID, Twitch login, display name, and avatar so the signed in experience can work across devices.</p>
       <p>Signed in users may sync SquadView product data such as favorites, recent channel groups, viewing preferences, and Saved Squads. Subscription status and Premium feature entitlements may also be associated with the signed in SquadView account. SquadView does not need your Twitch password.</p>
 
+      <h2>Premium billing</h2>
+      <p>If you purchase SquadView Premium, payment is processed by Stripe. SquadView may store Stripe customer, subscription, price, billing cadence, status, renewal-period, and cancellation-state identifiers needed to activate Premium and keep account access synchronized. Full payment card numbers are handled by Stripe rather than stored by SquadView.</p>
+      <p>Stripe may process billing contact, payment, device, fraud-prevention, and transaction information according to Stripe's own terms and privacy practices. SquadView uses Stripe-hosted Checkout and may provide a Stripe-hosted billing portal for subscription management.</p>
+
       <h2>Sharing and referral rewards</h2>
       <p>If you use a SquadView referral link or participate in SquadView Rewards, SquadView may store a referral code, the referring and referred SquadView account identifiers, the referred Twitch user ID, qualification timestamps, referral totals, promotional Premium expiration dates, and Lifetime Premium status. This information is used to attribute a new user to one referrer, prevent duplicate or self referrals, show reward progress, and apply earned Premium access.</p>
       <p>A referred Twitch identity is intended to count only once. Referral codes included in shared SquadView links are designed to be opaque and do not expose Twitch OAuth tokens, Supabase user IDs, or other account credentials.</p>

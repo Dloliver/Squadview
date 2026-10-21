@@ -23,9 +23,10 @@ import {
   subscribeToAccountChanges,
 } from './services/accountService';
 import { loadFollowedChannels, loadFollowedLiveStreams } from './services/twitchFollowingService';
-import { FREE_ENTITLEMENTS } from './config/plans';
+import { FREE_ENTITLEMENTS, PREMIUM_PRICING, PREMIUM_TRIAL_DAYS } from './config/plans';
 import { AD_CONFIG, isLoadingAdConfigured, markLoadingAdShown, shouldShowLoadingAd } from './config/advertising';
 import { loadSquadViewEntitlements } from './services/premiumService';
+import { createPremiumBillingPortalSession, createPremiumCheckoutSession } from './services/billingService';
 import { createSavedSquad, deleteSavedSquad, loadSavedSquads, updateSavedSquad } from './services/savedSquadService';
 import {
   capturePendingReferralFromLocation,
@@ -62,6 +63,7 @@ const REFERRAL_PROMO_WATCH_MS = 5 * 60 * 1000;
 const REFERRAL_PROMO_CHAT_IDLE_MS = 30 * 1000;
 const REFERRAL_PROMO_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
+const PENDING_PREMIUM_PLAN_KEY = 'squadview:pending-premium-plan:v1';
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 const MAX_SUPPORTED_VIEWER_STREAMS = 16;
 const AUTO_FILL_FAVORITES_KEY = 'squadview:auto-fill-favorites:v1';
@@ -231,47 +233,84 @@ function clearNativeChatDrafts() {
   }
 }
 
-function getReferralPromoCopy(summary, signedIn) {
-  if (!signedIn) {
-    return {
-      eyebrow: 'SquadView Rewards',
-      title: 'Get Premium free',
-      body: 'Sign in with Twitch, then invite 5 new SquadView users to unlock 30 days of Premium.',
-    };
-  }
+function normalizePremiumPlan(value) {
+  return value === 'annual' ? 'annual' : value === 'monthly' ? 'monthly' : '';
+}
 
+function readPendingPremiumPlan() {
+  try {
+    return normalizePremiumPlan(sessionStorage.getItem(PENDING_PREMIUM_PLAN_KEY));
+  } catch {
+    return '';
+  }
+}
+
+function writePendingPremiumPlan(plan) {
+  const normalized = normalizePremiumPlan(plan);
+  if (!normalized) return;
+  try {
+    sessionStorage.setItem(PENDING_PREMIUM_PLAN_KEY, normalized);
+  } catch {
+    // OAuth can still continue when session storage is restricted.
+  }
+}
+
+function clearPendingPremiumPlan() {
+  try {
+    sessionStorage.removeItem(PENDING_PREMIUM_PLAN_KEY);
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function readPremiumReturnState() {
+  try {
+    const url = new URL(window.location.href);
+    const premium = String(url.searchParams.get('premium') || '').trim();
+    const billing = String(url.searchParams.get('billing') || '').trim();
+    if (premium === 'success') return 'success';
+    if (premium === 'cancelled') return 'cancelled';
+    if (billing === 'returned') return 'billing_returned';
+  } catch {}
+  return '';
+}
+
+function clearPremiumReturnParams() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('premium');
+    url.searchParams.delete('checkout_session_id');
+    url.searchParams.delete('billing');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    // Cosmetic cleanup only.
+  }
+}
+
+function getReferralPromoCopy(summary, signedIn) {
   const qualified = Math.max(0, Number(summary?.qualifiedReferrals) || 0);
   const nextRemaining = Math.max(1, Number(summary?.nextMonthRemaining) || (5 - (qualified % 5 || 0)));
-  const lifetimeRemaining = Math.max(0, 100 - qualified);
 
-  if (qualified >= 90) {
+  if (!signedIn) {
     return {
-      eyebrow: 'Lifetime Premium',
-      title: 'Lifetime Premium is close',
-      body: `${lifetimeRemaining} more qualified ${lifetimeRemaining === 1 ? 'referral' : 'referrals'} unlocks Lifetime Premium for this Twitch account.`,
-    };
-  }
-
-  if (qualified >= 5) {
-    return {
-      eyebrow: 'Keep building your Squad',
-      title: 'Earn another free month',
-      body: `${nextRemaining} more qualified ${nextRemaining === 1 ? 'referral' : 'referrals'} adds another 30 days of Premium. Every 5 keeps stacking.`,
+      eyebrow: 'SquadView Premium',
+      title: 'Give the whole Squad more room',
+      body: 'Connect Twitch to upgrade to 16 streams, remove SquadView ads, and unlock the full Premium workspace.',
     };
   }
 
   if (qualified > 0) {
     return {
-      eyebrow: 'You are getting close',
-      title: `${nextRemaining} more ${nextRemaining === 1 ? 'friend' : 'friends'} to Premium`,
-      body: 'Share the SquadView you are watching. Every 5 qualified new users unlocks 30 days of Premium.',
+      eyebrow: 'SquadView Premium',
+      title: 'Upgrade now or keep earning it free',
+      body: `${nextRemaining} more qualified ${nextRemaining === 1 ? 'referral' : 'referrals'} earns another free month, or start paid Premium today.`,
     };
   }
 
   return {
-    eyebrow: 'SquadView Rewards',
-    title: 'Get Premium free',
-    body: 'Invite 5 new SquadView users and unlock 30 days of Premium. Every additional 5 earns another month.',
+    eyebrow: 'SquadView Premium',
+    title: 'Upgrade your Squad',
+    body: 'Go Premium for larger views and no SquadView ads, or invite 5 new users to earn 30 days free.',
   };
 }
 
@@ -482,6 +521,9 @@ function SquadViewApp() {
   const [accountProfile, setAccountProfile] = useState(null);
   const [accountError, setAccountError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+  const [billingBusy, setBillingBusy] = useState('');
+  const [billingError, setBillingError] = useState('');
+  const [premiumReturnState] = useState(readPremiumReturnState);
   const [referralSummary, setReferralSummary] = useState(null);
   const [referralBusy, setReferralBusy] = useState(false);
   const [referralMessage, setReferralMessage] = useState('');
@@ -1084,6 +1126,67 @@ function SquadViewApp() {
       cancelled = true;
     };
   }, [accountSession?.user?.id]);
+
+  useEffect(() => {
+    if (!premiumReturnState || !accountReady) return undefined;
+
+    let cancelled = false;
+    clearPremiumReturnParams();
+
+    if (premiumReturnState === 'cancelled') {
+      setFavoriteLiveNotice({ kind: 'message', message: 'Premium checkout was canceled. You were not upgraded.' });
+      return undefined;
+    }
+
+    if (premiumReturnState === 'billing_returned') {
+      if (accountSession?.user?.id) {
+        void loadSquadViewEntitlements(accountSession.user.id).then((access) => {
+          if (!cancelled) setEntitlements(access);
+        }).catch(() => {});
+      }
+      setFavoriteLiveNotice({ kind: 'message', message: 'Billing settings updated.' });
+      return () => { cancelled = true; };
+    }
+
+    if (!accountSession?.user?.id) {
+      setFavoriteLiveNotice({ kind: 'message', message: 'Payment completed. Reconnect Twitch so SquadView can refresh Premium.' });
+      return undefined;
+    }
+
+    async function confirmPremium() {
+      setFavoriteLiveNotice({ kind: 'message', message: 'Finishing your Premium upgrade…' });
+      for (let attempt = 0; attempt < 10 && !cancelled; attempt += 1) {
+        try {
+          const access = await loadSquadViewEntitlements(accountSession.user.id);
+          if (cancelled) return;
+          setEntitlements(access);
+          if (access.isPremium) {
+            setReferralPromoRailOpen(false);
+            setReferralPromoReady(false);
+            setReferralPromoSuppressed(true);
+            setFavoriteLiveNotice({ kind: 'message', message: 'SquadView Premium is active. Enjoy the extra room.' });
+            trackEvent('premium_checkout_completed', { plan_key: access.planKey });
+            return;
+          }
+        } catch {}
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      }
+      if (!cancelled) {
+        setFavoriteLiveNotice({ kind: 'message', message: 'Payment succeeded. Premium is still syncing; refresh Account in a moment.' });
+      }
+    }
+
+    void confirmPremium();
+    return () => { cancelled = true; };
+  }, [accountReady, accountSession?.user?.id, premiumReturnState]);
+
+  useEffect(() => {
+    if (!accountReady || !accountSession?.user?.id || entitlements.isPremium || billingBusy) return;
+    const pendingPlan = readPendingPremiumPlan();
+    if (!pendingPlan) return;
+    clearPendingPremiumPlan();
+    void startPremiumCheckout(pendingPlan, 'post_twitch_signin');
+  }, [accountReady, accountSession?.user?.id, billingBusy, entitlements.isPremium]);
 
   // Refresh the remembered Build roster once account state has settled. The
   // previous lineup is convenience state, not a Saved Squad: confirmed offline
@@ -2339,6 +2442,47 @@ function SquadViewApp() {
       setFollowingError(error?.message || 'Could not load the Twitch channels you follow.');
     }
   }, [accountSession?.user?.id]);
+
+  // Auto-fill needs a fresh positive Twitch signal while the viewer is already
+  // running. The Favorites-only endpoint remains the lightweight primary poll,
+  // but some Twitch live transitions can reach Following Live first. Refresh the
+  // signed-in Followed Live snapshot once per Favorite poll while Auto-fill is on
+  // so a newly-live Favorite can fill an open viewer slot without requiring the
+  // user to open Manage Streams (which already performs this refresh manually).
+  useEffect(() => {
+    if (
+      screen !== 'viewer' ||
+      !autoFillFavorites ||
+      !accountSession?.user?.id ||
+      !favoriteStreamers.length
+    ) {
+      return undefined;
+    }
+
+    const refreshAutoFillFollowing = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshFollowedLiveStreams({ silent: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshAutoFillFollowing();
+    };
+
+    refreshAutoFillFollowing();
+    const interval = window.setInterval(refreshAutoFillFollowing, FAVORITE_LIVE_POLL_MS);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    screen,
+    autoFillFavorites,
+    accountSession?.user?.id,
+    favoriteStreamers.length,
+    refreshFollowedLiveStreams,
+  ]);
 
   const refreshFollowedChannels = useCallback(async ({ force = false } = {}) => {
     if (!accountSession?.user?.id) {
@@ -4086,6 +4230,54 @@ function SquadViewApp() {
     if (accountSession?.user?.id) void refreshReferralRewards();
   }
 
+  async function startPremiumCheckout(plan, source = 'premium_ui') {
+    const normalizedPlan = normalizePremiumPlan(plan);
+    if (!normalizedPlan || billingBusy) return;
+
+    setBillingError('');
+
+    if (!accountSession?.user?.id) {
+      writePendingPremiumPlan(normalizedPlan);
+      setReferralPromoRailOpen(false);
+      trackEvent('premium_checkout_signin_required', { plan: normalizedPlan, source });
+      try {
+        await handleTwitchSignIn();
+      } catch (error) {
+        setBillingError(error?.message || 'Could not open Twitch sign in.');
+      }
+      return;
+    }
+
+    setBillingBusy(normalizedPlan);
+    try {
+      const checkout = await createPremiumCheckoutSession(normalizedPlan);
+      trackEvent('premium_checkout_started', { plan: normalizedPlan, source });
+      suppressReferralPromo('paid_checkout_started');
+      window.location.assign(checkout.url);
+    } catch (error) {
+      if (error?.code === 'already_premium') {
+        const access = await loadSquadViewEntitlements(accountSession.user.id).catch(() => null);
+        if (access) setEntitlements(access);
+      }
+      setBillingError(error?.message || 'Could not open Premium checkout.');
+      setBillingBusy('');
+    }
+  }
+
+  async function openPremiumBillingPortal() {
+    if (!accountSession?.user?.id || billingBusy) return;
+    setBillingError('');
+    setBillingBusy('portal');
+    try {
+      const portal = await createPremiumBillingPortalSession();
+      trackEvent('premium_billing_portal_opened', {});
+      window.location.assign(portal.url);
+    } catch (error) {
+      setBillingError(error?.message || 'Could not open billing settings.');
+      setBillingBusy('');
+    }
+  }
+
   function suppressReferralPromo(reason) {
     setReferralPromoReady(false);
     setReferralPromoRailOpen(false);
@@ -4666,9 +4858,35 @@ function SquadViewApp() {
                     <span>YouTube Companion</span>
                   </div>
 
+                  <small className="premium-trial-copy">Try Premium free for {PREMIUM_TRIAL_DAYS} days. Payment method required; cancel before the trial ends to avoid a charge.</small>
+
+                  <div className="premium-rail-pricing" aria-label="SquadView Premium plans">
+                    <button
+                      type="button"
+                      className="premium-price-option"
+                      onClick={() => void startPremiumCheckout('monthly', 'viewer_rail')}
+                      disabled={Boolean(billingBusy)}
+                    >
+                      <span>{PREMIUM_PRICING.monthly.label}</span>
+                      <strong>{PREMIUM_PRICING.monthly.price}<small>{PREMIUM_PRICING.monthly.cadence}</small></strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="premium-price-option is-best"
+                      onClick={() => void startPremiumCheckout('annual', 'viewer_rail')}
+                      disabled={Boolean(billingBusy)}
+                    >
+                      <span>{PREMIUM_PRICING.annual.label} · {PREMIUM_PRICING.annual.savings}</span>
+                      <strong>{PREMIUM_PRICING.annual.price}<small>{PREMIUM_PRICING.annual.cadence}</small></strong>
+                      <em>{PREMIUM_PRICING.annual.equivalent}</em>
+                    </button>
+                  </div>
+
+                  {billingError && <div className="premium-billing-error">{billingError}</div>}
+
                   <div className="referral-promo-actions">
-                    <button type="button" className="primary-button" onClick={handleReferralPromoAction}>
-                      {accountSession?.user?.id ? 'Share My Squad' : 'Sign in to earn Premium'}
+                    <button type="button" className="secondary-button premium-earn-button" onClick={handleReferralPromoAction} disabled={Boolean(billingBusy)}>
+                      {accountSession?.user?.id ? 'Earn Premium free by sharing' : 'Connect Twitch to earn Premium'}
                     </button>
                     <button type="button" className="referral-promo-later" onClick={() => suppressReferralPromo('maybe_later')}>
                       Maybe later
@@ -6173,7 +6391,7 @@ function SquadViewApp() {
 
       {showAccount && (
         <div className="modal-backdrop" onClick={() => setShowAccount(false)}>
-          <section className="modal account-modal" onClick={(event) => event.stopPropagation()}>
+          <section className={`modal account-modal ${accountSession ? 'is-signed-in' : ''}`} onClick={(event) => event.stopPropagation()}>
             <button className="modal-close" onClick={() => setShowAccount(false)}><X /></button>
             {!accountSession ? (
               <>
@@ -6221,7 +6439,6 @@ function SquadViewApp() {
                     <option value="chat">Stream + Chat</option>
                     <option value="solo">Solo focus</option>
                   </select>
-                  <small>Smart layout keeps SquadView's current automatic behavior, including placing chat in the fourth desktop slot when three streams are selected.</small>
                 </label>
                 <div className={`account-plan-summary ${entitlements.isPremium ? 'is-premium' : ''}`}>
                   <div>
@@ -6234,10 +6451,42 @@ function SquadViewApp() {
                       : entitlements.promoPremiumUntil && entitlements.isPremium && entitlements.planKey === 'free'
                         ? `Referral Premium is active through ${formatRewardDate(entitlements.promoPremiumUntil)}.`
                         : entitlements.isPremium
-                          ? 'Premium entitlements are synced to this account.'
-                          : 'Free includes the full Twitch viewer. Premium adds power user tools without changing the automatic layouts.'}
+                          ? (entitlements.planKey !== 'free' ? 'Paid Premium is active on this SquadView account.' : 'Premium entitlements are synced to this account.')
+                          : 'Full Twitch viewer. Premium adds power-user tools.'}
                   </span>
                 </div>
+                {billingError && <div className="account-error">{billingError}</div>}
+
+                {!entitlements.isPremium && (
+                  <div className="account-premium-purchase">
+                    <div className="account-premium-purchase-heading">
+                      <div>
+                        <small>Paid Premium</small>
+                        <strong>Upgrade to Premium</strong>
+                      </div>
+                      <span>Secure by Stripe</span>
+                    </div>
+                    <small className="account-premium-trial">{PREMIUM_TRIAL_DAYS}-day free trial · Payment method required · Cancel before the trial ends to avoid a charge.</small>
+                    <div className="account-premium-prices">
+                      <button type="button" onClick={() => void startPremiumCheckout('monthly', 'account')} disabled={Boolean(billingBusy)}>
+                        <span>Monthly</span>
+                        <strong>{PREMIUM_PRICING.monthly.price}<small>{PREMIUM_PRICING.monthly.cadence}</small></strong>
+                      </button>
+                      <button type="button" className="is-best" onClick={() => void startPremiumCheckout('annual', 'account')} disabled={Boolean(billingBusy)}>
+                        <span>Annual · {PREMIUM_PRICING.annual.savings}</span>
+                        <strong>{PREMIUM_PRICING.annual.price}<small>{PREMIUM_PRICING.annual.cadence}</small></strong>
+                        <em>{PREMIUM_PRICING.annual.equivalent}</em>
+                      </button>
+                    </div>
+                    <small>Up to 16 streams · No SquadView ads · Higher Favorites limit · Premium workspace</small>
+                  </div>
+                )}
+
+                {entitlements.planKey !== 'free' && (
+                  <button type="button" className="secondary-button account-billing-button" onClick={() => void openPremiumBillingPortal()} disabled={Boolean(billingBusy)}>
+                    {billingBusy === 'portal' ? 'Opening billing…' : 'Manage Premium billing'}
+                  </button>
+                )}
                 {referralSummary?.available && (
                   <div className="account-rewards-summary">
                     <div className="account-rewards-heading">
@@ -6247,33 +6496,33 @@ function SquadViewApp() {
                       </div>
                       {referralBusy && <span>Syncing…</span>}
                     </div>
-                    {!referralSummary.lifetimePremium && (
-                      <>
-                        <div className="reward-progress-row">
-                          <span>Next 30 days Premium</span>
+                    <div className="account-rewards-metrics">
+                      {!referralSummary.lifetimePremium && (
+                        <div>
+                          <span>30 days Premium</span>
                           <strong>{referralSummary.nextMonthProgress}/5</strong>
                         </div>
-                        <div className="reward-progress-track"><span style={{ width: `${(referralSummary.nextMonthProgress / 5) * 100}%` }} /></div>
-                      </>
-                    )}
-                    <div className="reward-lifetime-row">
-                      <span>Lifetime Premium</span>
-                      <strong>{Math.min(referralSummary.qualifiedReferrals, 100)}/100</strong>
+                      )}
+                      <div>
+                        <span>Lifetime Premium</span>
+                        <strong>{Math.min(referralSummary.qualifiedReferrals, 100)}/100</strong>
+                      </div>
                     </div>
-                    <div className="reward-progress-track lifetime"><span style={{ width: `${Math.min(100, referralSummary.qualifiedReferrals)}%` }} /></div>
                     <small>
                       {referralSummary.lifetimePremium
                         ? 'Lifetime Premium unlocked.'
-                        : `Every 5 qualified new users adds 30 days. ${referralSummary.lifetimeRemaining} to Lifetime.`}
+                        : 'Every 5 qualified new users adds 30 days. 100 unlocks Lifetime Premium.'}
                     </small>
-                    <button type="button" className="secondary-button account-share-rewards-button" onClick={() => { setShowAccount(false); if (channels.length) openShareSquad(); }} disabled={!channels.length}>
-                      {channels.length ? 'Share current SquadView' : 'Open a SquadView to share'}
-                    </button>
+                    {channels.length > 0 && (
+                      <button type="button" className="secondary-button account-share-rewards-button" onClick={() => { setShowAccount(false); openShareSquad(); }}>
+                        Share current SquadView
+                      </button>
+                    )}
                   </div>
                 )}
                 <div className="account-sync-summary">
                   <strong>Sync is on</strong>
-                  <span>Favorites and your most recent stream group follow this account across devices. Following Live reads your Twitch follows and never changes them.</span>
+                  <span>Favorites and your latest lineup follow this account across devices.</span>
                 </div>
                 <button type="button" className="secondary-button account-signout-button" onClick={handleAccountSignOut} disabled={authBusy}>
                   {authBusy ? 'Signing out…' : 'Sign out'}

@@ -7464,3 +7464,351 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     aspect-ratio: 16 / 9;
   }
 }
+
+/* SquadView Premium Phase 4 — paid plan controls */
+.premium-trial-copy,
+.account-premium-trial {
+  display: block;
+  margin: 0;
+  color: var(--muted, #9fb3aa);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.account-premium-trial {
+  margin-top: 0.35rem;
+}
+
+.premium-rail-pricing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-width: 620px;
+}
+
+.premium-price-option,
+.account-premium-prices button {
+  position: relative;
+  min-width: 0;
+  border: 1px solid rgba(69, 224, 181, .22);
+  border-radius: 12px;
+  background: rgba(4, 18, 14, .82);
+  color: #f1fff9;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, transform .16s ease, background .16s ease;
+}
+
+.premium-price-option {
+  display: grid;
+  gap: 4px;
+  min-height: 72px;
+  padding: 10px 12px;
+}
+
+.premium-price-option:hover,
+.account-premium-prices button:hover {
+  border-color: rgba(69, 224, 181, .58);
+  background: rgba(10, 35, 27, .94);
+  transform: translateY(-1px);
+}
+
+.premium-price-option.is-best,
+.account-premium-prices button.is-best {
+  border-color: rgba(255, 190, 73, .52);
+  background: linear-gradient(145deg, rgba(52, 38, 8, .72), rgba(7, 25, 19, .92));
+}
+
+.premium-price-option:disabled,
+.account-premium-prices button:disabled,
+.account-billing-button:disabled,
+.premium-earn-button:disabled {
+  opacity: .55;
+  cursor: wait;
+  transform: none;
+}
+
+.premium-price-option > span,
+.account-premium-prices button > span {
+  color: #b9cec6;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.premium-price-option strong,
+.account-premium-prices button strong {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font: 800 18px/1 'Space Grotesk';
+}
+
+.premium-price-option strong small,
+.account-premium-prices button strong small {
+  color: #91aaa1;
+  font: 700 9px/1.2 Inter, sans-serif;
+}
+
+.premium-price-option em,
+.account-premium-prices button em {
+  color: #ffc964;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.premium-billing-error {
+  max-width: 620px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 102, 102, .32);
+  border-radius: 9px;
+  background: rgba(105, 20, 20, .22);
+  color: #ffc5c5;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.premium-earn-button {
+  width: auto;
+  min-height: 38px;
+  margin: 0;
+  padding-inline: 13px;
+  font-size: 10px;
+}
+
+.account-premium-purchase {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 16px;
+  padding: 15px;
+  border: 1px solid rgba(69, 224, 181, .18);
+  border-radius: 15px;
+  background: linear-gradient(145deg, rgba(69, 224, 181, .055), rgba(145, 70, 255, .055));
+}
+
+.account-premium-purchase-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-premium-purchase-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.account-premium-purchase-heading small,
+.account-premium-purchase > small,
+.account-premium-purchase-heading > span {
+  color: var(--muted, #a9a9b2);
+  font-size: .72rem;
+  line-height: 1.45;
+}
+
+.account-premium-purchase-heading strong {
+  color: #effff9;
+  font-size: .92rem;
+}
+
+.account-premium-prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.account-premium-prices button {
+  display: grid;
+  gap: 5px;
+  min-height: 82px;
+  padding: 12px;
+}
+
+.account-billing-button {
+  width: 100%;
+  margin: 0 0 14px;
+}
+
+@media (max-width: 520px) {
+  .premium-rail-pricing,
+  .account-premium-prices {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-price-option {
+    min-height: 58px;
+    padding: 8px 10px;
+  }
+
+  .premium-price-option strong {
+    font-size: 16px;
+  }
+
+  .account-premium-purchase-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+/* SquadView Premium Phase 4.0.3 — compact, viewport-safe account billing modal */
+.account-modal.is-signed-in {
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-content: start;
+  padding: 24px;
+}
+
+.account-modal.is-signed-in .account-profile-row,
+.account-modal.is-signed-in .account-error,
+.account-modal.is-signed-in .account-premium-purchase,
+.account-modal.is-signed-in .account-billing-button,
+.account-modal.is-signed-in .account-rewards-summary,
+.account-modal.is-signed-in .account-sync-summary,
+.account-modal.is-signed-in .account-signout-button {
+  grid-column: 1 / -1;
+}
+
+.account-modal.is-signed-in .account-profile-row {
+  margin: 0 0 2px;
+  padding-right: 40px;
+}
+
+.account-modal.is-signed-in .account-layout-field,
+.account-modal.is-signed-in .account-plan-summary,
+.account-modal.is-signed-in .account-premium-purchase,
+.account-modal.is-signed-in .account-rewards-summary,
+.account-modal.is-signed-in .account-sync-summary,
+.account-modal.is-signed-in .account-signout-button,
+.account-modal.is-signed-in .account-billing-button,
+.account-modal.is-signed-in .account-error {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.account-modal.is-signed-in .account-layout-field {
+  align-self: stretch;
+}
+
+.account-modal.is-signed-in .account-layout-field select {
+  min-height: 44px;
+}
+
+.account-modal.is-signed-in .account-plan-summary {
+  min-height: 44px;
+  padding: 11px 12px;
+  gap: 12px;
+}
+
+.account-modal.is-signed-in .account-plan-summary span {
+  font-size: .72rem;
+  line-height: 1.35;
+}
+
+.account-modal.is-signed-in .account-premium-purchase {
+  gap: 8px;
+  padding: 13px;
+}
+
+.account-modal.is-signed-in .account-premium-purchase-heading {
+  align-items: center;
+}
+
+.account-modal.is-signed-in .account-premium-trial,
+.account-modal.is-signed-in .account-premium-purchase > small {
+  line-height: 1.35;
+}
+
+.account-modal.is-signed-in .account-premium-prices button {
+  min-height: 68px;
+  padding: 10px 11px;
+}
+
+.account-modal.is-signed-in .account-rewards-summary {
+  gap: 7px;
+  padding: 12px 13px;
+}
+
+.account-rewards-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-rewards-metrics > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+}
+
+.account-rewards-metrics span {
+  color: #b7cbc4;
+  font-size: 10px;
+}
+
+.account-rewards-metrics strong {
+  flex: 0 0 auto;
+  color: #fff;
+  font-size: 11px;
+}
+
+.account-modal.is-signed-in .account-share-rewards-button {
+  min-height: 38px;
+}
+
+.account-modal.is-signed-in .account-sync-summary {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  font-size: 11px;
+}
+
+.account-modal.is-signed-in .account-signout-button,
+.account-modal.is-signed-in .account-billing-button {
+  min-height: 40px;
+}
+
+@media (max-width: 760px) {
+  .account-modal.is-signed-in {
+    width: min(100%, calc(100vw - 20px));
+    max-height: calc(100dvh - 20px);
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 20px 16px 16px;
+  }
+
+  .account-modal.is-signed-in > * {
+    grid-column: 1;
+  }
+
+  .account-modal.is-signed-in .account-plan-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .account-rewards-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .account-modal.is-signed-in .account-sync-summary {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}

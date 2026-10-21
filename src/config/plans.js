@@ -13,6 +13,25 @@ export const FREE_ENTITLEMENTS = Object.freeze({
   lifetimePremium: false,
 });
 
+export const PREMIUM_TRIAL_DAYS = 10;
+
+export const PREMIUM_PRICING = Object.freeze({
+  monthly: Object.freeze({
+    key: 'monthly',
+    label: 'Monthly',
+    price: '$3.99',
+    cadence: '/month',
+  }),
+  annual: Object.freeze({
+    key: 'annual',
+    label: 'Annual',
+    price: '$34.99',
+    cadence: '/year',
+    equivalent: '$2.92/mo',
+    savings: 'Save 27%',
+  }),
+});
+
 export const PREMIUM_FEATURES = [
   {
     key: 'saved_squads',
