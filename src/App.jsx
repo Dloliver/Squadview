@@ -523,6 +523,7 @@ function SquadViewApp() {
   const [manualManagerChannel, setManualManagerChannel] = useState('');
   const [pendingReplacement, setPendingReplacement] = useState('');
   const [draggedManagerChannel, setDraggedManagerChannel] = useState('');
+  const [draggedViewerChannel, setDraggedViewerChannel] = useState('');
   const [showAccount, setShowAccount] = useState(false);
   const [showPremiumBilling, setShowPremiumBilling] = useState(false);
   const [premiumBillingStatus, setPremiumBillingStatus] = useState(null);
@@ -4109,38 +4110,42 @@ function SquadViewApp() {
     setPendingReplacement('');
   }
 
+  // Current lineup reordering is independent of named Saved Squads.
+  // Keep selected chat, audio mix, lead stream, and current desktop page.
+  function commitViewerReorder(reordered) {
+    if (reordered.length !== channels.length ||
+        reordered.some((channel) => !channels.includes(channel))) return;
+    if (reordered.every((channel, index) => channel === channels[index])) return;
+    commitViewerChannels(reordered, {
+      preferredActive: activeChannel,
+      preserveDesktopPage: true,
+      preferredDesktopLead: desktopLeadChannel,
+      preserveAudioMix: true,
+    });
+  }
+
   function moveViewerChannel(channel, direction) {
     const cleaned = cleanChannel(channel);
     const currentIndex = channels.indexOf(cleaned);
     const nextIndex = currentIndex + direction;
     if (currentIndex < 0 || nextIndex < 0 || nextIndex >= channels.length) return;
-
     const reordered = [...channels];
     [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
-    commitViewerChannels(reordered);
+    commitViewerReorder(reordered);
   }
 
   function dropViewerChannel(targetChannel) {
-    const dragged = cleanChannel(draggedManagerChannel);
+    const dragged = cleanChannel(draggedViewerChannel);
     const target = cleanChannel(targetChannel);
-
-    if (!dragged || !target || dragged === target) {
-      setDraggedManagerChannel('');
-      return;
-    }
-
+    setDraggedViewerChannel('');
+    if (!dragged || !target || dragged === target) return;
     const reordered = [...channels];
     const fromIndex = reordered.indexOf(dragged);
     const toIndex = reordered.indexOf(target);
-    if (fromIndex < 0 || toIndex < 0) {
-      setDraggedManagerChannel('');
-      return;
-    }
-
+    if (fromIndex < 0 || toIndex < 0) return;
     reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, dragged);
-    commitViewerChannels(reordered);
-    setDraggedManagerChannel('');
+    commitViewerReorder(reordered);
   }
 
   function removeChannelFromManagerDraft(channelToRemove) {
@@ -4186,6 +4191,31 @@ function SquadViewApp() {
 
     const reordered = [...managerDraftChannels];
     [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+    setManagerDraftChannels(reordered);
+  }
+
+  // Manager pages are a presentation of the canonical roster (four slots per
+  // page), not persisted page objects. Reorder the draft only; Done saves it.
+  function moveManagerChannelToPage(channel, targetPage) {
+    const fromIndex = managerDraftChannels.indexOf(cleanChannel(channel));
+    const pageIndex = Number(targetPage) - 1;
+    const pageCount = Math.max(1, Math.ceil(managerDraftChannels.length / 4));
+    if (fromIndex < 0 || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pageCount) return;
+    const currentPage = Math.floor(fromIndex / 4);
+    if (currentPage === pageIndex) return;
+    const reordered = [...managerDraftChannels];
+    const [moved] = reordered.splice(fromIndex, 1);
+    // Insert at the first slot of the requested page; neighbors shift without loss.
+    reordered.splice(Math.min(pageIndex * 4, reordered.length), 0, moved);
+    setManagerDraftChannels(reordered);
+  }
+
+  function swapManagerDraftChannels(channel, otherChannel) {
+    const fromIndex = managerDraftChannels.indexOf(cleanChannel(channel));
+    const toIndex = managerDraftChannels.indexOf(cleanChannel(otherChannel));
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+    const reordered = [...managerDraftChannels];
+    [reordered[fromIndex], reordered[toIndex]] = [reordered[toIndex], reordered[fromIndex]];
     setManagerDraftChannels(reordered);
   }
 
@@ -4511,6 +4541,19 @@ function SquadViewApp() {
         : entitlements.isPremium
           ? 'Premium'
           : 'Free';
+  const premiumIdentityBadgeLabel = entitlements.lifetimePremium
+    ? 'Lifetime Premium'
+    : promotionalPremiumActive
+      ? 'Referral Premium'
+      : entitlements.isPremium
+        ? 'Premium'
+        : '';
+  const premiumIdentityBadgeClass = entitlements.lifetimePremium
+    ? 'is-lifetime'
+    : promotionalPremiumActive
+      ? 'is-referral'
+      : 'is-premium';
+  const premiumIdentityBadgeSymbol = entitlements.lifetimePremium ? '✦' : '◆';
 
   if (screen === 'shared_pending') {
     return (
@@ -4654,8 +4697,10 @@ function SquadViewApp() {
       mountedPlayerChannelsRef.current.add(channel);
     });
 
-    const mountedChannels = channels.filter((channel) =>
-      mountedPlayerChannelsRef.current.has(channel),
+    // Keep an iframe's DOM position stable during roster reordering. Grid slot
+    // placement is driven by tileOrder, not a React move of mounted embeds.
+    const mountedChannels = [...mountedPlayerChannelsRef.current].filter(
+      (channel) => channels.includes(channel),
     );
 
     const mobileManualAudioOwner = mobileSingleAudioMode
@@ -4683,7 +4728,11 @@ function SquadViewApp() {
       return visibleIndex + 1;
     };
 
-    const twitchTileOrder = (channel) => baseTwitchTileOrder(channel);
+    const twitchTileOrder = (channel) => {
+      if (!visibleChannels.includes(channel)) return undefined;
+      if (!isDesktopGrid && viewMode === 'dual') return visibleChannels.indexOf(channel) + 1;
+      return baseTwitchTileOrder(channel);
+    };
 
     const twitchGridPosition = (channel) => {
       if (!desktopGridChat) return {};
@@ -4873,6 +4922,18 @@ function SquadViewApp() {
                     isFavorite={favoriteStreamers.includes(channel)}
                     onToggleFavorite={() => toggleFavoriteStreamer(channel)}
                     onRemove={() => removeChannelFromGroup(channel)}
+                    canViewerReorder={isDesktopGrid && (viewMode === 'dual' || desktopGridChat) && visibleChannels.length > 1}
+                    viewerDragActive={draggedViewerChannel === channel}
+                    onViewerDragStart={() => setDraggedViewerChannel(channel)}
+                    onViewerDragEnd={() => setDraggedViewerChannel('')}
+                    onViewerDragOver={(event) => {
+                      if (draggedViewerChannel && draggedViewerChannel !== channel) event.preventDefault();
+                    }}
+                    onViewerDrop={() => dropViewerChannel(channel)}
+                    onMoveEarlier={() => moveViewerChannel(channel, -1)}
+                    onMoveLater={() => moveViewerChannel(channel, 1)}
+                    canMoveEarlier={channels.indexOf(channel) > 0}
+                    canMoveLater={channels.indexOf(channel) < channels.length - 1}
                     registerPlayer={registerPlayer}
                     tileOrder={twitchTileOrder(channel)}
                     gridColumn={twitchGridPosition(channel).gridColumn}
@@ -5114,11 +5175,12 @@ function SquadViewApp() {
                 <div className="stream-manager-section-heading">
                   <div>
                     <strong>In this view</strong>
-                    <small>Drag on desktop or use the arrows to reorder.</small>
+                    <small>Organize four slots per page. Drag, move to another page, or swap streams.</small>
                   </div>
                   <b>{managerDraftChannels.length}/{viewerStreamLimit}</b>
                 </div>
 
+                <div className="manager-page-explanation">Page groups follow the standard four-stream desktop grid. Grid + Chat, YouTube, and mobile layouts may show fewer streams at once.</div>
                 <div className="stream-manager-current-list">
                   {!managerDraftChannels.length && (
                     <div className="stream-manager-current-empty">
@@ -5129,8 +5191,14 @@ function SquadViewApp() {
                   )}
 
                   {managerDraftChannels.map((channel, index) => (
+                    <div className="manager-page-item" key={channel}>
+                    {index % 4 === 0 && (
+                      <div className="manager-page-heading">
+                        <strong>Page {Math.floor(index / 4) + 1}</strong>
+                        <small>Slots {index + 1}–{Math.min(index + 4, managerDraftChannels.length)}</small>
+                      </div>
+                    )}
                     <article
-                      key={channel}
                       className={`stream-manager-current-row ${favoriteStreamers.includes(channel) ? 'is-favorite' : ''} ${managerKnownLiveChannels.has(channel) ? 'is-live' : ''} ${draggedManagerChannel === channel ? 'is-dragging' : ''}`}
                       draggable
                       onDragStart={() => setDraggedManagerChannel(channel)}
@@ -5178,6 +5246,34 @@ function SquadViewApp() {
                         <X />
                       </button>
                     </article>
+                    <div className="manager-page-tools">
+                      <label>
+                        Move to page
+                        <select
+                          aria-label={`Move ${channel} to page`}
+                          value={Math.floor(index / 4) + 1}
+                          onChange={(event) => moveManagerChannelToPage(channel, Number(event.target.value))}
+                        >
+                          {Array.from({ length: Math.max(1, Math.ceil(managerDraftChannels.length / 4)) }, (_, pageIndex) => (
+                            <option key={pageIndex} value={pageIndex + 1}>Page {pageIndex + 1}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Swap with
+                        <select
+                          aria-label={`Swap ${channel} with stream`}
+                          value=""
+                          onChange={(event) => swapManagerDraftChannels(channel, event.target.value)}
+                        >
+                          <option value="">Choose stream…</option>
+                          {managerDraftChannels.filter((other) => other !== channel).map((other) => (
+                            <option key={other} value={other}>{other}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    </div>
                   ))}
                 </div>
               </section>
@@ -5800,7 +5896,26 @@ function SquadViewApp() {
             ) : (
               <span className="account-avatar-fallback">T</span>
             )}
-            <span>{accountSession ? (accountProfile?.display_name || 'Account') : 'Sign in with Twitch'}</span>
+            {accountSession && entitlements.isPremium && (
+              <span className={`premium-identity-badge is-mobile ${premiumIdentityBadgeClass}`} title={premiumIdentityBadgeLabel} aria-label={premiumIdentityBadgeLabel}>
+                <span className="premium-identity-symbol" aria-hidden="true">{premiumIdentityBadgeSymbol}</span>
+              </span>
+            )}
+            <span className="account-button-identity">
+              <span className="account-button-display-name">
+                {accountSession ? (accountProfile?.display_name || 'Account') : 'Sign in with Twitch'}
+              </span>
+              {accountSession && entitlements.isPremium && (
+                <span
+                  className={`premium-identity-badge is-header ${premiumIdentityBadgeClass}`}
+                  title={premiumIdentityBadgeLabel}
+                  aria-label={premiumIdentityBadgeLabel}
+                >
+                  <span className="premium-identity-symbol" aria-hidden="true">{premiumIdentityBadgeSymbol}</span>
+                  <span>{entitlements.lifetimePremium ? 'Lifetime' : promotionalPremiumActive ? 'Referral' : 'Premium'}</span>
+                </span>
+              )}
+            </span>
           </button>
         </div>
       </header>
@@ -6518,7 +6633,18 @@ function SquadViewApp() {
                   )}
                   <div>
                     <small>Signed in with Twitch</small>
-                    <h2>{accountProfile?.display_name || 'SquadView account'}</h2>
+                    <div className="account-profile-name-row">
+                      <h2>{accountProfile?.display_name || 'SquadView account'}</h2>
+                      {entitlements.isPremium && (
+                        <span
+                          className={`premium-identity-badge ${premiumIdentityBadgeClass}`}
+                          title={premiumIdentityBadgeLabel}
+                        >
+                          <span className="premium-identity-symbol" aria-hidden="true">{premiumIdentityBadgeSymbol}</span>
+                          <span>{premiumIdentityBadgeLabel}</span>
+                        </span>
+                      )}
+                    </div>
                     {accountProfile?.twitch_login && <p>@{accountProfile.twitch_login}</p>}
                   </div>
                 </div>

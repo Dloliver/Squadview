@@ -890,6 +890,16 @@ export default function TwitchPlayer({
   isFavorite = false,
   onToggleFavorite,
   onRemove,
+  canViewerReorder = false,
+  viewerDragActive = false,
+  onViewerDragStart,
+  onViewerDragEnd,
+  onViewerDragOver,
+  onViewerDrop,
+  onMoveEarlier,
+  onMoveLater,
+  canMoveEarlier = false,
+  canMoveLater = false,
   registerPlayer,
   tileOrder,
   gridColumn,
@@ -917,6 +927,12 @@ export default function TwitchPlayer({
   const [status, setStatus] =
     useState('Loading');
   const [playerReady, setPlayerReady] = useState(false);
+  // Increment only this player's lifecycle. Other channel keys remain stable.
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlightRef = useRef(false);
+  const refreshWatchdogRef = useRef(null);
+
   const [showVolumeControl, setShowVolumeControl] =
     useState(false);
   const [mobileVolumePercent, setMobileVolumePercent] =
@@ -1069,10 +1085,35 @@ export default function TwitchPlayer({
     onAudioReconcile,
   ]);
 
+  // A manual refresh must not steal the iOS single audible media session.
+  // The user can tap Listening to mute first, then refresh the stream.
+  const refreshBlockedByIosAudio = Boolean(
+    preserveAudibleSession && visible && audioSelected && audioEnabled,
+  );
+
+  function refreshThisStream() {
+    if (!visible || refreshBlockedByIosAudio || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setRefreshing(true);
+    setPlayerReady(false);
+    setStatus('Refreshing');
+    setRefreshRevision((revision) => revision + 1);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     let qualityRetryTimer = null;
+    // The old Twitch embed is released by the cleanup of the prior revision.
+    // A timeout only unlocks UI if the Twitch script/READY never resolves.
+    if (refreshInFlightRef.current) {
+      refreshWatchdogRef.current = window.setTimeout(() => {
+        if (cancelled) return;
+        refreshInFlightRef.current = false;
+        setRefreshing(false);
+        setStatus((current) => current === 'Refreshing' ? 'Player unavailable' : current);
+      }, 15000);
+    }
 
     loadTwitchScript()
       .then((Twitch) => {
@@ -1166,6 +1207,12 @@ export default function TwitchPlayer({
           () => {
             player.__squadViewReady = true;
             setPlayerReady(true);
+            if (refreshWatchdogRef.current) {
+              window.clearTimeout(refreshWatchdogRef.current);
+              refreshWatchdogRef.current = null;
+            }
+            refreshInFlightRef.current = false;
+            setRefreshing(false);
             setStatus('Ready');
 
             refreshPlayerState();
@@ -1263,6 +1310,13 @@ export default function TwitchPlayer({
         );
       })
       .catch(() => {
+        if (cancelled) return;
+        if (refreshWatchdogRef.current) {
+          window.clearTimeout(refreshWatchdogRef.current);
+          refreshWatchdogRef.current = null;
+        }
+        refreshInFlightRef.current = false;
+        setRefreshing(false);
         setStatus(
           'Player unavailable',
         );
@@ -1270,6 +1324,10 @@ export default function TwitchPlayer({
 
     return () => {
       cancelled = true;
+      if (refreshWatchdogRef.current) {
+        window.clearTimeout(refreshWatchdogRef.current);
+        refreshWatchdogRef.current = null;
+      }
 
       if (qualityRetryTimer) {
         window.clearTimeout(
@@ -1308,6 +1366,7 @@ export default function TwitchPlayer({
   }, [
     channel,
     registerPlayer,
+    refreshRevision,
   ]);
 
   // Listening is a live status, not a remembered preference. Off-page streams
@@ -1371,6 +1430,11 @@ export default function TwitchPlayer({
       } ${isFavorite ? 'is-favorite' : ''} ${chatCovered ? 'is-chat-covered' : ''}`}
       aria-label={`${channel} Twitch stream`}
       aria-hidden={chatCovered ? 'true' : undefined}
+      onDragOver={canViewerReorder ? onViewerDragOver : undefined}
+      onDrop={canViewerReorder ? (event) => {
+        event.preventDefault();
+        onViewerDrop?.();
+      } : undefined}
       style={{
         ...(Number.isFinite(tileOrder) ? { order: tileOrder } : {}),
         ...(Number.isFinite(gridColumn) ? { gridColumn } : {}),
@@ -1378,6 +1442,22 @@ export default function TwitchPlayer({
       }}
     >
       <header className="stream-card-header">
+        {canViewerReorder && (
+          <span
+            className={`viewer-reorder-handle ${viewerDragActive ? 'is-dragging' : ''}`}
+            draggable
+            role="button"
+            tabIndex={0}
+            aria-label={`Drag ${channel} to rearrange streams`}
+            title="Drag to rearrange streams"
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('text/plain', channel);
+              onViewerDragStart?.();
+            }}
+            onDragEnd={onViewerDragEnd}
+          >⠿</span>
+        )}
         <span className="live-dot" />
 
         <strong>{channel}</strong>
@@ -1406,6 +1486,26 @@ export default function TwitchPlayer({
         </button>
 
         <div className="stream-card-actions">
+          {visible && (canMoveEarlier || canMoveLater) && (
+            <span className="viewer-mobile-reorder" aria-label={`Reorder ${channel}`}>
+              <button type="button" onClick={onMoveEarlier} disabled={!canMoveEarlier}
+                aria-label={`Move ${channel} earlier in lineup`} title="Move earlier">↑</button>
+              <button type="button" onClick={onMoveLater} disabled={!canMoveLater}
+                aria-label={`Move ${channel} later in lineup`} title="Move later">↓</button>
+            </span>
+          )}
+          <button
+            type="button"
+            className={`refresh-stream-chip ${refreshing ? 'is-refreshing' : ''}`}
+            onClick={refreshThisStream}
+            disabled={!visible || refreshing || refreshBlockedByIosAudio}
+            aria-label={`Refresh ${channel} stream`}
+            title={refreshBlockedByIosAudio
+              ? 'Mute this stream before refreshing on iPhone/iPad'
+              : refreshing ? 'Refreshing stream…' : `Refresh ${channel} stream`}
+          >
+            <span aria-hidden="true">↻</span>
+          </button>
           {(active || listening) && (
             <button
               type="button"
