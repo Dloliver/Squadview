@@ -27,8 +27,24 @@ function requiredEnv(name: string) {
   return value;
 }
 
+function configuredStripeEnvironment() {
+  const environment = String(Deno.env.get('STRIPE_ENVIRONMENT') || '').trim().toLowerCase();
+  if (environment !== 'test' && environment !== 'live') {
+    throw new ApiError(500, 'invalid_stripe_environment', 'Stripe environment must be explicitly configured as test or live.');
+  }
+  return environment;
+}
+
 function stripeProvider() {
-  return String(Deno.env.get('STRIPE_ENVIRONMENT') || 'test').trim().toLowerCase() === 'live' ? 'stripe_live' : 'stripe_test';
+  return configuredStripeEnvironment() === 'live' ? 'stripe_live' : 'stripe_test';
+}
+
+function assertStripeEventEnvironment(event: unknown) {
+  const expectedLive = configuredStripeEnvironment() === 'live';
+  const eventLive = (event as { livemode?: unknown } | null)?.livemode;
+  if (typeof eventLive !== 'boolean' || eventLive !== expectedLive) {
+    throw new ApiError(400, 'stripe_environment_mismatch', 'Stripe event environment mismatch.');
+  }
 }
 
 function readServiceKey() {
@@ -141,7 +157,20 @@ async function syncEntitlements(admin: ReturnType<typeof createAdminClient>, use
   if (error) throw new ApiError(500, 'subscription_lookup_failed', error.message);
 
   const paidActive = (data || []).some((row) => ACTIVE_PAID_STATUSES.has(String(row.status || '').toLowerCase()));
-  const patch = paidActive
+  // Rewards remain independent of Stripe. A canceled/expired Stripe subscription
+  // must never downgrade a still-active referral grant or lifetime Premium.
+  const { data: existingEntitlement, error: rewardError } = await admin
+    .from('squadview_entitlements')
+    .select('promo_premium_until, lifetime_premium')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (rewardError) throw new ApiError(500, 'reward_entitlement_lookup_failed', rewardError.message);
+  const promoEnd = existingEntitlement?.promo_premium_until
+    ? Date.parse(existingEntitlement.promo_premium_until)
+    : NaN;
+  const rewardActive = existingEntitlement?.lifetime_premium === true ||
+    (Number.isFinite(promoEnd) && promoEnd > Date.now());
+  const patch = (paidActive || rewardActive)
     ? {
         user_id: userId,
         plan_key: 'premium',
@@ -218,7 +247,9 @@ async function syncSubscription(admin: ReturnType<typeof createAdminClient>, sub
     provider_price_id: priceId || null,
     plan_key: interval ? 'premium' : 'free',
     status,
-    cancel_at_period_end: Boolean(subscription?.cancel_at_period_end),
+    // Flexible Stripe billing can schedule cancellation using cancel_at alone.
+    cancel_at_period_end: Boolean(subscription?.cancel_at_period_end || subscription?.cancel_at),
+    cancel_at: unixDate(subscription?.cancel_at),
     current_period_start: unixDate(period.start),
     current_period_end: unixDate(period.end),
     billing_interval: interval,
@@ -255,6 +286,8 @@ Deno.serve(async (req) => {
     if (!await verifyStripeSignature(raw, signature)) throw new ApiError(400, 'invalid_signature', 'Invalid Stripe webhook signature.');
 
     const event = JSON.parse(raw);
+    // Reject wrong-mode events before creating a database client or writing any rows.
+    assertStripeEventEnvironment(event);
     const admin = createAdminClient();
     const type = String(event?.type || '');
     const object = event?.data?.object || {};

@@ -1316,9 +1316,21 @@ function SquadViewApp() {
       }
     }
 
+    // Stripe Portal may return to another tab or restore an existing page.
+    // Recheck on focus/visibility instead of relying only on modal mount.
+    const refreshOnFocus = () => {
+      if (!document.hidden) void refreshPremiumBillingState();
+    };
+    const refreshOnPageShow = () => void refreshPremiumBillingState();
     void refreshPremiumBillingState();
+    window.addEventListener('focus', refreshOnFocus);
+    window.addEventListener('pageshow', refreshOnPageShow);
+    document.addEventListener('visibilitychange', refreshOnFocus);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', refreshOnFocus);
+      window.removeEventListener('pageshow', refreshOnPageShow);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
     };
   }, [showPremiumBilling, accountReady, accountSession?.user?.id]);
 
@@ -4471,6 +4483,35 @@ function SquadViewApp() {
     );
   }
 
+  // Shared rewards metrics are also used by the account-independent billing modal.
+  const referralQualifiedCount = Math.max(0, Number(referralSummary?.qualifiedReferrals) || 0);
+
+  // Premium billing display values must live at component scope because the
+  // Premium & Billing modal is rendered outside the viewer-only branch.
+  const stripeSubscriptionStatus = String(premiumBillingStatus?.status || '').toLowerCase();
+  const stripeSubscriptionDate = formatRewardDate(
+    premiumBillingStatus?.cancelAtPeriodEnd && premiumBillingStatus?.cancelAt
+      ? premiumBillingStatus.cancelAt
+      : premiumBillingStatus?.currentPeriodEnd
+  );
+  const stripePlanLabel = premiumBillingStatus?.billingInterval === 'annual'
+    ? 'Annual Premium'
+    : premiumBillingStatus?.billingInterval === 'monthly'
+      ? 'Monthly Premium'
+      : 'SquadView Premium';
+  const promotionalPremiumActive = Boolean(
+    entitlements.promoPremiumUntil && entitlements.isPremium && entitlements.planKey === 'free',
+  );
+  const premiumAccessLabel = entitlements.lifetimePremium
+    ? 'Lifetime Premium'
+    : promotionalPremiumActive
+      ? 'Referral Premium'
+      : premiumBillingStatus?.hasStripeSubscription
+        ? stripePlanLabel
+        : entitlements.isPremium
+          ? 'Premium'
+          : 'Free';
+
   if (screen === 'shared_pending') {
     return (
       <main className="loading-screen shared-loading-screen" aria-live="polite">
@@ -4659,28 +4700,7 @@ function SquadViewApp() {
       referralSummary,
       Boolean(accountSession?.user?.id),
     );
-    const referralQualifiedCount = Math.max(0, Number(referralSummary?.qualifiedReferrals) || 0);
     const referralNextProgress = Math.max(0, Math.min(5, Number(referralSummary?.nextMonthProgress) || (referralQualifiedCount % 5)));
-    const stripeSubscriptionStatus = String(premiumBillingStatus?.status || '').toLowerCase();
-    const stripeSubscriptionDate = formatRewardDate(premiumBillingStatus?.currentPeriodEnd);
-    const stripePlanLabel = premiumBillingStatus?.billingInterval === 'annual'
-      ? 'Annual Premium'
-      : premiumBillingStatus?.billingInterval === 'monthly'
-        ? 'Monthly Premium'
-        : 'SquadView Premium';
-    const promotionalPremiumActive = Boolean(
-      entitlements.promoPremiumUntil && entitlements.isPremium && entitlements.planKey === 'free',
-    );
-    const premiumAccessLabel = entitlements.lifetimePremium
-      ? 'Lifetime Premium'
-      : promotionalPremiumActive
-        ? 'Referral Premium'
-        : premiumBillingStatus?.hasStripeSubscription
-          ? stripePlanLabel
-          : entitlements.isPremium
-            ? 'Premium'
-            : 'Free';
-
     const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
     const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
     const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
@@ -6642,14 +6662,14 @@ function SquadViewApp() {
                   <div>
                     <span>{premiumBillingStatus.cancelAtPeriodEnd ? 'Access through' : stripeSubscriptionStatus === 'trialing' ? 'Trial ends' : 'Current period ends'}</span>
                     <strong>{stripeSubscriptionDate || 'Syncing…'}</strong>
-                    <small>{premiumBillingStatus.cancelAtPeriodEnd ? 'No renewal after this date' : stripeSubscriptionStatus === 'trialing' ? 'First charge follows unless canceled' : 'Use billing portal for payment details'}</small>
+                    <small>{premiumBillingStatus.cancelAtPeriodEnd ? 'No renewal or trial charge is scheduled' : stripeSubscriptionStatus === 'trialing' ? 'First charge follows unless canceled' : 'Use billing portal for payment details'}</small>
                   </div>
                 </div>
 
                 {premiumBillingStatus.cancelAtPeriodEnd && (
                   <div className="premium-cancel-notice">
                     <strong>Cancellation scheduled</strong>
-                    <span>Premium stays active until {stripeSubscriptionDate || 'the end of the current period'}. You can reverse the cancellation from Stripe before then.</span>
+                    <span>Premium stays active until {stripeSubscriptionDate || 'the end of the current period'}. {stripeSubscriptionStatus === 'trialing' ? 'Your trial will not convert to a paid subscription unless you reactivate. ' : 'Your subscription will not renew. '}You can reverse the cancellation in Stripe before then.</span>
                   </div>
                 )}
 

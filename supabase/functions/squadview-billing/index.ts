@@ -169,7 +169,7 @@ async function hasUsedPaidTrial(admin: ReturnType<typeof createAdminClient>, use
 async function readPremiumBillingStatus(admin: ReturnType<typeof createAdminClient>, userId: string) {
   const { data, error } = await admin
     .from('squadview_subscriptions')
-    .select('provider_subscription_id, plan_key, status, billing_interval, cancel_at_period_end, current_period_start, current_period_end, updated_at')
+    .select('provider_subscription_id, plan_key, status, billing_interval, cancel_at_period_end, cancel_at, current_period_start, current_period_end, updated_at')
     .eq('user_id', userId)
     .eq('provider', stripeProvider())
     .order('updated_at', { ascending: false });
@@ -187,7 +187,8 @@ async function readPremiumBillingStatus(admin: ReturnType<typeof createAdminClie
     trialEligible: rows.length === 0,
     status: String(current?.status || ''),
     billingInterval: current?.billing_interval || null,
-    cancelAtPeriodEnd: Boolean(current?.cancel_at_period_end),
+    cancelAtPeriodEnd: Boolean(current?.cancel_at_period_end || current?.cancel_at),
+    cancelAt: current?.cancel_at || null,
     currentPeriodStart: current?.current_period_start || null,
     currentPeriodEnd: current?.current_period_end || null,
     updatedAt: current?.updated_at || null,
