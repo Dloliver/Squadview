@@ -8354,3 +8354,30 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 .manager-page-tools label { display:flex; min-width:0; flex:1 1 130px; align-items:center; gap:6px; color:#98b2a7; font-size:9px; }
 .manager-page-tools select { min-width:0; max-width:100%; flex:1; padding:6px 5px; border:1px solid #315648; border-radius:8px; background:#0a1c16; color:#e5f7ee; font-size:10px; }
 .manager-page-tools select:focus-visible { outline:2px solid #45e0b5; outline-offset:2px; }
+
+/* Phase 4.3.5 Premium discovery */
+.premium-discovery-trigger {display:inline-flex;align-items:center;gap:7px;padding:9px 13px;border:1px solid #9e70d8;border-radius:999px;background:rgba(136,75,208,.16);color:#e3c9ff;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}
+.premium-discovery-trigger:hover {background:rgba(136,75,208,.28)}
+.premium-discovery-trigger:focus-visible,.premium-discovery-checkout:focus-visible {outline:3px solid #bba0ff;outline-offset:2px}
+.premium-discovery-modal {width:min(570px,calc(100vw - 28px));max-height:min(88vh,800px);overflow-y:auto;box-sizing:border-box;padding:28px}
+.premium-discovery-heading {text-align:center;margin-bottom:20px}
+.premium-discovery-mark {display:block;margin:0 auto 6px;color:#c49aff;font-size:28px}
+.premium-discovery-heading small {font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#ad82ed}
+.premium-discovery-heading h2 {margin:6px 20px 8px;font-size:25px;line-height:1.18}
+.premium-discovery-heading p {color:var(--muted,#9caeab);font-size:13px}
+.premium-discovery-benefits {display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.premium-discovery-benefits>div {display:grid;gap:5px;padding:12px;border:1px solid rgba(170,150,215,.23);border-radius:12px}
+.premium-discovery-benefits strong {font-size:12px}
+.premium-discovery-benefits span,.premium-discovery-roadmap {font-size:11px;line-height:1.5;color:var(--muted,#9caeab)}
+.premium-discovery-roadmap {margin:10px 0 16px}
+.premium-discovery-plans {border:0;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.premium-discovery-plans legend {font-size:12px;font-weight:800;margin-bottom:9px}
+.premium-discovery-plans label {display:flex;align-items:center;gap:8px;border:1px solid rgba(170,150,215,.3);padding:12px;border-radius:12px;cursor:pointer}
+.premium-discovery-plans label.is-selected {border-color:#b88dff;background:rgba(146,94,206,.13)}
+.premium-discovery-plans label span {display:grid;gap:3px}
+.premium-discovery-plans label strong {font-size:12px}
+.premium-discovery-plans label small {font-size:11px;color:var(--muted,#9caeab)}
+.premium-discovery-trial {font-size:11px;line-height:1.5;color:var(--muted,#9caeab);margin:14px 0}
+.premium-discovery-checkout {display:block;width:100%;min-height:44px}
+.premium-discovery-security {display:block;text-align:center;color:var(--muted,#9caeab);font-size:10px;margin-top:9px}
+@media(max-width:600px){.premium-discovery-trigger{padding:8px 10px;font-size:10px}.premium-discovery-trigger span:last-child{display:none}.premium-discovery-modal{padding:21px 15px}.premium-discovery-heading h2{font-size:21px}.premium-discovery-benefits{grid-template-columns:1fr}}

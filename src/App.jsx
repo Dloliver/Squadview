@@ -526,6 +526,8 @@ function SquadViewApp() {
   const [draggedViewerChannel, setDraggedViewerChannel] = useState('');
   const [showAccount, setShowAccount] = useState(false);
   const [showPremiumBilling, setShowPremiumBilling] = useState(false);
+  const [showPremiumDiscovery, setShowPremiumDiscovery] = useState(false);
+  const [discoveryPlan, setDiscoveryPlan] = useState('monthly');
   const [premiumBillingStatus, setPremiumBillingStatus] = useState(null);
   const [premiumBillingStatusBusy, setPremiumBillingStatusBusy] = useState(false);
   const [showGuestBenefits, setShowGuestBenefits] = useState(false);
@@ -5885,6 +5887,11 @@ function SquadViewApp() {
         </nav>
 
         <div className="topbar-actions">
+          {!entitlements.isPremium && (
+            <button type="button" className="premium-discovery-trigger" onClick={() => { setBillingError(''); setShowPremiumDiscovery(true); }} aria-label="Explore SquadView Premium">
+              <span aria-hidden="true">◆</span><span>Go Premium</span>
+            </button>
+          )}
           <InstallSquadView className="install-button" label="Install app" source="viewer_header" />
           <button
             type="button"
@@ -6725,6 +6732,44 @@ function SquadViewApp() {
                 </button>
               </>
             )}
+          </section>
+        </div>
+      )}
+
+      {showPremiumDiscovery && !entitlements.isPremium && (
+        <div className="modal-backdrop premium-discovery-backdrop" onClick={() => setShowPremiumDiscovery(false)}>
+          <section className="modal premium-discovery-modal" role="dialog" aria-modal="true" aria-labelledby="premium-discovery-title" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="modal-close" aria-label="Close Premium benefits" onClick={() => setShowPremiumDiscovery(false)}><X /></button>
+            <header className="premium-discovery-heading">
+              <span className="premium-discovery-mark" aria-hidden="true">◆</span>
+              <small>SquadView Premium</small>
+              <h2 id="premium-discovery-title">More streams. More ways to watch.</h2>
+              <p>Upgrade your viewing experience without giving up the free tools you already love.</p>
+            </header>
+            <div className="premium-discovery-benefits">
+              <div><strong>Up to 16 Twitch streams</strong><span>Double the Free plan's eight-stream limit.</span></div>
+              <div><strong>Unlimited Saved Squads</strong><span>Save more creator combinations for later.</span></div>
+              <div><strong>YouTube Companion</strong><span>Expand beyond Twitch with a companion viewing option.</span></div>
+              <div><strong>No SquadView-supplied ads</strong><span>Ads within Twitch and YouTube players are controlled by those platforms.</span></div>
+            </div>
+            <p className="premium-discovery-roadmap">More advanced layouts and viewing options are planned. They are not included in today's feature promises.</p>
+            <fieldset className="premium-discovery-plans">
+              <legend>Choose your plan</legend>
+              <label className={discoveryPlan === 'monthly' ? 'is-selected' : ''}>
+                <input type="radio" name="premium-discovery-plan" value="monthly" checked={discoveryPlan === 'monthly'} onChange={() => setDiscoveryPlan('monthly')} />
+                <span><strong>Monthly</strong><small>{PREMIUM_PRICING.monthly.price}/month</small></span>
+              </label>
+              <label className={discoveryPlan === 'annual' ? 'is-selected' : ''}>
+                <input type="radio" name="premium-discovery-plan" value="annual" checked={discoveryPlan === 'annual'} onChange={() => setDiscoveryPlan('annual')} />
+                <span><strong>Annual</strong><small>{PREMIUM_PRICING.annual.price}/year · Save 27%</small></span>
+              </label>
+            </fieldset>
+            <p className="premium-discovery-trial">Eligible first-time subscribers receive a {PREMIUM_TRIAL_DAYS}-day free trial. A payment method is required. Cancel before the trial ends to avoid the first charge.</p>
+            {billingError && <p className="premium-billing-error" role="alert">{billingError}</p>}
+            <button type="button" className="primary-button premium-discovery-checkout" disabled={Boolean(billingBusy) || authBusy} onClick={() => void startPremiumCheckout(discoveryPlan, 'header_premium_discovery')}>
+              {billingBusy || authBusy ? 'Opening secure checkout…' : accountSession?.user?.id ? 'Continue to Secure Checkout →' : 'Continue with Twitch to Checkout →'}
+            </button>
+            <small className="premium-discovery-security">Secure payment handled by Stripe. No payment details are collected by SquadView.</small>
           </section>
         </div>
       )}
