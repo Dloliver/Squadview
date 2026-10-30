@@ -8381,3 +8381,33 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 .premium-discovery-checkout {display:block;width:100%;min-height:44px}
 .premium-discovery-security {display:block;text-align:center;color:var(--muted,#9caeab);font-size:10px;margin-top:9px}
 @media(max-width:600px){.premium-discovery-trigger{padding:8px 10px;font-size:10px}.premium-discovery-trigger span:last-child{display:none}.premium-discovery-modal{padding:21px 15px}.premium-discovery-heading h2{font-size:21px}.premium-discovery-benefits{grid-template-columns:1fr}}
+
+/* Phase 5.0D.4D: Streamer Setup main navigation. */
+.topbar-nav .topbar-streamer-setup-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(69,224,181,.26);
+  border-radius: 999px;
+  color: #b5e8d9;
+  background: rgba(69,224,181,.06);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.topbar-nav .topbar-streamer-setup-link:hover,
+.topbar-nav .topbar-streamer-setup-link:focus-visible {
+  border-color: rgba(69,224,181,.65);
+  color: #effcf7;
+  background: rgba(69,224,181,.14);
+}
+@media (max-width: 760px) {
+  .topbar-nav .topbar-streamer-setup-link {
+    padding-inline: 7px;
+    font-size: 10px;
+    border-radius: 10px;
+  }
+}

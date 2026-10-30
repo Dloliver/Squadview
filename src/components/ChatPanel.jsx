@@ -1,17 +1,62 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { signInWithTwitch } from '../services/accountService';
+import { supabase } from '../lib/supabase';
 import {
   createNativeTwitchChat,
   disableNativeTwitchChat,
   enableNativeTwitchChat,
   loadNativeTwitchChatEmotes,
+  loadNativeTwitchChatBadges,
   sendNativeTwitchChatMessage,
   shouldUseNativeTwitchChat,
 } from '../services/twitchNativeChatService';
 
 const MAX_NATIVE_MESSAGES = 250;
 const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
+// Short local chat history; messages are never uploaded to SquadView.
+const NATIVE_CHAT_HISTORY_PREFIX = 'squadview:native-chat-history:v1:';
+const NATIVE_CHAT_HISTORY_TTL_MS = 10 * 60 * 1000;
+const MAX_NATIVE_HISTORY_MESSAGES = 80;
+const NATIVE_CHAT_HISTORY_PERSIST_INTERVAL_MS = 2000;
+const recentNativeChatHistory = new Map();
 const emoteCache = new Map();
+// Official Twitch badge artwork, cached only in memory by broadcaster.
+const nativeBadgeCatalogCache = new Map();
+const BADGE_CATALOG_TTL_MS = 10 * 60 * 1000;
+
+function resolveNativeBadge(badge, catalogs) {
+  const setId = String(badge?.setId || '').trim();
+  const versionId = String(badge?.id || '').trim();
+  if (!setId || !versionId || !catalogs) return null;
+  const key = `${setId}/${versionId}`;
+  return catalogs.channel?.[key] || catalogs.global?.[key] || null;
+}
+
+function NativeChatBadges({ badges, catalogs }) {
+  if (!Array.isArray(badges) || !badges.length || !catalogs) return null;
+  return <>
+    {badges.map((badge, index) => {
+      const details = resolveNativeBadge(badge, catalogs);
+      if (!details?.image_url || !/^https:\/\//.test(details.image_url)) return null;
+      const label = String(details.title || details.description || badge?.setId || 'Twitch badge');
+      return (
+        <img
+          key={`${badge?.setId || 'badge'}:${badge?.id || ''}:${index}`}
+          src={details.image_url}
+          width={18}
+          height={18}
+          alt={label}
+          title={label}
+          loading="lazy"
+          decoding="async"
+          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+          style={{ display: 'inline-block', width: 18, height: 18, objectFit: 'contain', verticalAlign: 'middle', marginRight: 3 }}
+        />
+      );
+    })}
+  </>;
+}
+
 // Native chat bottom composer QOL: keep live messages above the message composer.
 
 function nativeChatDraftKey(channel) {
@@ -38,6 +83,87 @@ function writeNativeChatDraft(channel, value) {
   }
 }
 
+// Session-tab cache only: recent messages actually seen by this browser.
+// A 10-minute age limit plus per-channel and channel-count caps prevent a chat archive.
+function nativeChatHistoryKey(channel) {
+  return `${NATIVE_CHAT_HISTORY_PREFIX}${channel}`;
+}
+
+function keepRecentNativeMessages(messages, now = Date.now()) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => {
+      if (!message || typeof message.text !== 'string') return false;
+      const timestamp = Date.parse(message.sentAt || '');
+      const received = Number(message.receivedAt);
+      const time = Number.isFinite(timestamp) ? timestamp : received;
+      return Number.isFinite(time) && time <= now && now - time < NATIVE_CHAT_HISTORY_TTL_MS;
+    })
+    .slice(-MAX_NATIVE_HISTORY_MESSAGES);
+}
+
+function trimNativeChatHistoryCache() {
+  const now = Date.now();
+  for (const [key, value] of recentNativeChatHistory) {
+    if (now - value.savedAt >= NATIVE_CHAT_HISTORY_TTL_MS) {
+      recentNativeChatHistory.delete(key);
+      try { sessionStorage.removeItem(nativeChatHistoryKey(key)); } catch { /* storage unavailable */ }
+    }
+  }
+  // Only the last eight used channels may remain in memory or this tab's storage.
+  while (recentNativeChatHistory.size > 8) {
+    const oldest = recentNativeChatHistory.keys().next().value;
+    recentNativeChatHistory.delete(oldest);
+    try { sessionStorage.removeItem(nativeChatHistoryKey(oldest)); } catch { /* storage unavailable */ }
+  }
+}
+
+function readNativeChatHistory(channel) {
+  if (!channel) return [];
+  trimNativeChatHistoryCache();
+  const cached = recentNativeChatHistory.get(channel);
+  if (cached) return keepRecentNativeMessages(cached.messages);
+
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(nativeChatHistoryKey(channel)) || 'null');
+    const messages = keepRecentNativeMessages(parsed?.messages);
+    if (messages.length) {
+      recentNativeChatHistory.set(channel, {
+        messages, savedAt: Date.now(), lastSavedAt: Date.now(),
+      });
+      trimNativeChatHistoryCache();
+      return messages;
+    }
+    sessionStorage.removeItem(nativeChatHistoryKey(channel));
+  } catch { /* history is always optional */ }
+  return [];
+}
+
+function saveNativeChatHistory(channel, messages, persist = false) {
+  if (!channel) return [];
+  const now = Date.now();
+  const previous = recentNativeChatHistory.get(channel);
+  const retained = keepRecentNativeMessages(messages, now);
+  // Refresh Map order so inactive channels are evicted first.
+  recentNativeChatHistory.delete(channel);
+  const entry = {
+    messages: retained,
+    savedAt: now,
+    lastSavedAt: previous?.lastSavedAt || 0,
+  };
+  if (retained.length) recentNativeChatHistory.set(channel, entry);
+  else {
+    try { sessionStorage.removeItem(nativeChatHistoryKey(channel)); } catch { /* best effort */ }
+  }
+  trimNativeChatHistoryCache();
+  if (retained.length && (persist || now - entry.lastSavedAt >= NATIVE_CHAT_HISTORY_PERSIST_INTERVAL_MS)) {
+    try {
+      sessionStorage.setItem(nativeChatHistoryKey(channel), JSON.stringify({ savedAt: now, messages: retained }));
+      entry.lastSavedAt = now;
+    } catch { /* storage limits must not interrupt chat */ }
+  }
+  return retained;
+}
+
 const TWITCH_EMOTE_TEMPLATE = 'https://static-cdn.jtvnw.net/emoticons/v2';
 
 function twitchEmoteUrl(fragment) {
@@ -51,6 +177,16 @@ function twitchEmoteUrl(fragment) {
   const format = formats.includes('animated') ? 'animated' : 'static';
 
   return `${TWITCH_EMOTE_TEMPLATE}/${id}/${format}/dark/1.0`;
+}
+
+// The deployed Twitch function already returns an emote's format and CDN image_url.
+// Build the official animated CDN URL client-side, so animations don't need a new API deployment.
+function nativePickerEmoteUrl(emote, allowAnimation) {
+  const staticUrl = String(emote?.image_url || '');
+  if (!allowAnimation || !Array.isArray(emote?.format) || !emote.format.includes('animated')) return staticUrl;
+  // Only rewrite URLs served by Twitch's official emote CDN. Never rewrite arbitrary URLs.
+  if (!/^https:\/\/static-cdn\.jtvnw\.net\/emoticons\/v2\//.test(staticUrl)) return staticUrl;
+  return staticUrl.replace('/static/', '/animated/');
 }
 
 function TwitchEmote({ fragment }) {
@@ -99,6 +235,57 @@ function ChatMessageBody({ message }) {
   );
 }
 
+
+
+// Keep Twitch emotes grouped by their real broadcaster, not a generic channel label.
+// Twitch returns owner_id with each emote; names are enriched by twitch-account.
+function buildNativeEmoteSections(availableEmotes, currentChannel, currentBroadcasterId) {
+  const sections = [];
+  const byKey = new Map();
+
+  const append = (key, label, emote) => {
+    let section = byKey.get(key);
+    if (!section) {
+      section = { key, label, emotes: [] };
+      byKey.set(key, section);
+      sections.push(section);
+    }
+    section.emotes.push(emote);
+  };
+
+  for (const emote of availableEmotes) {
+    const ownerId = String(emote?.owner_id || '').trim();
+    const type = String(emote?.emote_type || '').trim().toLowerCase();
+
+    if (emote?.is_channel_emote || (ownerId && ownerId === currentBroadcasterId)) {
+      append('current-channel', `Current channel · #${currentChannel}`, emote);
+      continue;
+    }
+
+    if (ownerId && ownerId !== '0') {
+      const ownerLogin = String(emote?.owner_login || '').trim();
+      const ownerName = String(emote?.owner_name || '').trim();
+      const displayName = ownerName || ownerLogin;
+      append(
+        `owner:${ownerId}`,
+        displayName
+          ? `#${displayName} · Channel emotes`
+          : `Channel ID ${ownerId} · Name unavailable`,
+        emote,
+      );
+      continue;
+    }
+
+    if (['globals', 'smilies', 'none'].includes(type) || !ownerId) {
+      append('twitch-global', 'Twitch global emotes', emote);
+      continue;
+    }
+
+    append('unlocked', 'Other unlocked emotes', emote);
+  }
+
+  return sections;
+}
 
 function ChatModeSwitch({ mode, onUseNative, onUseTwitch }) {
   const buttonStyle = (active) => ({
@@ -215,6 +402,30 @@ function IframeChat({
       </header>
 
       <div
+        role="note"
+        className="twitch-embedded-mod-guidance"
+        style={{
+          flexShrink: 0,
+          padding: '7px 9px',
+          background: '#211c2b',
+          color: '#ded5eb',
+          fontSize: 11,
+          lineHeight: 1.35,
+          borderBottom: '1px solid rgba(255,255,255,0.12)',
+        }}
+      >
+        <strong>Moderating?</strong> If embedded Twitch chat controls don't work,
+        switch to Native for chatting. For bans, timeouts, and other mod actions,{' '}
+        <a
+          href={`https://www.twitch.tv/moderator/${encodeURIComponent(channel)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#c6a6ff', textDecoration: 'underline' }}
+        >
+          open Twitch Mod View
+        </a>.
+      </div>
+      <div
         style={{ flex: '1 1 auto', minHeight: 0 }}
         onPointerDownCapture={() => onActivity?.({ type: 'twitch_iframe_pointer', channel })}
       >
@@ -245,10 +456,13 @@ function statusCopy(status) {
 
 export default function ChatPanel({ channel, compact = false, mentionCandidates = [], onActivity }) {
   const [nativeEnabled, setNativeEnabled] = useState(null);
+  const [readerAuthorized, setReaderAuthorized] = useState(null);
+  const nativeModeRef = useRef(false);
   const [status, setStatus] = useState('resolving');
   const [error, setError] = useState('');
   const [messages, setMessages] = useState([]);
   const [broadcaster, setBroadcaster] = useState(null);
+  const [badgeCatalogs, setBadgeCatalogs] = useState(null);
   const [draft, setDraft] = useState('');
   const [sendBusy, setSendBusy] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -258,6 +472,10 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const [emoteErrorCode, setEmoteErrorCode] = useState('');
   const [emotes, setEmotes] = useState([]);
   const [emoteSearch, setEmoteSearch] = useState('');
+  const [animatePickerEmotes, setAnimatePickerEmotes] = useState(() => (
+    typeof window === 'undefined' || !window.matchMedia ||
+    !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ));
   const [composerCursor, setComposerCursor] = useState(0);
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const composerRef = useRef(null);
@@ -265,9 +483,49 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const draftLoadedChannelRef = useRef('');
   const restoredDraftNeedsFocusRef = useRef(false);
 
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setAnimatePickerEmotes(!preference.matches);
+    update();
+    preference.addEventListener?.('change', update);
+    return () => preference.removeEventListener?.('change', update);
+  }, []);
+
   const normalizedChannel = useMemo(
     () => String(channel || '').trim().toLowerCase(),
     [channel],
+  );
+
+  // Keep exactly one live EventSub reader for the selected channel when the
+  // viewer is authenticated, even while the Twitch iframe is selected.
+  // This uses the existing Twitch user connection, not a new backend or DB.
+  nativeModeRef.current = nativeEnabled === true;
+  useEffect(() => {
+    if (!supabase) {
+      setReaderAuthorized(false);
+      return undefined;
+    }
+    let active = true;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (active) setReaderAuthorized(Boolean(session?.user?.id));
+      },
+    );
+    void supabase.auth.getSession()
+      .then(({ data }) => { if (active) setReaderAuthorized(Boolean(data?.session?.user?.id)); })
+      .catch(() => { if (active) setReaderAuthorized(false); });
+    return () => {
+      active = false;
+      subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  // Visitors who aren't signed in can still choose Twitch embedded chat.
+  // A visitor explicitly opening Native gets the existing sign-in error.
+  const shouldCaptureNativeChat = Boolean(normalizedChannel) && (
+    readerAuthorized === true ||
+    (readerAuthorized === false && nativeEnabled === true)
   );
 
   const mentionUsers = useMemo(() => {
@@ -345,10 +603,11 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     };
   }, []);
 
+  // Channel-local drafts and visible history should reset only when the selected
+  // stream changes, not whenever Native/Twitch tabs are swapped.
   useEffect(() => {
-    if (nativeEnabled !== true || !normalizedChannel) return undefined;
-
-    setMessages([]);
+    if (!normalizedChannel) return;
+    setMessages(readNativeChatHistory(normalizedChannel));
     setBroadcaster(null);
     const restoredDraft = readNativeChatDraft(normalizedChannel);
     draftLoadedChannelRef.current = normalizedChannel;
@@ -363,33 +622,81 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setEmoteErrorCode('');
     setError('');
     setStatus('preparing');
+  }, [normalizedChannel]);
 
+  // The badge catalog is channel-specific artwork, not a guess based on
+  // someone's status. Each chat message carries its own badge IDs.
+  useEffect(() => {
+    if (!broadcaster?.id) {
+      setBadgeCatalogs(null);
+      return undefined;
+    }
+    const broadcasterId = String(broadcaster.id);
+    const cached = nativeBadgeCatalogCache.get(broadcasterId);
+    if (cached && Date.now() - cached.savedAt < BADGE_CATALOG_TTL_MS) {
+      setBadgeCatalogs(cached.catalogs);
+      return undefined;
+    }
+    let cancelled = false;
+    setBadgeCatalogs(null);
+    void loadNativeTwitchChatBadges({ broadcasterUserId: broadcasterId })
+      .then((response) => {
+        if (cancelled) return;
+        const catalogs = response?.badges || null;
+        if (!catalogs) return;
+        nativeBadgeCatalogCache.set(broadcasterId, { catalogs, savedAt: Date.now() });
+        while (nativeBadgeCatalogCache.size > 8) {
+          nativeBadgeCatalogCache.delete(nativeBadgeCatalogCache.keys().next().value);
+        }
+        setBadgeCatalogs(catalogs);
+      })
+      .catch(() => {
+        // Badges are optional; a stale or un-deployed function must not break
+        // messages, emotes, drafts, or the continuous chat reader.
+        if (!cancelled) setBadgeCatalogs(null);
+      });
+    return () => { cancelled = true; };
+  }, [broadcaster?.id]);
+
+  // The Twitch iframe never owns this connection: switching tabs must not
+  // disconnect the reader and create gaps in the short-lived local history.
+  useEffect(() => {
+    if (!shouldCaptureNativeChat) return undefined;
+    setStatus('preparing');
+    setError('');
     const controller = createNativeTwitchChat({
       channel: normalizedChannel,
       onStatus(nextStatus, details) {
         setStatus(nextStatus);
-        if (details?.broadcaster?.id) {
-          setBroadcaster(details.broadcaster);
-        }
+        if (details?.broadcaster?.id) setBroadcaster(details.broadcaster);
       },
       onMessage(message) {
-        setMessages((current) => {
-          const next = [...current, message];
-
-          return next.length > MAX_NATIVE_MESSAGES
-            ? next.slice(next.length - MAX_NATIVE_MESSAGES)
-            : next;
-        });
+        const current = readNativeChatHistory(normalizedChannel);
+        if (message?.id && current.some((entry) => entry.id === message.id)) return;
+        const next = [...current, { ...message, receivedAt: Date.now() }].slice(-MAX_NATIVE_MESSAGES);
+        const retained = saveNativeChatHistory(normalizedChannel, next);
+        // Avoid repainting the full Twitch iframe for every message while it
+        // is selected; native history remains live and is read when returning.
+        if (nativeModeRef.current) setMessages(retained);
       },
       onError(nextError) {
         setError(nextError?.message || 'Native Twitch chat could not connect.');
         setStatus('error');
       },
     });
-
     return () => {
+      const cached = recentNativeChatHistory.get(normalizedChannel);
+      if (cached) saveNativeChatHistory(normalizedChannel, cached.messages, true);
       controller.close();
     };
+  }, [shouldCaptureNativeChat, normalizedChannel]);
+
+  // Native mode may have been hidden for several minutes. On return use the
+  // actively collected cache rather than only the messages last rendered.
+  useEffect(() => {
+    if (nativeEnabled === true && normalizedChannel) {
+      setMessages(readNativeChatHistory(normalizedChannel));
+    }
   }, [nativeEnabled, normalizedChannel]);
 
   useEffect(() => {
@@ -416,6 +723,17 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   }, [draft, nativeEnabled, status]);
 
   useEffect(() => {
+    if (nativeEnabled !== true || !normalizedChannel) return undefined;
+    const prune = () => setMessages((current) => {
+      const recent = keepRecentNativeMessages(current);
+      if (recent.length === current.length) return current;
+      return saveNativeChatHistory(normalizedChannel, recent, true);
+    });
+    const interval = window.setInterval(prune, 30000);
+    return () => window.clearInterval(interval);
+  }, [nativeEnabled, normalizedChannel]);
+
+  useEffect(() => {
     if (!nativeEnabled || !messages.length) return;
 
     endRef.current?.scrollIntoView({
@@ -437,8 +755,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     const cacheKey = String(broadcaster.id);
 
     const cached = emoteCache.get(cacheKey);
-    if (cached) {
-      setEmotes(cached);
+    if (cached && Date.now() - cached.savedAt < (cached.hasMissingOwners ? 20000 : 5 * 60 * 1000)) {
+      setEmotes(cached.emotes);
       setEmoteStatus('ready');
       setEmoteError('');
       setEmoteErrorCode('');
@@ -459,7 +777,11 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           ? result.emotes
           : [];
 
-        emoteCache.set(cacheKey, available);
+        emoteCache.set(cacheKey, {
+          emotes: available,
+          savedAt: Date.now(),
+          hasMissingOwners: available.some((emote) => emote?.owner_id && emote.owner_id !== '0' && !emote.owner_name && !emote.owner_login),
+        });
         setEmotes(available);
         setEmoteStatus('ready');
       })
@@ -489,85 +811,23 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     if (!query) return emotes;
 
     return emotes.filter((emote) =>
-      String(emote?.name || '').toLowerCase().includes(query)
+      [emote?.name, emote?.owner_name, emote?.owner_login]
+        .some((value) => String(value || '').toLowerCase().includes(query))
     );
   }, [emotes, emoteSearch]);
 
-  const emoteSections = useMemo(() => {
-    const sections = [];
-    const sectionMap = new Map();
-
-    const pushToSection = (key, label, emote) => {
-      let section = sectionMap.get(key);
-
-      if (!section) {
-        section = {
-          key,
-          label,
-          emotes: [],
-        };
-        sectionMap.set(key, section);
-        sections.push(section);
-      }
-
-      section.emotes.push(emote);
-    };
-
-    for (const emote of filteredEmotes) {
-      const type = String(emote?.emote_type || '').toLowerCase();
-      const ownerId = String(emote?.owner_id || '').trim();
-
-      if (emote?.is_channel_emote) {
-        pushToSection(
-          'current-channel',
-          `Current channel · #${normalizedChannel}`,
-          emote,
-        );
-        continue;
-      }
-
-      if (
-        ownerId &&
-        ['subscriptions', 'follower', 'bitstier', 'channelpoints'].includes(type)
-      ) {
-        const ownerLabel =
-          String(emote?.owner_name || emote?.owner_login || '').trim() ||
-          'Channel emotes';
-
-        pushToSection(
-          `owner:${ownerId}`,
-          ownerLabel,
-          emote,
-        );
-        continue;
-      }
-
-      if (
-        ['globals', 'smilies', 'none'].includes(type) ||
-        (!ownerId && !type)
-      ) {
-        pushToSection(
-          'twitch-global',
-          'Twitch global',
-          emote,
-        );
-        continue;
-      }
-
-      pushToSection(
-        'unlocked',
-        'Unlocked emotes',
-        emote,
-      );
-    }
-
-    return sections;
-  }, [filteredEmotes, normalizedChannel]);
+  const emoteSections = useMemo(
+    () => buildNativeEmoteSections(
+      filteredEmotes,
+      normalizedChannel,
+      String(broadcaster?.id || '').trim(),
+    ),
+    [filteredEmotes, normalizedChannel, broadcaster?.id],
+  );
 
   const switchToTwitchChat = () => {
     disableNativeTwitchChat();
     setNativeEnabled(false);
-    setStatus('iframe');
     setError('');
     setEmotePickerOpen(false);
   };
@@ -575,7 +835,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const switchToNativeChat = () => {
     enableNativeTwitchChat();
     setNativeEnabled(true);
-    setStatus('preparing');
+    // Keep the existing live subscription and its ready/reconnect status.
     setError('');
   };
 
@@ -692,6 +952,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
         minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
+        position: 'relative',
         overflow: 'hidden',
         background: '#0e0e10',
         color: '#efeff1',
@@ -788,7 +1049,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               >
                 {statusCopy(status)}
                 <div style={{ marginTop: 5, fontSize: 10 }}>
-                  Native chat starts live and does not load earlier messages.
+                  Native chat starts live. Up to 10 minutes of messages seen in this tab are retained.
                 </div>
               </div>
             )}
@@ -801,6 +1062,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                   overflowWrap: 'anywhere',
                 }}
               >
+                <NativeChatBadges badges={message.badges} catalogs={badgeCatalogs} />
                 <button
                   type="button"
                   className="native-chat-username"
@@ -933,9 +1195,9 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                       color: section.key === 'current-channel'
                         ? '#bf94ff'
                         : '#adadb8',
-                      fontSize: 10,
+                      fontSize: 12,
                       fontWeight: 700,
-                      letterSpacing: '0.02em',
+                      letterSpacing: '0.01em',
                     }}
                   >
                     {section.label}
@@ -953,8 +1215,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                         type="button"
                         key={emote.id}
                         onClick={() => insertEmote(emote.name)}
-                        title={emote.name}
-                        aria-label={`Insert ${emote.name}`}
+                        title={`${emote.name} · ${section.label}`}
+                        aria-label={`Insert ${emote.name} from ${section.label}`}
                         style={{
                           minHeight: 44,
                           border: emote.is_channel_emote
@@ -970,7 +1232,12 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                       >
                         {emote.image_url ? (
                           <img
-                            src={emote.image_url}
+                            src={nativePickerEmoteUrl(emote, animatePickerEmotes)}
+                             onError={(event) => {
+                               if (event.currentTarget.src !== emote.image_url) {
+                                 event.currentTarget.src = emote.image_url;
+                               }
+                             }}
                             alt={emote.name}
                             loading="lazy"
                             decoding="async"
@@ -1168,6 +1435,31 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               scrollMarginTop: 12,
             }}
           />
+          <button
+            type="button"
+            aria-label="Switch to Twitch chat for Channel Points rewards"
+            title="Use Channel Points in Twitch chat"
+            onClick={switchToTwitchChat}
+            style={{
+              width: 48,
+              minWidth: 48,
+              height: 44,
+              padding: '3px 2px',
+              border: '1px solid rgba(145,71,255,0.52)',
+              borderRadius: 6,
+              background: '#302241',
+              color: '#e8dbff',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 0,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>◇</span>
+            <span style={{ fontSize: 9, fontWeight: 700, lineHeight: 1.2 }}>Points</span>
+          </button>
           <button
             type="button"
             aria-label="Open Twitch emote picker"

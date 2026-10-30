@@ -1086,6 +1086,47 @@ async function loadTwitchUsersByIdsServer(
 
       break;
     }
+
+    // Get Users sometimes returns no metadata for an emote owner. Twitch's
+    // Get Channel Information supplies the broadcaster's login and display name
+    // without requesting another OAuth scope. Only retry unresolved IDs.
+    const unresolved = batch.filter((id) => id !== '0' && !users.has(id));
+    if (!unresolved.length) continue;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const accessToken = await decryptToken(row.access_token_ciphertext);
+      const url = new URL('https://api.twitch.tv/helix/channels');
+      for (const id of unresolved) {
+        url.searchParams.append('broadcaster_id', id);
+      }
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Client-Id': row.twitch_client_id,
+          Accept: 'application/json',
+        },
+      });
+
+      if (response.status === 401 && attempt === 0) {
+        row = await refreshConnection(admin, row);
+        continue;
+      }
+
+      if (!response.ok) break; // Names are polish; keep the emote picker usable.
+      const payload = await response.json().catch(() => ({}));
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      for (const channel of data) {
+        const id = String(channel?.broadcaster_id || '').trim();
+        if (!id || users.has(id)) continue;
+        users.set(id, {
+          id,
+          login: String(channel?.broadcaster_login || '').trim(),
+          display_name: String(channel?.broadcaster_name || '').trim(),
+        });
+      }
+      break;
+    }
   }
 
   return {
@@ -1117,6 +1158,47 @@ function emoteCategoryRank(
   }
 
   return 3;
+}
+
+// Cache only public badge artwork in the client; this function never returns a token.
+// Channel badge versions take precedence over global versions for the same set/id.
+async function loadNativeChatBadgesServer(
+  admin: ReturnType<typeof createAdminClient>,
+  row: ConnectionRow,
+  broadcasterUserIdValue: unknown,
+) {
+  const broadcasterUserId = normalizeTwitchUserId(broadcasterUserIdValue);
+  const channelResult = await twitchHelixJson(
+    admin, row, '/helix/chat/badges', { broadcaster_id: broadcasterUserId },
+  );
+  const globalResult = await twitchHelixJson(
+    admin, channelResult.connection, '/helix/chat/badges/global', {},
+  );
+  const catalog = (sets: unknown) => {
+    const badges: Record<string, Record<string, string>> = {};
+    for (const entry of Array.isArray(sets) ? sets : []) {
+      const setId = String(entry?.set_id || '').trim();
+      if (!setId) continue;
+      for (const version of Array.isArray(entry?.versions) ? entry.versions : []) {
+        const id = String(version?.id || '').trim();
+        const imageUrl = String(version?.image_url_1x || version?.image_url_2x || '').trim();
+        if (!id || !imageUrl.startsWith('https://')) continue;
+        badges[`${setId}/${id}`] = {
+          image_url: imageUrl,
+          title: String(version?.title || ''),
+          description: String(version?.description || ''),
+        };
+      }
+    }
+    return badges;
+  };
+  return {
+    connection: globalResult.connection,
+    badges: {
+      channel: catalog(channelResult.payload?.data),
+      global: catalog(globalResult.payload?.data),
+    },
+  };
 }
 
 async function loadUserEmotesServer(
@@ -1173,7 +1255,7 @@ async function loadUserEmotesServer(
 
   const ownerIds = emotes
     .map((item: Record<string, unknown>) => String(item?.owner_id || '').trim())
-    .filter(Boolean);
+    .filter((id) => Boolean(id) && id !== '0');
 
   const ownerLookup = await loadTwitchUsersByIdsServer(
     admin,
@@ -1476,6 +1558,14 @@ Deno.serve(async (req: Request) => {
         subscription: result.subscription,
         connection: safeStatus(result.connection),
       });
+    }
+
+    if (action === 'chat-badges') {
+      const row = requireConnectedRow(await loadConnection(admin, user.id));
+      const result = await loadNativeChatBadgesServer(
+        admin, row, body?.broadcaster_user_id,
+      );
+      return json({ ok: true, badges: result.badges });
     }
 
     if (action === 'chat-emotes') {

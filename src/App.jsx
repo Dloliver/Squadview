@@ -9,6 +9,10 @@ import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
 import AboutPage from './pages/AboutPage';
 import HomePage from './pages/HomePage';
+import CreatorDashboardPage from './pages/CreatorDashboardPage';
+import CreatorPublicSquadPage from './pages/CreatorPublicSquadPage';
+import TournamentDirectorPage from './pages/TournamentDirectorPage';
+import TournamentBroadcastStagePage from './pages/TournamentBroadcastStagePage';
 import InstallSquadView from './components/InstallSquadView';
 import VastLoadingAd from './components/ads/VastLoadingAd';
 import { getStreamCountBucket, trackEvent } from './analytics/dataLayer';
@@ -5877,6 +5881,7 @@ function SquadViewApp() {
               <span className="nav-live-count">{activeSavedSquadCount} active</span>
             )}
           </button>
+          <a className="topbar-streamer-setup-link" href="/dashboard">Streamer Setup</a>
           <button
             type="button"
             className="topbar-help-link"
@@ -6924,6 +6929,12 @@ export default function App() {
   const route = window.location.pathname.replace(/\/+$/, '') || '/';
 
   if (route === '/' || route === '/watch') return <SquadViewApp />;
+  if (route === '/dashboard/broadcast') return <TournamentDirectorPage />;
+  if (route === '/dashboard/tournaments') return <TournamentDirectorPage />;
+  if (route === '/dashboard/broadcast/stage') return <TournamentBroadcastStagePage />;
+  if (route === '/dashboard/tournaments/stage') return <TournamentBroadcastStagePage />;
+  if (route === '/dashboard') return <CreatorDashboardPage />;
+  if (route.startsWith('/s/') && /^[a-z0-9][a-z0-9_-]{2,39}$/.test(route.slice(3))) return <CreatorPublicSquadPage slug={route.slice(3)} />;
   if (route === '/learn' || route === '/home') return <HomePage />;
   if (route === '/about') return <AboutPage />;
   if (route === '/privacy') return <PrivacyPage />;

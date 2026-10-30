@@ -1,0 +1,85 @@
+.creator-dashboard{min-height:100vh;color:#f1f4fa;background:radial-gradient(circle at top left,#243249 0,#101721 38%,#0b111a 100%);font-family:inherit}
+.creator-dashboard *{box-sizing:border-box}
+.creator-dashboard__topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(1rem,4vw,3rem);border-bottom:1px solid #344052;background:#111a26}
+.creator-dashboard__brand{font-size:1.18rem;font-weight:800;color:#fff;text-decoration:none}
+.creator-dashboard__topbar nav{display:flex;gap:1.4rem;flex-wrap:wrap}
+.creator-dashboard__topbar nav a{color:#b9c8da;text-decoration:none}
+.creator-dashboard__topbar a:hover{text-decoration:underline}
+.creator-dashboard__main{max-width:960px;margin:0 auto;padding:clamp(1.25rem,4vw,3.5rem) 1.25rem 5rem}
+.creator-dashboard__eyebrow{color:#85cbff;font-size:.75rem;font-weight:800;letter-spacing:.14em;margin-bottom:1rem}
+.creator-dashboard h1{font-size:clamp(2rem,5vw,3.5rem);line-height:1.1;margin:0 0 1rem}
+.creator-dashboard__intro{max-width:720px;line-height:1.65;color:#b9c8da;margin-bottom:2rem}
+.creator-dashboard__panel{background:#182433;border:1px solid #36475b;border-radius:16px;padding:clamp(1.25rem,3vw,2rem);margin:1rem 0}
+.creator-dashboard__panel h2{font-size:1.2rem;margin:0 0 .55rem}
+.creator-dashboard__panel p{color:#bac7d6;line-height:1.6}
+.creator-dashboard__account,.creator-dashboard__section-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}
+.creator-dashboard button{border:1px solid #6bbcff;background:#2479b8;color:white;border-radius:10px;padding:.7rem 1.1rem;font:inherit;font-weight:700;cursor:pointer}
+.creator-dashboard button:disabled{opacity:.6;cursor:wait}
+.creator-dashboard__secondary{background:#26384c!important;border-color:#597089!important}
+.creator-dashboard__muted,.creator-dashboard__note{color:#b9c8da;font-size:.9rem}
+.creator-dashboard__list{list-style:none;margin:1rem 0 0;padding:0}
+.creator-dashboard__list li{display:flex;justify-content:space-between;gap:1rem;align-items:center;padding:1rem 0;border-top:1px solid #36475b;flex-wrap:wrap}
+.creator-dashboard__status{font-size:.8rem;padding:.35rem .6rem;border-radius:999px;background:#2b3d4f;color:#c9e0f4}
+.creator-dashboard__error{background:#49252b;color:#fff;padding:1rem;border-radius:10px;margin:1rem 0}
+.creator-dashboard__note{line-height:1.6;margin-top:1.5rem}
+@media(max-width:560px){.creator-dashboard__topbar{align-items:flex-start;flex-direction:column}.creator-dashboard__account{align-items:flex-start}}
+.creator-dashboard__edit-actions{display:flex;gap:.65rem;align-items:center;flex-wrap:wrap;margin-top:1rem}
+.creator-dashboard__editor label{display:block;font-weight:700;margin:1rem 0 .3rem}
+.creator-dashboard__editor input,.creator-dashboard__editor textarea{width:100%;background:#0c1724;color:#fff;border:1px solid #63768b;border-radius:9px;padding:.75rem;font:inherit}
+.creator-dashboard__editor input:focus-visible,.creator-dashboard__editor textarea:focus-visible{outline:2px solid #83cbff;outline-offset:2px}
+.creator-dashboard__editor .creator-dashboard__row{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.creator-dashboard__editor .creator-dashboard__row input{flex:1;min-width:180px}
+.creator-dashboard__roster{list-style:none;margin:.75rem 0;padding:0}
+.creator-dashboard__roster li{display:flex;align-items:center;justify-content:space-between;gap:.6rem;border:1px solid #405269;border-radius:9px;padding:.6rem;margin:.5rem 0;flex-wrap:wrap}
+.creator-dashboard__roster .creator-dashboard__row{gap:.35rem}
+.creator-dashboard__roster button{padding:.35rem .7rem}
+.creator-dashboard__save-status{margin-top:1rem;color:#b2f0c9}
+.creator-dashboard__hint{font-size:.85rem;color:#c3d0df}
+
+/* Phase 5.0B.2.1 – creator discovery and optional customization */
+.creator-dashboard__customize{border-top:1px solid #36475b;margin:1.2rem 0;padding-top:1rem}
+.creator-dashboard__customize summary{cursor:pointer;font-weight:700;list-style:revert}
+.creator-dashboard__streamer-header{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-top:1.1rem}
+.creator-dashboard__streamer-header h3{margin:.4rem 0}
+.creator-dashboard__picker-tabs{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
+.creator-dashboard__picker-tabs button{flex:1;min-width:130px}
+.creator-dashboard__picker-active{box-shadow:inset 0 -3px 0 #a5e0ff}
+.creator-dashboard__picker-panel{padding:1rem;border:1px solid #405269;border-radius:10px;background:#132031}
+.creator-dashboard__picker-panel label{margin:0 0 .4rem}
+.creator-dashboard__following-list{list-style:none;margin:.8rem 0 0;padding:0;max-height:320px;overflow-y:auto}
+.creator-dashboard__following-list li{display:flex;justify-content:space-between;align-items:center;gap:.75rem;padding:.55rem 0;border-bottom:1px solid #36475b}
+.creator-dashboard__followed-identity{display:flex;align-items:center;gap:.65rem;min-width:0}
+.creator-dashboard__followed-identity img,.creator-dashboard__avatar-placeholder{width:36px;height:36px;object-fit:cover;border-radius:50%;flex-shrink:0}
+.creator-dashboard__avatar-placeholder{display:flex;align-items:center;justify-content:center;background:#26384c}
+.creator-dashboard__followed-identity span:last-child{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.creator-dashboard__followed-identity small{font-size:.8rem;color:#b9c8da}
+@media(max-width:560px){.creator-dashboard__picker-panel{padding:.7rem}.creator-dashboard__following-list li{align-items:flex-start}.creator-dashboard__following-list button{padding:.55rem .7rem}}
+
+/* Phase 5.0B.2.2 local live discovery and auto-fill planning */
+.creator-dashboard__live-head{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-top:1rem}
+.creator-dashboard__live-head h3{margin:.4rem 0}
+.creator-dashboard__live-on{color:#ff6c78;font-weight:700}
+.creator-dashboard__live-unknown{color:#aab8ca;font-size:.84rem}
+.creator-dashboard__roster-identity{display:flex;flex-direction:column;gap:.2rem}
+.creator-dashboard__mode-row{display:flex;flex-wrap:wrap;align-items:center;gap:1rem;padding:.7rem 0;border-bottom:1px solid #405269}
+.creator-dashboard__mode-row strong{flex:1;min-width:150px}
+.creator-dashboard__mode-row label{display:flex;align-items:center;gap:.4rem;margin:0;font-size:.9rem}
+.creator-dashboard__mode-row input{width:auto;accent-color:#6bbcff}
+
+/* Phase 5.0B.2.3: Favorites discovery and live-first preview */
+.creator-dashboard__picker-panel .creator-dashboard__filter{display:flex;align-items:center;gap:.6rem;margin:.7rem 0}
+.creator-dashboard__picker-panel .creator-dashboard__filter input{width:auto}
+.creator-dashboard__live-preview{display:flex;flex-direction:column;gap:.35rem;padding:.8rem 1rem;border:1px solid #405269;border-radius:10px;background:#122336;color:#c8e7fa}
+
+/* Phase 5.0B.2.5 premium creator roster limit dialog */
+.creator-dashboard__limit-backdrop{position:fixed;inset:0;z-index:1000;background:#000b;display:flex;align-items:center;justify-content:center;padding:1rem}
+.creator-dashboard__limit-modal{width:min(100%,480px);padding:1.5rem;border:1px solid #6684a0;border-radius:16px;background:#172738;box-shadow:0 12px 48px #0009;color:#fff}
+.creator-dashboard__limit-modal p{line-height:1.6;color:#cfdeec}
+.creator-dashboard__limit-modal .creator-dashboard__row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.creator-dashboard__premium-link{color:#9ad6ff;font-weight:700}
+
+/* Phase 5.0B.3B — Active Squad selection */
+.creator-dashboard__squad-active { border-left: 3px solid #48c9a9; }
+.creator-dashboard__squad-meta { min-width: 0; overflow-wrap: anywhere; }
+.creator-dashboard__squad-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.creator-dashboard__squad-actions button { white-space: nowrap; }

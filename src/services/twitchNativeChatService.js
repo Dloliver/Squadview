@@ -167,6 +167,16 @@ function normalizeChatEvent(frame) {
 
 
 
+export async function loadNativeTwitchChatBadges({
+  broadcasterUserId,
+}) {
+  const id = String(broadcasterUserId || '').trim();
+  if (!/^\d{1,30}$/.test(id)) {
+    throw nativeChatError('twitch_broadcaster_invalid', 'Badge lookup requires a valid Twitch channel.');
+  }
+  return invokeTwitchAccount('chat-badges', { broadcaster_user_id: id });
+}
+
 export async function loadNativeTwitchChatEmotes({
   broadcasterUserId = '',
 } = {}) {
