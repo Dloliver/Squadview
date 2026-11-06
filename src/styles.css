@@ -8667,3 +8667,91 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     width:100%; max-width:none; flex:0 0 auto;
   }
 }
+
+
+/* Phase 6.3: mobile audio mix bottom sheet; desktop and core playback unchanged. */
+@media (max-width: 760px) {
+  .mobile-audio-menu-button {
+    flex:0 0 auto; min-height:34px; padding:0 9px;
+    border:1px solid #335749; border-radius:9px;
+    background:#0a2a21; color:#e4fff4;
+    font-size:10px; font-weight:800; cursor:pointer;
+  }
+  .mobile-audio-mixer-overlay {
+    position:fixed; inset:0; z-index:120; background:rgba(0,0,0,.56);
+    display:flex; align-items:flex-end; justify-content:center;
+  }
+  .mobile-audio-mixer-sheet {
+    width:100%; max-width:520px; max-height:min(70dvh,550px); overflow:auto;
+    border:1px solid #355e4e; border-radius:20px 20px 0 0;
+    padding:18px 18px calc(18px + env(safe-area-inset-bottom));
+    background:#081811; color:#eefaf3; box-shadow:0 -8px 35px rgba(0,0,0,.48);
+  }
+  .mobile-audio-mixer-heading,.mobile-audio-mixer-row-top {
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+  }
+  .mobile-audio-mixer-heading strong { display:block; font-size:18px; }
+  .mobile-audio-mixer-heading small { display:block; color:#9db9aa; font-size:11px; }
+  .mobile-audio-mixer-heading button { width:36px; height:36px; border-radius:10px;
+    border:1px solid #315546; background:#102a21; cursor:pointer; }
+  .mobile-audio-mixer-row { margin-top:13px; padding:12px; border:1px solid #254a3b;
+    border-radius:14px; background:#0c241b; }
+  .mobile-audio-mixer-row-top strong { min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; font-size:13px; }
+  .mobile-audio-mixer-row-top button { flex:0 0 auto; min-width:86px; min-height:35px;
+    border:1px solid #3b6857; border-radius:9px; background:#102b22; color:#c9eedc;
+    font-size:12px; font-weight:800; cursor:pointer; }
+  .mobile-audio-mixer-row-top button.is-on { border-color:#44dfa9; background:#168463; color:#fff; }
+  .mobile-audio-mixer-slider { display:grid; grid-template-columns:auto minmax(0,1fr) 38px;
+    align-items:center; gap:12px; margin-top:10px; font-size:11px; color:#b5d4c6; }
+  .mobile-audio-mixer-slider input { width:100%; accent-color:#43d9ac; }
+  .mobile-audio-mixer-slider output { text-align:right; font-variant-numeric:tabular-nums; }
+  .mobile-audio-mixer-experiment { display:flex; align-items:center; justify-content:space-between;
+    gap:15px; padding:14px 3px 6px; font-size:12px; }
+  .mobile-audio-mixer-experiment strong,.mobile-audio-mixer-experiment small { display:block; }
+  .mobile-audio-mixer-experiment small { color:#9ab6ab; margin-top:4px; }
+  .mobile-audio-mixer-experiment input { width:21px; height:21px; accent-color:#43d9ac; }
+  .mobile-audio-mixer-note { margin:10px 0 0; font-size:11px;
+    line-height:1.45; color:#a8c3b6; }
+}
+
+
+/* Phase 6.3.1: Mobile Native emote picker stays within the available chat area.
+   When open, replace the scrolling chat log with a scrollable emote browser.
+   The composer stays visible at the bottom. Desktop layout is untouched. */
+@media (max-width: 760px) {
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open > [role="log"] {
+    flex: 0 1 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open > .native-chat-emote-picker {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: hidden !important;
+  }
+
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open .native-chat-emote-browser {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open .native-chat-emote-browser > nav,
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open .native-chat-emote-browser > div[aria-label] {
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .viewer-shell .native-twitch-chat.native-chat-emotes-open > .native-chat-composer {
+    flex: 0 0 auto !important;
+  }
+}

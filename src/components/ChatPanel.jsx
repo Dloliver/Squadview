@@ -1038,7 +1038,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
 
   return (
     <section
-      className={`chat-panel native-twitch-chat ${compact ? 'is-compact' : ''}`}
+      className={`chat-panel native-twitch-chat ${compact ? 'is-compact' : ''} ${emotePickerOpen ? 'native-chat-emotes-open' : ''}`}
       style={{
         width: '100%',
         height: '100%',

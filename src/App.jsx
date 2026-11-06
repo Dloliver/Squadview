@@ -622,6 +622,10 @@ function SquadViewApp() {
   // Always restore refreshed viewers muted. Browsers generally block autoplaying
   // audio after a hard refresh until the user interacts with the page again.
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [showMobileAudioMixer, setShowMobileAudioMixer] = useState(false);
+  const [mobileMixVolumes, setMobileMixVolumes] = useState({});
+  // Opt-in on browsers that can try multiple audible Twitch embeds.
+  const [mobileDualAudioEnabled, setMobileDualAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState(() => initialViewer?.slotChannels || []);
   const [desktopPage, setDesktopPage] = useState(() => initialViewer?.desktopPage || 0);
   // Keep the displayed desktop page independent from the stream that is focused.
@@ -669,11 +673,11 @@ function SquadViewApp() {
   // audio ownership separate: all visible videos remain independent, while iOS
   // uses one audible Twitch owner at a time. Other platforms keep additive Listen.
   const iosSingleAudioMode = useMemo(() => isIOSLikeDevice(), []);
-  // Mobile browsers are far more reliable when exactly one Twitch embed owns
-  // audio at a time. Keep multiple videos visible, but make Listen a
-  // single-select control on every phone-sized viewer. The user can also
-  // select the current owner again to return to an all-muted state.
-  const mobileSingleAudioMode = !isDesktopGrid;
+  // iPhone/iPad stay single owner; other mobile browsers can opt in to an
+  // experimental two-player mix. Solo always remains single-owner.
+  const mobileDualAudioMix = !isDesktopGrid && !iosSingleAudioMode &&
+    mobileDualAudioEnabled && viewMode === 'chat' && mobileChatPresentation === 'split' && channels.length >= 2;
+  const mobileSingleAudioMode = !isDesktopGrid && !mobileDualAudioMix;
   const playersRef = useRef(new Map());
   // Keep per-channel volume only for the current viewer run. This survives
   // paging, Focus, Chat, reordering, and temporary player remounts, but a new
@@ -756,7 +760,7 @@ function SquadViewApp() {
 
   const audioModeKey = viewMode === 'solo'
     ? 'solo'
-    : (!isDesktopGrid && viewMode === 'chat')
+    : (!isDesktopGrid && viewMode === 'chat' && !mobileDualAudioMix)
       ? 'mobile-chat'
       : 'mix';
 
@@ -768,6 +772,7 @@ function SquadViewApp() {
       audioEnabled: overrides.audioEnabled ?? audioEnabled,
       iosSingleAudioMode: overrides.iosSingleAudioMode ?? iosSingleAudioMode,
       mobileSingleAudioMode: overrides.mobileSingleAudioMode ?? mobileSingleAudioMode,
+      mobileDualAudioMix: overrides.mobileDualAudioMix ?? mobileDualAudioMix,
       mode: overrides.mode ?? audioModeKey,
     };
   }
@@ -782,6 +787,11 @@ function SquadViewApp() {
 
     if (policy.mode === 'solo' || policy.mode === 'mobile-chat') {
       return cleaned === policy.activeChannel;
+    }
+
+    if (policy.mobileDualAudioMix) {
+      // In experimental Two mode, each channel is selected independently.
+      return policy.listeningChannels.has(cleaned);
     }
 
     if (policy.mobileSingleAudioMode) {
@@ -2899,6 +2909,25 @@ function SquadViewApp() {
     );
   }
 
+  // Mixer sliders set a level without automatically claiming audio on a
+  // muted mobile stream. The separate Listen button is the deliberate audio tap.
+  function changeMobileMixerVolume(channel, value) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
+    const level = clampFocusedAudioVolume(value, 1);
+    rememberSessionChannelVolume(cleaned, level);
+    const player = playersRef.current.get(cleaned);
+    if (cleaned === activeChannel) {
+      focusedAudioVolumeRef.current = level;
+      if (player) player.__squadViewPreferredVolume = level;
+    } else if (player) {
+      player.__squadViewManualVolume = level;
+    }
+    if (audibleChannels.has(cleaned)) {
+      reconcileViewerAudio({}, { captureCurrent: false });
+    }
+  }
+
   const handleViewerStreamStatusChange = useCallback((channel, nextStatus) => {
     const cleaned = cleanChannel(channel);
     if (!cleaned) return;
@@ -2955,6 +2984,45 @@ function SquadViewApp() {
   function listenToChannel(channel, controlState = {}) {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
+
+    if (mobileDualAudioMix) {
+      const player = playersRef.current.get(cleaned);
+      if (!player || player.__squadViewReady !== true) return;
+      const nextListening = new Set(listeningChannels);
+      const alreadySelected = nextListening.has(cleaned);
+      snapshotAudioLevels(lastAppliedAudioPolicyRef.current || audioPolicyRef.current);
+      if (alreadySelected) {
+        nextListening.delete(cleaned);
+        try { player.setMuted?.(true); player.setVolume?.(0); } catch {}
+      } else {
+        const level = Math.max(0.05, getSessionChannelVolume(cleaned, 1));
+        if (cleaned === activeChannel) {
+          focusedAudioVolumeRef.current = level;
+          player.__squadViewPreferredVolume = level;
+        } else {
+          player.__squadViewManualVolume = level;
+        }
+        // Attempt the audio claim synchronously inside the user's tap.
+        // WebKit/Twitch may still refuse concurrent playback on some devices.
+        try {
+          player.setVolume?.(level);
+          player.setMuted?.(false);
+          if (player.isPaused?.() === true) player.play?.();
+        } catch {
+          return;
+        }
+        nextListening.add(cleaned);
+      }
+      setListeningChannels(nextListening);
+      setAudioEnabled(nextListening.size > 0);
+      reconcileViewerAudio({
+        listeningChannels: nextListening,
+        audioEnabled: nextListening.size > 0,
+        mobileDualAudioMix: true,
+        mode: 'mix',
+      }, { captureCurrent: false });
+      return;
+    }
 
     if (viewMode === 'solo') {
       // Listen is a real toggle in Focus on both desktop and mobile. Mobile
@@ -5021,6 +5089,66 @@ function SquadViewApp() {
                       );
                     })}
                   </div>
+                  <button type="button" className="mobile-audio-menu-button"
+                    aria-label="Audio mix settings" aria-expanded={showMobileAudioMixer}
+                    onClick={() => setShowMobileAudioMixer(true)}>♫ Audio</button>
+                </div>
+              )}
+              {!isDesktopGrid && showMobileAudioMixer && (
+                <div className="mobile-audio-mixer-overlay" onClick={() => setShowMobileAudioMixer(false)}>
+                  <section className="mobile-audio-mixer-sheet" role="dialog" aria-modal="true"
+                    aria-label="Mobile audio mix" onClick={(event) => event.stopPropagation()}>
+                    <div className="mobile-audio-mixer-heading">
+                      <div><strong>Audio Mix</strong><small>Control the streams on screen</small></div>
+                      <button type="button" onClick={() => setShowMobileAudioMixer(false)} aria-label="Close audio mix">✕</button>
+                    </div>
+                    {visibleChannels.slice(0, 2).map((channel) => (
+                      <div className="mobile-audio-mixer-row" key={channel}>
+                        <div className="mobile-audio-mixer-row-top">
+                          <strong title={channel}>{channel}</strong>
+                          <button type="button" className={audibleChannels.has(channel) ? 'is-on' : ''}
+                            onClick={() => listenToChannel(channel)}
+                            aria-label={`${audibleChannels.has(channel) ? 'Mute' : 'Listen to'} ${channel}`}>
+                            {audibleChannels.has(channel) ? 'Listening' : 'Listen'}
+                          </button>
+                        </div>
+                        <label className="mobile-audio-mixer-slider">
+                          <span>Volume</span>
+                          <input type="range" min="5" max="100" step="5"
+                            value={mobileMixVolumes[channel] ?? Math.round(getSessionChannelVolume(channel, 1) * 100)}
+                            onChange={(event) => {
+                              const volume = Number(event.target.value);
+                              setMobileMixVolumes((current) => ({ ...current, [channel]: volume }));
+                              changeMobileMixerVolume(channel, volume / 100);
+                            }} aria-label={`${channel} audio volume`} />
+                          <output>{mobileMixVolumes[channel] ?? Math.round(getSessionChannelVolume(channel, 1) * 100)}%</output>
+                        </label>
+                      </div>
+                    ))}
+                    {!iosSingleAudioMode && mobileChatPresentation === 'split' && channels.length > 1 && (
+                      <label className="mobile-audio-mixer-experiment">
+                        <span><strong>Try mixing both streams</strong><small>Experimental: browser playback may vary</small></span>
+                        <input type="checkbox" checked={mobileDualAudioEnabled}
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            const owner = [...listeningChannels][0] || activeChannel;
+                            if (enabled) {
+                              setListeningChannels(audioEnabled && owner ? new Set([owner]) : new Set());
+                            } else {
+                              const kept = [...listeningChannels][0] || activeChannel;
+                              setListeningChannels(audioEnabled && kept && kept !== activeChannel ? new Set([kept]) : new Set());
+                            }
+                            setMobileDualAudioEnabled(enabled);
+                          }} />
+                      </label>
+                    )}
+                    {iosSingleAudioMode && (
+                      <p className="mobile-audio-mixer-note">On iPhone and iPad, one Twitch stream's audio plays at a time. Tap Listen on the other to switch.</p>
+                    )}
+                    {!iosSingleAudioMode && mobileDualAudioEnabled && (
+                      <p className="mobile-audio-mixer-note">Tap Listen on each stream to try both. If your browser interrupts one, switch back to single audio.</p>
+                    )}
+                  </section>
                 </div>
               )}
               <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
