@@ -390,32 +390,16 @@ function forceLiveResync(
   }
 
   /*
-   * iOS audio continuity guard:
-   * Twitch's live-edge recovery reloads the embed with setChannel(). On iOS,
-   * reloading the Twitch iframe while it owns audio can silently revoke the
-   * existing audible media session. The video keeps moving, but audio stays
-   * muted until the next user gesture (for example, touching the volume
-   * slider). Preserve the selected iOS audio owner's live media session and
-   * defer any destructive live-edge resync until that stream is no longer the
-   * audio owner.
+   * iOS stability: automatic live-edge correction uses setChannel(), which
+   * reloads the Twitch embed and can replay its startup/preroll audio. Safari
+   * may also lose a media session's user-granted audio permission on reload.
+   * Never do a destructive automatic restart on iPhone/iPad, even when muted.
+   * Keep the embed playing at its current position; a manual Twitch refresh
+   * remains available after muting. Desktop/Android retain live-edge recovery.
    */
-  if (
-    state.preserveAudibleSession &&
-    state.audioSelected &&
-    state.audioEnabled
-  ) {
-    player.__squadViewLiveEdgeStatus =
-      'stale_audio_owner_preserved';
-
-    player.__squadViewAwaitingLiveEdge =
-      true;
-
-    scheduleLiveEdgeCheck(
-      player,
-      stateRef,
-      LIVE_EDGE_RESYNC_COOLDOWN_MS,
-    );
-
+  if (state.preserveAudibleSession) {
+    player.__squadViewLiveEdgeStatus = 'ios_auto_resync_skipped';
+    player.__squadViewAwaitingLiveEdge = false;
     return;
   }
 
@@ -619,7 +603,8 @@ function applyPlayerState(
         // WebKit may be finishing the page transition. Keep the player mounted.
       }
 
-      applyWarmHiddenQuality(player);
+      // Switching quality can reload iOS media. Leave the warm embed alone.
+      if (!state.preserveAudibleSession) applyWarmHiddenQuality(player);
       player.__squadViewPausedByScheduler = false;
       player.__squadViewWasVisible = false;
       player.__squadViewWarmHidden = true;
@@ -709,7 +694,11 @@ function applyPlayerState(
       player.__squadViewLiveEdgeStatus = 'audible_stream_returned';
     } else {
       try {
-        player.play?.();
+        // A redundant play() call can restart iOS media initialization.
+        // Resume only if Twitch itself reports the stream paused.
+        if (!state.preserveAudibleSession || player.isPaused?.() === true) {
+          player.play?.();
+        }
       } catch {
         // Native Twitch play remains available.
       }
@@ -724,11 +713,11 @@ function applyPlayerState(
     }
   }
 
-  applyQualityPolicy(
-    player,
-    active,
-    visibleCount,
-  );
+  // On iOS let Twitch choose its startup rendition. Repeated automatic
+  // setQuality() calls while READY/PLAYING transitions can interrupt playback.
+  if (!state.preserveAudibleSession) {
+    applyQualityPolicy(player, active, visibleCount);
+  }
 
   player.__squadViewPausedByScheduler = false;
   player.__squadViewWasVisible = true;
