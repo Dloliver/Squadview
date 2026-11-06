@@ -785,16 +785,19 @@ function SquadViewApp() {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !policy?.audioEnabled || !policy.channels.includes(cleaned)) return false;
 
-    if (policy.mode === 'solo' || policy.mode === 'mobile-chat') {
+    if (policy.mode === 'solo') {
+      // Solo intentionally listens only to its focused stream.
       return cleaned === policy.activeChannel;
     }
 
     if (policy.mobileDualAudioMix) {
-      // In experimental Two mode, each channel is selected independently.
+      // Experimental additive audio, only on supported non-iOS mobile browsers.
       return policy.listeningChannels.has(cleaned);
     }
 
     if (policy.mobileSingleAudioMode) {
+      // Crucial: Split + Chat MUST NOT force the active/first stream audible.
+      // A user's Listen tap chooses the audio owner independently of chat.
       const manualOwner = [...policy.listeningChannels].find((candidate) =>
         policy.channels.includes(candidate),
       );
@@ -5099,7 +5102,7 @@ function SquadViewApp() {
                   <section className="mobile-audio-mixer-sheet" role="dialog" aria-modal="true"
                     aria-label="Mobile audio mix" onClick={(event) => event.stopPropagation()}>
                     <div className="mobile-audio-mixer-heading">
-                      <div><strong>Audio Mix</strong><small>Control the streams on screen</small></div>
+                      <div><strong>Audio Mix</strong><small>Tap Listen to choose either stream</small></div>
                       <button type="button" onClick={() => setShowMobileAudioMixer(false)} aria-label="Close audio mix">✕</button>
                     </div>
                     {visibleChannels.slice(0, 2).map((channel) => (
