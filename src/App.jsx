@@ -71,6 +71,9 @@ const PENDING_PREMIUM_PLAN_KEY = 'squadview:pending-premium-plan:v1';
 const LIVE_STATUS_API_URL = (import.meta.env.VITE_LIVE_STATUS_API_URL || '').replace(/\/$/, '');
 const MAX_SUPPORTED_VIEWER_STREAMS = 16;
 const AUTO_FILL_FAVORITES_KEY = 'squadview:auto-fill-favorites:v1';
+const BUILDER_AUTO_FILL_KEY = 'squadview:builder-auto-fill:v1';
+const CHAT_PLACEMENT_KEY = 'squadview:chat-placement:v1';
+const CHAT_TILE_SLOT_KEY = 'squadview:chat-tile-slot:v1';
 const FAVORITE_LIVE_ALERTS_KEY = 'squadview:favorite-live-alerts:v1';
 const FAVORITE_LIVE_ALERT_SOUND_KEY = 'squadview:favorite-live-alert-sound:v1';
 const FAVORITE_LIVE_POLL_MS = 60 * 1000;
@@ -86,6 +89,17 @@ function readStoredBoolean(key, fallback) {
     return value === 'true';
   } catch {
     return fallback;
+  }
+}
+
+function readLastWatchedLineup() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
+    return Array.isArray(saved)
+      ? [...new Set(saved.map(cleanChannel).filter(Boolean))].slice(0, MAX_SUPPORTED_VIEWER_STREAMS)
+      : [];
+  } catch {
+    return [];
   }
 }
 
@@ -482,14 +496,9 @@ function SquadViewApp() {
     })()
     : restoredViewer;
   const [screen, setScreen] = useState(() => sharedViewer ? 'shared_pending' : initialViewer ? 'viewer' : 'home');
-  const [inputs, setInputs] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(LAST_CHANNELS_KEY) || '[]');
-      return padViewerInputs(saved, FREE_ENTITLEMENTS.viewerMaxStreams);
-    } catch {
-      return ['', '', '', ''];
-    }
-  });
+  // Build is an empty, user-owned draft. Last watch history is separate and restorable.
+  const [inputs, setInputs] = useState(() => padViewerInputs([], FREE_ENTITLEMENTS.viewerMaxStreams));
+  const [lastWatchedLineup, setLastWatchedLineup] = useState(readLastWatchedLineup);
   const [channels, setChannels] = useState(() => initialViewer?.channels || []);
   // activeChannel owns the visual/solo focus. Chat has its own channel target so
   // desktop chat switching never rewrites Focus or the viewer's audio mix.
@@ -504,15 +513,28 @@ function SquadViewApp() {
   const [liveFavoriteStreamers, setLiveFavoriteStreamers] = useState(() => new Set());
   const [favoriteLiveStatusReady, setFavoriteLiveStatusReady] = useState(false);
   const [autoFillFavorites, setAutoFillFavorites] = useState(() => readStoredBoolean(AUTO_FILL_FAVORITES_KEY, false));
+  // Opt-in Build auto-fill is separate from automatic replacements while watching.
+  const [builderAutoFillFavorites, setBuilderAutoFillFavorites] = useState(() => readStoredBoolean(BUILDER_AUTO_FILL_KEY, false));
   const [favoriteLiveAlertsEnabled, setFavoriteLiveAlertsEnabled] = useState(() => readStoredBoolean(FAVORITE_LIVE_ALERTS_KEY, true));
   const [favoriteLiveAlertSound, setFavoriteLiveAlertSound] = useState(() => readStoredBoolean(FAVORITE_LIVE_ALERT_SOUND_KEY, false));
   const [favoriteLiveNotice, setFavoriteLiveNotice] = useState(null);
   const autoFillSuppressedFavoritesRef = useRef(new Set());
   const [landingTab, setLandingTab] = useState('home');
+  const landingDefaultAppliedRef = useRef(false);
+  const [liveSort, setLiveSort] = useState('favorites');
   const [followingView, setFollowingView] = useState('live');
   const [showEdit, setShowEdit] = useState(false);
+  const [showViewerSettings, setShowViewerSettings] = useState(false);
+  // Split + Chat is the mobile default for a new viewing session with two or
+  // more Twitch streams. Version 2 avoids an old automatically-saved 'classic'
+  // value masking the new default. A deliberate Classic selection stays saved.
+  const [mobileChatPresentation, setMobileChatPresentation] = useState(() => {
+    try { return localStorage.getItem('squadview:mobile-chat-presentation:v2') === 'classic' ? 'classic' : 'split'; }
+    catch { return 'split'; }
+  });
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
   const [managerDraftChannels, setManagerDraftChannels] = useState([]);
+  const [managerSelectedPage, setManagerSelectedPage] = useState(1);
   const [managerClearedAll, setManagerClearedAll] = useState(false);
   const [managerLiveChannels, setManagerLiveChannels] = useState(() => new Set());
   const [managerLiveStatus, setManagerLiveStatus] = useState('idle');
@@ -609,6 +631,13 @@ function SquadViewApp() {
   // owner stays in that slot while paging instead of jumping to tile one as
   // soon as Chat is clicked.
   const [desktopChatPinnedSlot, setDesktopChatPinnedSlot] = useState(0);
+  const [draggingChatTile, setDraggingChatTile] = useState(false);
+  const [chatTileSlot, setChatTileSlot] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(CHAT_TILE_SLOT_KEY));
+      return Number.isInteger(saved) && saved >= 1 && saved <= 4 ? saved : 4;
+    } catch { return 4; }
+  });
   // Grid + Chat treats the chat owner as the one stream that travels between
   // pages. The remaining streams stay assigned to their current page slots.
   // When chat moves to another visible stream, the previous chat owner drops
@@ -619,6 +648,13 @@ function SquadViewApp() {
     return initialChannels.filter((channel) => channel !== initialPinned);
   });
   const [chatLayout, setChatLayout] = useState(() => initialViewer?.chatLayout || 'single');
+  const [chatPlacement, setChatPlacement] = useState(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_PLACEMENT_KEY);
+      return ['auto', 'tile', 'left', 'right'].includes(saved) ? saved : 'right';
+    } catch { return 'auto'; }
+  });
+  const [compactViewerEnabled, setCompactViewerEnabled] = useState(() => readStoredBoolean('squadview:compact-multiview:v1', true));
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 761px)').matches ?? false);
   const [isWideDesktopChat, setIsWideDesktopChat] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
   const [chatDockSide, setChatDockSide] = useState(() => {
@@ -1108,9 +1144,8 @@ function SquadViewApp() {
 
         setFavoriteStreamers(mergedFavorites);
         setDefaultLayout(syncedDefaultLayout);
-        if (syncedLastChannels.length) {
-          setInputs(padViewerInputs(syncedLastChannels, accountViewerLimit));
-        }
+        // Preserve the prior viewer lineup but never inject it into a fresh Build draft.
+        if (syncedLastChannels.length) setLastWatchedLineup(syncedLastChannels);
 
         try {
           localStorage.setItem(FAVORITE_STREAMERS_KEY, JSON.stringify(mergedFavorites));
@@ -1151,6 +1186,14 @@ function SquadViewApp() {
       cancelled = true;
     };
   }, [accountSession?.user?.id]);
+
+  // Returning signed-in visitors see Twitch Following by default.
+  // Manual tab selection is never overridden after initial account hydration.
+  useEffect(() => {
+    if (!accountReady || landingDefaultAppliedRef.current || !accountSession?.user?.id) return;
+    landingDefaultAppliedRef.current = true;
+    if (screen === 'home') setLandingTab('following');
+  }, [accountReady, accountSession?.user?.id, screen]);
 
   useEffect(() => {
     if (!premiumReturnState || !accountReady) return undefined;
@@ -1218,60 +1261,8 @@ function SquadViewApp() {
     void startPremiumCheckout(pendingPlan, 'post_twitch_signin');
   }, [accountReady, accountSession?.user?.id, billingBusy, entitlements.isPremium]);
 
-  // Refresh the remembered Build roster once account state has settled. The
-  // previous lineup is convenience state, not a Saved Squad: confirmed offline
-  // channels are removed so the home screen never advertises a dead roster.
-  // If the live-status service is unavailable, keep the remembered list rather
-  // than destructively clearing it.
-  useEffect(() => {
-    if (screen !== 'home' || !accountReady || rememberedLineupReconciledRef.current) return undefined;
+  // Last watched rosters are only restored on an explicit Build action.
 
-    const remembered = [...new Set(inputs.map(cleanChannel).filter(Boolean))]
-      .slice(0, viewerStreamLimit);
-    rememberedLineupReconciledRef.current = true;
-
-    if (!remembered.length) {
-      setRememberedLineupStatus('ready');
-      return undefined;
-    }
-
-    if (!LIVE_STATUS_API_URL) {
-      setRememberedLineupStatus('unavailable');
-      return undefined;
-    }
-
-    let cancelled = false;
-    setRememberedLineupStatus('checking');
-
-    async function refreshRememberedLineup() {
-      try {
-        const live = await loadLiveStatusForChannels(remembered);
-        if (cancelled || !live) return;
-
-        const liveRemembered = remembered.filter((channel) => live.has(channel));
-        setInputs(padViewerInputs(liveRemembered, viewerStreamLimit));
-        saveLastChannels(liveRemembered);
-        setRememberedLineupStatus('ready');
-
-        trackEvent('remembered_lineup_reconciled', {
-          previous_count_bucket: getStreamCountBucket(remembered.length),
-          live_count_bucket: getStreamCountBucket(liveRemembered.length),
-          removed_count_bucket: getStreamCountBucket(Math.max(0, remembered.length - liveRemembered.length)),
-        });
-      } catch (error) {
-        if (cancelled) return;
-        setRememberedLineupStatus('unavailable');
-        if (import.meta.env.DEV) {
-          console.info('[SquadView remembered lineup] live refresh unavailable', error);
-        }
-      }
-    }
-
-    void refreshRememberedLineup();
-    return () => {
-      cancelled = true;
-    };
-  }, [screen, accountReady, viewerStreamLimit]);
 
   useEffect(() => {
     if (!showAccount || !accountSession?.user?.id || !accountReady) return;
@@ -1344,12 +1335,13 @@ function SquadViewApp() {
   useEffect(() => {
     try {
       localStorage.setItem(AUTO_FILL_FAVORITES_KEY, String(autoFillFavorites));
+      localStorage.setItem(BUILDER_AUTO_FILL_KEY, String(builderAutoFillFavorites));
       localStorage.setItem(FAVORITE_LIVE_ALERTS_KEY, String(favoriteLiveAlertsEnabled));
       localStorage.setItem(FAVORITE_LIVE_ALERT_SOUND_KEY, String(favoriteLiveAlertSound));
     } catch {
       // Device-local preferences still work for this session when storage is restricted.
     }
-  }, [autoFillFavorites, favoriteLiveAlertsEnabled, favoriteLiveAlertSound]);
+  }, [autoFillFavorites, builderAutoFillFavorites, favoriteLiveAlertsEnabled, favoriteLiveAlertSound]);
 
   useEffect(() => {
     if (!favoriteLiveNotice) return undefined;
@@ -1445,6 +1437,7 @@ function SquadViewApp() {
   useEffect(() => {
     const blockedByViewerUi =
       showEdit ||
+      showViewerSettings ||
       showShareSquad ||
       showAccount ||
       showSaveSquad ||
@@ -1523,6 +1516,7 @@ function SquadViewApp() {
     screen,
     showAccount,
     showEdit,
+    showViewerSettings,
     showSaveSquad,
     showShareSquad,
     showSharedArrival,
@@ -1753,6 +1747,19 @@ function SquadViewApp() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(CHAT_PLACEMENT_KEY, chatPlacement);
+      localStorage.setItem(CHAT_TILE_SLOT_KEY, String(chatTileSlot));
+      localStorage.setItem('squadview:compact-multiview:v1', String(compactViewerEnabled));
+    } catch { /* Placement still works for this session. */ }
+  }, [chatPlacement, chatTileSlot, compactViewerEnabled]);
+
+  useEffect(() => {
+    try { localStorage.setItem('squadview:mobile-chat-presentation:v2', mobileChatPresentation); }
+    catch { /* Keep session preferences if storage is blocked. */ }
+  }, [mobileChatPresentation]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('squadview:chat-dock-side-v1', chatDockSide);
     } catch {
       // Chat docking still works for the current page when storage is blocked.
@@ -1925,6 +1932,21 @@ function SquadViewApp() {
         || String(first.user_name || firstLogin).localeCompare(String(second.user_name || secondLogin));
     });
   }, [favoriteStreamers, followedChannels, followedLiveStreams, knownLiveFavoriteLogins]);
+  const sortedLiveForDiscovery = useMemo(() => {
+    if (liveSort === 'favorites') return orderedFollowedLiveStreams;
+    const knownCount = (stream) => stream.squadviewFavoriteStatusOnly
+      ? null
+      : (Number.isFinite(Number(stream.viewer_count)) ? Number(stream.viewer_count) : null);
+    return [...orderedFollowedLiveStreams].sort((first, second) => {
+      const a = knownCount(first);
+      const b = knownCount(second);
+      if (a === null && b !== null) return 1;
+      if (b === null && a !== null) return -1;
+      const delta = a === null ? 0 : liveSort === 'viewers-asc' ? a - b : b - a;
+      return delta || orderedFollowedLiveStreams.indexOf(first) - orderedFollowedLiveStreams.indexOf(second);
+    });
+  }, [orderedFollowedLiveStreams, liveSort]);
+
   const managerFollowedChannels = useMemo(() => {
     const query = managerSearch.trim().toLowerCase();
     const favoriteSet = new Set(favoriteStreamers.map(cleanChannel));
@@ -2364,7 +2386,7 @@ function SquadViewApp() {
   // manually removes a Favorite, only that Favorite stays suppressed; a different
   // eligible live Favorite may still use the newly opened slot.
   useEffect(() => {
-    if (!autoFillFavorites || !favoriteLiveStatusReady || !knownLiveFavoriteLogins.size) return;
+    if ((!autoFillFavorites && !(screen === 'home' && builderAutoFillFavorites)) || !favoriteLiveStatusReady || !knownLiveFavoriteLogins.size) return;
 
     const eligible = favoriteStreamers.filter(
       (streamer) => knownLiveFavoriteLogins.has(streamer) && !autoFillSuppressedFavoritesRef.current.has(streamer),
@@ -2404,7 +2426,7 @@ function SquadViewApp() {
       return;
     }
 
-    if (screen === 'home') {
+    if (screen === 'home' && builderAutoFillFavorites) {
       setInputs((current) => {
         const selected = new Set(current.map(cleanChannel).filter(Boolean));
         const additions = eligible.filter((streamer) => !selected.has(streamer));
@@ -2422,6 +2444,7 @@ function SquadViewApp() {
     }
   }, [
     autoFillFavorites,
+    builderAutoFillFavorites,
     favoriteLiveStatusReady,
     knownLiveFavoriteLogins,
     favoriteStreamers,
@@ -2710,10 +2733,14 @@ function SquadViewApp() {
     // This avoids the first Twitch embed looking selected for audio even when
     // WebKit rejected its automatic unmute during startup.
     setAudioEnabled(isDesktopGrid ? Boolean(unique[0]) : false);
-    const startWithGridChat = false;
-    const initialViewMode = defaultLayout === 'smart'
-      ? (startWithGridChat ? 'chat' : 'dual')
-      : defaultLayout;
+    const startWithGridChat = Boolean(compactViewerEnabled && isDesktopGrid);
+    const startMobileSplitChat = !isDesktopGrid && mobileChatPresentation === 'split'
+      && unique.length > 1 && (defaultLayout === 'smart' || defaultLayout === 'dual');
+    const initialViewMode = startWithGridChat || startMobileSplitChat
+      ? 'chat'
+      : defaultLayout === 'smart' ? 'dual' : defaultLayout;
+    // Do not let a prior chat selection point to a different saved lineup.
+    setChatChannel(unique[0]);
     const initialChatLayout = initialViewMode === 'chat'
       ? (isDesktopGrid && unique.length > 1 ? 'grid' : 'single')
       : 'single';
@@ -3212,6 +3239,7 @@ function SquadViewApp() {
     const currentRoster = [...channels];
     managerOriginalChannelsRef.current = currentRoster;
     setManagerDraftChannels(currentRoster);
+    setManagerSelectedPage(Math.max(1, desktopPage + 1));
     setManagerClearedAll(false);
     setManagerLiveChannels(new Set());
     setManagerLiveStatus('idle');
@@ -3255,6 +3283,7 @@ function SquadViewApp() {
       });
     }
     setYoutubeCompanion(null);
+    setShowViewerSettings(false);
     setShowYoutubeCompanion(false);
     clearNativeChatDrafts();
     referralPromoWatchMsRef.current = 0;
@@ -3265,6 +3294,8 @@ function SquadViewApp() {
     setLastViewerChatActivityAt(0);
     setReferralPromoSuppressed(referralPromoCooldownActive());
     resetSessionChannelVolumes();
+    // Returning to discovery should not present last night's channels as live.
+    setInputs(padViewerInputs([], viewerStreamLimit));
     setScreen('home');
   }
 
@@ -3337,11 +3368,92 @@ function SquadViewApp() {
     });
   }
 
+  // On a phone the roster is not a set of desktop pages. One Stream focuses
+  // the chosen creator; Two Streams changes only the secondary visible tile.
+  // Chat and Listen are independent: choosing a second video must not take audio.
+  function chooseMobileQuickStream(channel) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned) || isDesktopGrid) return;
+    if (viewMode === 'solo' || youtubeCompanion || mobileChatPresentation !== 'split') {
+      if (cleaned !== activeChannel) focusChannel(cleaned);
+      return;
+    }
+    const pair = slotChannels.length >= 2 ? slotChannels : channels.slice(0, 2);
+    if (pair.includes(cleaned)) {
+      setChatChannel(cleaned);
+      return;
+    }
+    const anchor = pair.includes(activeChannel) ? activeChannel : pair[0];
+    const nextPair = [anchor, cleaned].filter(Boolean);
+    resumeViewerChannelsFromGesture(nextPair);
+    setSlotChannels(nextPair);
+    setChatChannel(cleaned);
+    setChatLayout('single');
+    setViewMode('chat');
+  }
+
+  function chooseMobileOneStream() {
+    if (isDesktopGrid || viewMode === 'solo') return;
+    const pair = slotChannels.length ? slotChannels : channels.slice(0, 2);
+    const selected = pair.includes(chatChannel) ? chatChannel : (pair.includes(activeChannel) ? activeChannel : pair[0]);
+    if (selected) focusChannel(selected);
+  }
+
+  function chooseMobileTwoStreams() {
+    if (isDesktopGrid || channels.length < 2 || youtubeCompanion) return;
+    // This reuses the proven Focus audio return policy and saves Split + Chat
+    // as the deliberate mobile preference. No roster or backend write occurs.
+    setMobileChatMode('split');
+  }
+
   function enterSolo(channel = activeChannel) {
     focusChannel(channel);
   }
 
-  function toggleChatForChannel(channel) {
+  // Presentation controls never change the roster, persisted Squad or audio policy.
+  function setCompactViewerPresentation(enabled) {
+    setCompactViewerEnabled(enabled);
+    if (enabled && isDesktopGrid) {
+      const selected = channels.includes(chatChannel) ? chatChannel : activeChannel;
+      setChatPlacement('right');
+      setChatDockSide('right');
+      setChatLayout('grid');
+      setChatChannel(selected);
+      setDesktopChatRotationChannels(channels.filter((channel) => channel !== selected));
+      setDesktopChatPinnedSlot(0);
+      setDesktopPage(0);
+      setViewMode('chat');
+    } else if (!enabled && isDesktopGrid && viewMode === 'chat' && chatLayout === 'grid') {
+      setViewMode('dual');
+    }
+  }
+
+  function setViewerChatPlacement(next) {
+    if (!['auto', 'tile', 'left', 'right'].includes(next)) return;
+    setChatPlacement(next);
+    if (next === 'left' || next === 'right') setChatDockSide(next);
+    if (isDesktopGrid && viewMode === 'dual' && activeChannel) {
+      toggleChatForChannel(chatChannel || activeChannel, next);
+    }
+  }
+
+  function setMobileChatMode(next) {
+    if (next !== 'split' && next !== 'classic') return;
+    setMobileChatPresentation(next);
+    if (isDesktopGrid) return;
+    if (next === 'split' && channels.length > 1 && !youtubeCompanion) {
+      const selected = channels.includes(activeChannel) ? activeChannel : channels[0];
+      // Leaving Focus restores the pre-Focus audio intent before opening Split.
+      if (viewMode === 'solo') returnToDual();
+      setChatChannel(selected);
+      setChatLayout('single');
+      setViewMode('chat');
+    } else if (next === 'classic' && viewMode === 'chat') {
+      setViewMode('dual');
+    }
+  }
+
+  function toggleChatForChannel(channel, placementOverride = chatPlacement) {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
 
@@ -3368,7 +3480,8 @@ function SquadViewApp() {
       // too narrow for that rail, Chat deliberately becomes the fourth grid
       // tile so the remaining streams stay large enough to watch comfortably.
       const threeStreamGridChat = !youtubeCompanion && channels.length === 3;
-      const chatUsesGridTile = !isWideDesktopChat || threeStreamGridChat;
+      const chatUsesGridTile = placementOverride === 'tile'
+        || (placementOverride === 'auto' && (!isWideDesktopChat || threeStreamGridChat));
       const visibleLimit = youtubeCompanion
         ? (chatUsesGridTile ? 2 : 3)
         : (chatUsesGridTile ? 3 : 4);
@@ -3416,9 +3529,19 @@ function SquadViewApp() {
       return;
     }
 
-    // On mobile, Chat is effectively Focus + Chat. Enter the same focused
-    // workspace so the selected stream fills the stage, chat is immediately
-    // available, and the horizontal channel switcher stays on top.
+    // Split + Chat keeps both mobile videos mounted and changes only the
+    // selected chat. Classic mobile Chat continues to use the existing Focus.
+    if (mobileChatPresentation === 'split' && channels.length > 1 && !youtubeCompanion) {
+      const currentPair = slotChannels.length ? slotChannels : channels.slice(0, 2);
+      if (!currentPair.includes(cleaned)) {
+        setSlotChannels([cleaned, currentPair[0] || channels.find((item) => item !== cleaned)].filter(Boolean).slice(0, 2));
+      }
+      setChatChannel(cleaned);
+      setChatLayout('single');
+      setViewMode('chat');
+      return;
+    }
+    // Classic mobile Chat remains the proven Focus + Chat experience.
     focusChannel(cleaned);
   }
 
@@ -3505,6 +3628,7 @@ function SquadViewApp() {
 
   function saveLastChannels(nextChannels) {
     const cleaned = [...new Set(nextChannels.map(cleanChannel).filter(Boolean))].slice(0, viewerStreamLimit);
+    setLastWatchedLineup(cleaned);
     try {
       localStorage.setItem(LAST_CHANNELS_KEY, JSON.stringify(cleaned));
     } catch {
@@ -3805,7 +3929,13 @@ function SquadViewApp() {
   function clearAllBuildStreams() {
     validInputs.forEach(suppressFavoriteAutoFill);
     setInputs(padViewerInputs([], viewerStreamLimit));
-    saveLastChannels([]);
+  }
+
+  function restorePreviousLineupToBuild() {
+    setInputs(padViewerInputs(lastWatchedLineup, viewerStreamLimit));
+    trackEvent('build_restore_previous_lineup', {
+      stream_count_bucket: getStreamCountBucket(lastWatchedLineup.length),
+    });
   }
 
   function clearAllViewerStreams() {
@@ -3910,6 +4040,7 @@ function SquadViewApp() {
   }
 
   function openLandingTab(tab) {
+    landingDefaultAppliedRef.current = true;
     setLandingTab(tab);
     window.requestAnimationFrame(() => {
       document.getElementById('top')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -4175,7 +4306,12 @@ function SquadViewApp() {
       return;
     }
 
-    setManagerDraftChannels((current) => [...current, cleaned]);
+    setManagerDraftChannels((current) => {
+      const next = [...current];
+      // Adding while managing page 3 should add to page 3, not silently page 4.
+      next.splice(Math.min(managerSelectedPage * 4, next.length), 0, cleaned);
+      return next;
+    });
   }
 
   function replaceChannelInManagerDraft(channelToReplace, replacementChannel = pendingReplacement) {
@@ -4589,8 +4725,11 @@ function SquadViewApp() {
 
   if (screen === 'viewer') {
     const dualChannels = slotChannels.length ? slotChannels : channels.slice(0, 2);
+    const managerPageCount = Math.max(1, Math.ceil(managerDraftChannels.length / 4));
+    const managerPageForRender = Math.min(managerSelectedPage, managerPageCount);
     const referralPromoBlocked =
       showEdit ||
+      showViewerSettings ||
       showShareSquad ||
       showAccount ||
       showSaveSquad ||
@@ -4616,6 +4755,8 @@ function SquadViewApp() {
     // workspace: focused Twitch on top and YouTube Companion below. Entering
     // Chat temporarily hides/pauses YouTube and gives that lower panel to chat.
     const mobileYoutubeDual = Boolean(youtubeCompanion) && !isDesktopGrid && viewMode === 'dual';
+    const mobileSplitChat = !isDesktopGrid && mobileChatPresentation === 'split'
+      && viewMode === 'chat' && channels.length > 1 && !youtubeCompanion;
     const youtubeVisible = Boolean(youtubeCompanion) && (viewMode === 'dual' || desktopGridChat);
     // Chat uses the fourth 2x2 quadrant in two cases: the viewport is too
     // narrow for a comfortable side rail, or exactly three Twitch streams are
@@ -4624,7 +4765,10 @@ function SquadViewApp() {
     // squeezing all three streams sideways for an unnecessary rail.
     const narrowDesktopGridChat = desktopGridChat && !isWideDesktopChat;
     const threeStreamDesktopChat = desktopGridChat && !youtubeVisible && channels.length === 3;
-    const desktopChatUsesGridTile = !referralPromoVisible && (narrowDesktopGridChat || threeStreamDesktopChat);
+    const desktopChatUsesGridTile = !referralPromoVisible && desktopGridChat && (
+      chatPlacement === 'tile' || (chatPlacement === 'auto' && (narrowDesktopGridChat || threeStreamDesktopChat))
+    );
+    const effectiveChatTileSlot = youtubeVisible ? 4 : chatTileSlot;
     const showDesktopChatRail = !referralPromoVisible && isDesktopGrid && (
       viewMode === 'solo' ||
       (viewMode === 'chat' && !desktopChatUsesGridTile)
@@ -4634,22 +4778,27 @@ function SquadViewApp() {
     const responsiveDesktopVisibleTwitchLimit = referralPromoVisible
       ? (youtubeVisible ? 3 : 4)
       : youtubeVisible
-        ? (narrowDesktopGridChat ? 2 : 3)
-        : (narrowDesktopGridChat ? 3 : 4);
+        ? (desktopChatUsesGridTile ? 2 : 3)
+        : (desktopChatUsesGridTile ? 3 : 4);
     const desktopVisibleTwitchLimit = referralPromoVisible
       ? responsiveDesktopVisibleTwitchLimit
       : threeStreamDesktopChat
         ? 3
         : responsiveDesktopVisibleTwitchLimit;
-    const desktopPageCount = desktopGridChat
+    // Compact side-chat uses true, independent video pages. Changing chats
+    // never pins an old-page streamer or moves the currently visible videos.
+    // Standard Grid + Chat deliberately retains its established pinned chat
+    // owner and rotating-page behavior.
+    const compactPagedChat = compactViewerEnabled && desktopGridChat && showDesktopChatRail;
+    const desktopPageCount = desktopGridChat && !compactPagedChat
       ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
       : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
     const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
-    const activeChatChannel = channels.includes(chatChannel) ? chatChannel : activeChannel;
+    const requestedChatChannel = channels.includes(chatChannel) ? chatChannel : activeChannel;
     const desktopPinnedChannel = desktopGridChat
-      ? activeChatChannel
+      ? requestedChatChannel
       : desktopLeadChannel;
-    const desktopChannels = desktopGridChat
+    const desktopChannels = desktopGridChat && !compactPagedChat
       ? getDesktopChatPageChannels(
           channels,
           desktopPinnedChannel,
@@ -4664,6 +4813,14 @@ function SquadViewApp() {
           desktopPageForRender,
           desktopVisibleTwitchLimit,
         );
+    // When paging to a new set, temporarily show its first chat unless the
+    // selected chat is already on that page. Do not rewrite the saved choice.
+    const activeChatChannel = compactPagedChat && !desktopChannels.includes(requestedChatChannel)
+      ? (desktopChannels[0] || '')
+      : requestedChatChannel;
+    const mobileVisibleChatChannel = mobileSplitChat && !dualChannels.includes(activeChatChannel)
+      ? (dualChannels[0] || activeChatChannel)
+      : activeChatChannel;
     const visibleChannels = viewMode === 'dual'
       ? (isDesktopGrid
           ? desktopChannels
@@ -4671,7 +4828,7 @@ function SquadViewApp() {
             ? [activeChannel]
             : dualChannels)
       : viewMode === 'chat'
-        ? (isDesktopGrid ? desktopChannels : [activeChatChannel])
+        ? (isDesktopGrid ? desktopChannels : mobileSplitChat ? dualChannels : [activeChatChannel])
         : [activeChannel];
 
     // iOS warm-resume cache: keep only the immediately previous mobile layout
@@ -4730,6 +4887,12 @@ function SquadViewApp() {
       if (!isDesktopGrid || !visibleChannels.includes(channel)) return undefined;
       if (viewMode !== 'dual' && !desktopGridChat) return undefined;
       const visibleIndex = visibleChannels.indexOf(channel);
+      if (desktopChatUsesGridTile) {
+        const freeSlots = [1, 2, 3, 4].filter(
+          (slot) => slot !== effectiveChatTileSlot && (!youtubeVisible || slot !== 2),
+        );
+        return freeSlots[visibleIndex];
+      }
       if (youtubeVisible) return visibleIndex === 0 ? 1 : visibleIndex + 2;
       return visibleIndex + 1;
     };
@@ -4764,7 +4927,7 @@ function SquadViewApp() {
       rememberFocusedAudioVolume(activeChannel);
 
       const nextPage = (desktopPageForRender + direction + desktopPageCount) % desktopPageCount;
-      const nextVisibleChannels = desktopGridChat
+      const nextVisibleChannels = desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
             channels,
             desktopPinnedChannel,
@@ -4790,40 +4953,28 @@ function SquadViewApp() {
     const nextDesktopPage = () => moveDesktopPage(1);
 
     return (
-      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
+            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : mobileSplitChat ? 'Split + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
           </div>
-          <div className="header-actions">
-            <button
-              type="button"
-              className={`youtube-header-button ${youtubeCompanion ? 'has-companion' : ''}`}
-              onClick={openYouTubeCompanion}
-              title={youtubeCompanion ? 'Replace YouTube Companion' : 'Add one YouTube Companion video'}
-            >
-              <span aria-hidden="true">▶</span>
-              <b>{youtubeCompanion ? 'YouTube added' : '+ YouTube'}</b>
+          <div className="header-actions viewer-primary-actions">
+            <button type="button" className="edit-group-button viewer-manage-action" onClick={() => openEditGroup()}>Manage streams</button>
+            <button type="button" className="share-squad-button viewer-share-action" onClick={openShareSquad} aria-label="Share this SquadView" title="Share Squad">
+              <Share2 /><span className="share-label-full">Share</span><span className="share-label-short">Share</span>
             </button>
-            <button className="edit-group-button" onClick={() => openEditGroup()}>Manage streams</button>
-            <button className="icon-button" onClick={() => openSaveSquadModal(channels)} aria-label="Save current view as a Squad" title="Save Squad"><Save /></button>
-            <button className="share-squad-button" onClick={openShareSquad} aria-label="Share this SquadView" title="Share Squad"><Share2 /><span className="share-label-full">Share Squad</span><span className="share-label-short">Share</span></button>
-            <button
-              className={`icon-button ${favoriteStreamers.includes(activeChannel) ? 'is-favorite' : ''}`}
-              onClick={() => toggleFavoriteStreamer(activeChannel)}
-              aria-label={favoriteStreamers.includes(activeChannel) ? `Remove ${activeChannel} from favorite streamers` : `Save ${activeChannel} as a favorite streamer`}
-              title={favoriteStreamers.includes(activeChannel) ? 'Remove favorite streamer' : 'Save favorite streamer'}
-            >
-              {favoriteStreamers.includes(activeChannel) ? <FilledHeart /> : <Heart />}
+            <button type="button" className="viewer-settings-trigger" onClick={() => setShowViewerSettings(true)}
+              aria-label="Viewer settings" title="Viewer settings" aria-haspopup="dialog" aria-expanded={showViewerSettings}>
+              <span aria-hidden="true">⚙</span><span className="viewer-settings-label">Settings</span>
             </button>
           </div>
         </header>
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} ${referralPromoVisible ? 'has-premium-rail' : ''} chat-dock-${chatDockSide}`}>
+            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} ${referralPromoVisible ? 'has-premium-rail' : ''} chat-dock-${chatDockSide} ${chatPlacement === 'left' || chatPlacement === 'right' ? 'user-chat-rail' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''}`}>
               {isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
                 <div className="focus-stream-selector" aria-label="Choose focused stream">
                   {channels.map((channel) => (
@@ -4841,32 +4992,35 @@ function SquadViewApp() {
                 </div>
               )}
 
-              {!isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
-                <div className="mobile-focus-stream-selector" aria-label="Choose focused stream">
-                  <button
-                    type="button"
-                    className="mobile-focus-return-dual"
-                    onClick={returnToDual}
-                    title="Return to Dual view"
-                  >
-                    <span aria-hidden="true">▦</span>
-                    <span>Dual</span>
-                  </button>
-                  {channels.map((channel) => (
-                    <button
-                      type="button"
-                      key={channel}
-                      className={channel === activeChannel ? 'is-current' : ''}
-                      onClick={() => channel !== activeChannel && focusChannel(channel)}
-                      title={`Focus ${channel}`}
-                    >
-                      <span className="mobile-focus-avatar" aria-hidden="true">
-                        {channel.slice(0, 1).toUpperCase()}
-                      </span>
-                      {favoriteStreamers.includes(channel) && <FilledHeart />}
-                      <span>{channel}</span>
+              {!isDesktopGrid && channels.length > 0 && (
+                <div className="mobile-quick-viewbar" aria-label="Mobile stream viewing controls">
+                  <div className="mobile-view-count-switch" role="group" aria-label="Number of streams to watch">
+                    <button type="button" className={viewMode === 'solo' ? 'is-current' : ''}
+                      aria-pressed={viewMode === 'solo'} onClick={chooseMobileOneStream}>
+                      One
                     </button>
-                  ))}
+                    <button type="button" className={viewMode !== 'solo' && mobileSplitChat ? 'is-current' : ''}
+                      aria-pressed={viewMode !== 'solo' && mobileSplitChat}
+                      disabled={channels.length < 2 || Boolean(youtubeCompanion)}
+                      onClick={chooseMobileTwoStreams}>
+                      Two
+                    </button>
+                  </div>
+                  <div className="mobile-stream-jump-list" aria-label="Choose a streamer to watch">
+                    {channels.map((channel) => {
+                      const onScreen = viewMode === 'solo' ? activeChannel === channel : dualChannels.includes(channel);
+                      return (
+                        <button type="button" key={channel}
+                          className={`mobile-stream-jump ${onScreen ? 'is-current' : ''} ${mobileSplitChat && mobileVisibleChatChannel === channel ? 'is-chat-target' : ''}`}
+                          aria-pressed={onScreen}
+                          onClick={() => chooseMobileQuickStream(channel)}
+                          title={viewMode === 'solo' ? `Focus ${channel}` : `Show ${channel} in the mobile view`}>
+                          <span className="mobile-focus-avatar" aria-hidden="true">{channel.slice(0, 1).toUpperCase()}</span>
+                          <span>{channel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               <section className={`stream-stage mode-${viewMode} desktop-count-${desktopTileCount}`}>
@@ -4914,6 +5068,9 @@ function SquadViewApp() {
                     onListen={(controlState) => listenToChannel(channel, controlState)}
                     onFocus={() => focusChannel(channel)}
                     onChat={() => toggleChatForChannel(channel)}
+                    mobileChatSelectable={mobileSplitChat && dualChannels.includes(channel)}
+                    mobileChatSelected={mobileSplitChat && mobileVisibleChatChannel === channel}
+                    onSelectMobileChat={() => setChatChannel(channel)}
                     onAudioReconcile={reconcilePlayerAudio}
                     onLiveAudioStateChange={syncNativeTwitchAudioIntent}
                     onStreamStatusChange={handleViewerStreamStatusChange}
@@ -4933,9 +5090,15 @@ function SquadViewApp() {
                     onViewerDragStart={() => setDraggedViewerChannel(channel)}
                     onViewerDragEnd={() => setDraggedViewerChannel('')}
                     onViewerDragOver={(event) => {
-                      if (draggedViewerChannel && draggedViewerChannel !== channel) event.preventDefault();
+                      if (draggingChatTile || (draggedViewerChannel && draggedViewerChannel !== channel)) event.preventDefault();
                     }}
-                    onViewerDrop={() => dropViewerChannel(channel)}
+                    onViewerDrop={() => {
+                      if (draggingChatTile && desktopChatUsesGridTile) {
+                        const nextSlot = twitchTileOrder(channel);
+                        if (Number.isFinite(nextSlot)) setChatTileSlot(nextSlot);
+                        setDraggingChatTile(false);
+                      } else dropViewerChannel(channel);
+                    }}
                     onMoveEarlier={() => moveViewerChannel(channel, -1)}
                     onMoveLater={() => moveViewerChannel(channel, 1)}
                     canMoveEarlier={channels.indexOf(channel) > 0}
@@ -4949,7 +5112,26 @@ function SquadViewApp() {
                 ))}
 
                 {desktopChatUsesGridTile && activeChatChannel && (
-                  <section className="desktop-chat-grid-tile" aria-label={`Chat with ${activeChatChannel}`}>
+                  <section className="desktop-chat-grid-tile" aria-label={`Chat with ${activeChatChannel}`}
+                    style={{ gridColumn: effectiveChatTileSlot % 2 === 0 ? 2 : 1, gridRow: Math.ceil(effectiveChatTileSlot / 2) }}>
+                    <div className="chat-tile-reorder-bar">
+                      <label className="chat-slot-picker">Chat slot
+                        <select aria-label="Chat tile position" value={chatTileSlot} disabled={youtubeVisible}
+                          title={youtubeVisible ? 'Chat slot is fixed when YouTube Companion is active' : 'Move Chat into a grid slot'}
+                          onChange={(event) => setChatTileSlot(Number(event.target.value))}>
+                          <option value={1}>1</option><option value={2}>2</option>
+                          <option value={3}>3</option><option value={4}>4</option>
+                        </select>
+                      </label>
+                      <span draggable role="button" tabIndex={0} title="Drag Chat onto a stream to move its grid position"
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', 'squadview-chat');
+                          setDraggingChatTile(true);
+                        }} onDragEnd={() => setDraggingChatTile(false)}>⠿ Move chat</span>
+                      <button type="button" onClick={() => { setChatPlacement('left'); setChatDockSide('left'); }}>Dock left</button>
+                      <button type="button" onClick={() => { setChatPlacement('right'); setChatDockSide('right'); }}>Dock right</button>
+                    </div>
                     <ChatPanel channel={activeChatChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
                   </section>
                 )}
@@ -4990,7 +5172,7 @@ function SquadViewApp() {
                     className={`mobile-chat-tile persistent-mobile-chat ${viewMode === 'chat' || viewMode === 'solo' ? 'is-active' : 'is-parked'}`}
                     aria-hidden={viewMode !== 'chat' && viewMode !== 'solo'}
                   >
-                    <ChatPanel channel={activeChatChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
+                    <ChatPanel channel={mobileVisibleChatChannel} mentionCandidates={mobileSplitChat ? dualChannels : channels} onActivity={noteViewerChatActivity} />
                   </section>
                 )}
               </div>
@@ -5056,20 +5238,21 @@ function SquadViewApp() {
 
               {showDesktopChatRail && (activeChatChannel || activeChannel) && (
                 <aside className="desktop-chat-rail" aria-label="Twitch chat">
-                  {isWideDesktopChat && (
-                    <div className="desktop-chat-dock-toolbar">
-                      <span>Chat position</span>
-                      <button
-                        type="button"
-                        onClick={() => setChatDockSide((side) => side === 'right' ? 'left' : 'right')}
-                        aria-label={chatDockSide === 'right' ? 'Move chat to the left side' : 'Move chat to the right side'}
-                        title={chatDockSide === 'right' ? 'Dock chat left' : 'Dock chat right'}
-                      >
-                        {chatDockSide === 'right' ? '← Dock left' : 'Dock right →'}
-                      </button>
-                    </div>
+                  {isWideDesktopChat && !compactViewerEnabled && (
+                    <div className="desktop-chat-dock-toolbar"><span>Chat</span></div>
                   )}
-                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={channels} onActivity={noteViewerChatActivity} />
+                  {compactViewerEnabled && viewMode === 'chat' && (
+                    <nav className="compact-chat-tabs" role="tablist" aria-label={`Chats on viewing page ${desktopPageForRender + 1}`}>
+                      {visibleChannels.map((channel) => (
+                        <button key={channel} type="button" role="tab" aria-selected={activeChatChannel === channel}
+                          className={activeChatChannel === channel ? 'is-current' : ''}
+                          onClick={() => setChatChannel(channel)} title={`Chat with ${channel}`}>
+                          {channel}
+                        </button>
+                      ))}
+                    </nav>
+                  )}
+                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={compactPagedChat ? visibleChannels : channels} onActivity={noteViewerChatActivity} />
                 </aside>
               )}
             </div>
@@ -5096,24 +5279,24 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && viewMode !== 'solo' && (
+            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && viewMode !== 'solo' && !mobileSplitChat && (
               <div className="mobile-stream-pager" aria-label="Move through streams">
                 <button
-                  onClick={viewMode === 'dual' ? previousOther : () => cycleFocused(-1)}
+                  onClick={viewMode === 'dual' || mobileSplitChat ? previousOther : () => cycleFocused(-1)}
                   aria-label="Previous stream"
                 >
                   ←
                 </button>
                 <div>
-                  <span>{viewMode === 'dual' ? 'Other stream' : viewMode === 'chat' ? 'Stream + chat' : 'Focused stream'}</span>
+                  <span>{viewMode === 'dual' || mobileSplitChat ? 'Other stream' : viewMode === 'chat' ? 'Stream + chat' : 'Focused stream'}</span>
                   <strong>
-                    {viewMode === 'dual'
+                    {viewMode === 'dual' || mobileSplitChat
                       ? `${channels.indexOf(rotatingChannel) + 1} of ${channels.length}`
                       : `${channels.indexOf(activeChannel) + 1} of ${channels.length}`}
                   </strong>
                 </div>
                 <button
-                  onClick={viewMode === 'dual' ? nextOther : () => cycleFocused(1)}
+                  onClick={viewMode === 'dual' || mobileSplitChat ? nextOther : () => cycleFocused(1)}
                   aria-label="Next stream"
                 >
                   →
@@ -5121,7 +5304,7 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length === 2 && viewMode === 'chat' && (
+            {!isDesktopGrid && channels.length === 2 && viewMode === 'chat' && !mobileSplitChat && (
               <div className="focus-carousel" aria-label="Move through selected streams">
                 <button onClick={() => cycleFocused(-1)} aria-label="Previous stream">←</button>
                 <div>
@@ -5165,6 +5348,67 @@ function SquadViewApp() {
           </nav>
         </main>
 
+        {showViewerSettings && (
+          <div className="viewer-settings-backdrop" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowViewerSettings(false);
+          }}>
+            <section className="viewer-settings-modal" role="dialog" aria-modal="true" aria-labelledby="viewer-settings-title">
+              <header className="viewer-settings-heading">
+                <div><span>PERSONALIZE YOUR VIEW</span><h2 id="viewer-settings-title">Viewer settings</h2></div>
+                <button type="button" onClick={() => setShowViewerSettings(false)} aria-label="Close viewer settings">×</button>
+              </header>
+              {isDesktopGrid ? (
+                <div className="viewer-settings-section">
+                  <h3>Desktop layout</h3>
+                  <label className="viewer-settings-control">
+                    <span><strong>Compact View</strong><small>Four videos with tabbed chat on the side</small></span>
+                    <input type="checkbox" checked={compactViewerEnabled}
+                      onChange={(event) => setCompactViewerPresentation(event.target.checked)} />
+                  </label>
+                  <label className="viewer-settings-choice">Chat position
+                    <select value={chatPlacement} onChange={(event) => setViewerChatPlacement(event.target.value)}>
+                      <option value="auto">Automatic</option><option value="tile">Inside the video grid</option>
+                      <option value="left">Docked on left</option><option value="right">Docked on right</option>
+                    </select>
+                  </label>
+                  <p className="viewer-settings-hint">Drag the chat tile into another grid position, or use its numbered slot selector.</p>
+                </div>
+              ) : (
+                <div className="viewer-settings-section">
+                  <h3>Mobile chat layout</h3>
+                  <div className="viewer-settings-mobile-options">
+                    <button type="button" className={mobileChatPresentation === 'classic' ? 'is-selected' : ''}
+                      aria-pressed={mobileChatPresentation === 'classic'} onClick={() => setMobileChatMode('classic')}>
+                      <strong>Classic mobile</strong><small>Full-width videos and focused chat</small>
+                    </button>
+                    <button type="button" className={mobileChatPresentation === 'split' ? 'is-selected' : ''}
+                      aria-pressed={mobileChatPresentation === 'split'} disabled={channels.length < 2 || Boolean(youtubeCompanion)}
+                      onClick={() => setMobileChatMode('split')}>
+                      <strong>Split + Chat</strong><small>Default: two videos side by side, chat below</small>
+                    </button>
+                  </div>
+                  {(channels.length < 2 || youtubeCompanion) && (
+                    <p className="viewer-settings-hint">Split + Chat requires two Twitch streams and no YouTube Companion.</p>
+                  )}
+                </div>
+              )}
+              <div className="viewer-settings-section viewer-settings-shortcuts">
+                <h3>Quick actions</h3>
+                <button type="button" onClick={() => { setShowViewerSettings(false); openYouTubeCompanion(); }}>
+                  {youtubeCompanion ? 'Replace YouTube Companion' : 'Add YouTube Companion'}
+                </button>
+                <button type="button" onClick={() => { setShowViewerSettings(false); openSaveSquadModal(channels); }}>Save current view as a Squad</button>
+                {activeChannel && (
+                  <button type="button" onClick={() => { toggleFavoriteStreamer(activeChannel); }}>
+                    {favoriteStreamers.includes(activeChannel) ? `Unfavorite ${activeChannel}` : `Favorite ${activeChannel}`}
+                  </button>
+                )}
+              </div>
+              <button type="button" className="primary-button viewer-settings-done" onClick={() => setShowViewerSettings(false)}>Done</button>
+            </section>
+          </div>
+        )}
+
         {showEdit && (
           <div className="stream-manager-backdrop" onClick={closeManageStreams}>
             <aside className="stream-manager-drawer" onClick={(event) => event.stopPropagation()}>
@@ -5186,7 +5430,19 @@ function SquadViewApp() {
                   <b>{managerDraftChannels.length}/{viewerStreamLimit}</b>
                 </div>
 
-                <div className="manager-page-explanation">Page groups follow the standard four-stream desktop grid. Grid + Chat, YouTube, and mobile layouts may show fewer streams at once.</div>
+                {!isDesktopGrid && (
+                  <p className="manager-mobile-guidance">Your full lineup is below. Move streams with ↑ ↓, remove with ×, or add more underneath. Changes apply when you choose Done.</p>
+                )}
+                {isDesktopGrid && <div className="manager-page-explanation">Editing page {managerPageForRender} of {managerPageCount}. {desktopPageForRender + 1 === managerPageForRender ? 'This is your currently watched page.' : 'Select the Watching page to edit the visible lineup.'} Pages group four roster slots; Grid + Chat and YouTube may display fewer at once.</div>}
+                {isDesktopGrid && <div className="manager-page-tabs" role="tablist" aria-label="Choose the page to edit">
+                  {Array.from({ length: managerPageCount }, (_, pageIndex) => (
+                    <button key={pageIndex} type="button" role="tab" aria-selected={managerPageForRender === pageIndex + 1}
+                      className={managerPageForRender === pageIndex + 1 ? 'is-current' : ''}
+                      onClick={() => setManagerSelectedPage(pageIndex + 1)}>
+                      Page {pageIndex + 1}{desktopPageForRender === pageIndex ? ' · Watching' : ''}
+                    </button>
+                  ))}
+                </div>}
                 <div className="stream-manager-current-list">
                   {!managerDraftChannels.length && (
                     <div className="stream-manager-current-empty">
@@ -5196,7 +5452,9 @@ function SquadViewApp() {
                     </div>
                   )}
 
-                  {managerDraftChannels.map((channel, index) => (
+                  {managerDraftChannels.map((channel, index) => ({ channel, index }))
+                    .filter(({ index }) => !isDesktopGrid || Math.floor(index / 4) + 1 === managerPageForRender)
+                    .map(({ channel, index }) => (
                     <div className="manager-page-item" key={channel}>
                     {index % 4 === 0 && (
                       <div className="manager-page-heading">
@@ -5261,7 +5519,7 @@ function SquadViewApp() {
                           onChange={(event) => moveManagerChannelToPage(channel, Number(event.target.value))}
                         >
                           {Array.from({ length: Math.max(1, Math.ceil(managerDraftChannels.length / 4)) }, (_, pageIndex) => (
-                            <option key={pageIndex} value={pageIndex + 1}>Page {pageIndex + 1}</option>
+                            <option key={pageIndex} value={pageIndex + 1}>Page {pageIndex + 1}{desktopPageForRender === pageIndex ? ' (watching)' : ''}</option>
                           ))}
                         </select>
                       </label>
@@ -5329,6 +5587,16 @@ function SquadViewApp() {
                   <button type="button" className={managerSource === 'manual' ? 'is-current' : ''} onClick={() => setManagerSource('manual')}>Add channel</button>
                 </div>
 
+                {managerSource === 'live' && (
+                  <label className="following-sort-control manager-live-sort">
+                    <span>Sort live streams</span>
+                    <select value={liveSort} onChange={(event) => setLiveSort(event.target.value)}>
+                      <option value="favorites">Favorites first</option>
+                      <option value="viewers-desc">Most viewers</option>
+                      <option value="viewers-asc">Fewest viewers</option>
+                    </select>
+                  </label>
+                )}
                 <div className="stream-manager-source-panel">
                   {managerSource === 'live' && (
                     !accountSession ? (
@@ -5349,7 +5617,7 @@ function SquadViewApp() {
                       <div className="stream-manager-empty compact"><strong>Checking who is live…</strong></div>
                     ) : orderedFollowedLiveStreams.length ? (
                       <div className="stream-manager-source-list">
-                        {orderedFollowedLiveStreams.map((stream) => {
+                        {sortedLiveForDiscovery.map((stream) => {
                           const channel = cleanChannel(stream.user_login);
                           const alreadyAdded = managerDraftChannels.includes(channel);
                           return (
@@ -5849,7 +6117,7 @@ function SquadViewApp() {
       )}
 
       <header className="topbar">
-        <a className="brand" href="#top" onClick={() => setLandingTab('home')}>
+        <a className="brand" href="#top" onClick={() => openLandingTab('home')}>
           <span><Radio /></span>SquadView
         </a>
 
@@ -5947,19 +6215,27 @@ function SquadViewApp() {
                 <small>{validInputs.length}/{viewerStreamLimit}</small>
               </div>
 
+              <div className="builder-draft-info">
+                <span>Start with a fresh selection. Only streams you add are included.</span>
+                {lastWatchedLineup.length > 0 && (
+                  <button type="button" onClick={restorePreviousLineupToBuild}>
+                    Restore last view ({lastWatchedLineup.length})
+                  </button>
+                )}
+              </div>
               <label className="automation-toggle builder-automation-toggle">
                 <span>
-                  <strong>Auto-fill live SquadView Favorites</strong>
-                  <small>Uses streamers you heart in SquadView — not every Twitch follow. It only fills open slots.</small>
+                  <strong>Fill this Build from live Favorites</strong>
+                  <small>Optional. Off by default. Your watch-session Auto-fill setting stays separate.</small>
                 </span>
                 <input
                   type="checkbox"
-                  checked={autoFillFavorites}
-                  onChange={(event) => setAutoFillFavorites(event.target.checked)}
+                  checked={builderAutoFillFavorites}
+                  onChange={(event) => setBuilderAutoFillFavorites(event.target.checked)}
                 />
                 <i aria-hidden="true" />
               </label>
-              {autoFillFavorites && (
+              {builderAutoFillFavorites && (
                 <div className={`automation-status builder-automation-status ${favoriteLiveStatusReady && !liveFavoriteList.length ? 'is-empty' : ''}`} role="status">
                   {!favoriteStreamers.length
                     ? 'No SquadView Favorites yet. Heart a streamer to make them eligible for Auto-fill.'
@@ -6111,6 +6387,16 @@ function SquadViewApp() {
                   </button>
                 </div>
 
+                {followingView === 'live' && (
+                  <label className="following-sort-control">
+                    <span>Sort live streams</span>
+                    <select value={liveSort} onChange={(event) => setLiveSort(event.target.value)}>
+                      <option value="favorites">Favorites first</option>
+                      <option value="viewers-desc">Most viewers</option>
+                      <option value="viewers-asc">Fewest viewers</option>
+                    </select>
+                  </label>
+                )}
                 <div className="following-preferences">
                   <label className="automation-toggle compact">
                     <span><strong>Favorite live alerts</strong><small>Show a small alert while SquadView is open.</small></span>
@@ -6151,7 +6437,7 @@ function SquadViewApp() {
                 <div className="following-state-card"><strong>Following Live is temporarily unavailable</strong><p>{followingError}</p><button type="button" className="secondary-button" onClick={() => void refreshFollowedLiveStreams()}>Try again</button></div>
               ) : orderedFollowedLiveStreams.length ? (
                 <div className="following-live-grid">
-                  {orderedFollowedLiveStreams.map((stream) => {
+                  {sortedLiveForDiscovery.map((stream) => {
                     const channel = cleanChannel(stream.user_login);
                     const alreadyAdded = validInputs.includes(channel);
                     const groupIsFull = validInputs.length >= viewerStreamLimit;

@@ -882,6 +882,9 @@ export default function TwitchPlayer({
   onListen,
   onFocus,
   onChat,
+  mobileChatSelectable = false,
+  mobileChatSelected = false,
+  onSelectMobileChat,
   onAudioReconcile,
   onLiveAudioStateChange,
   onStreamStatusChange,
@@ -1460,7 +1463,20 @@ export default function TwitchPlayer({
         )}
         <span className="live-dot" />
 
-        <strong>{channel}</strong>
+        {mobileChatSelectable ? (
+          <button
+            type="button"
+            className={`mobile-stream-chat-selector ${mobileChatSelected ? 'is-current' : ''}`}
+            aria-pressed={mobileChatSelected}
+            aria-label={`Show ${channel} chat`}
+            title={`Show ${channel} chat`}
+            onClick={onSelectMobileChat}
+          >
+            {channel}
+          </button>
+        ) : (
+          <strong>{channel}</strong>
+        )}
 
         {isTwitchFollowed && (
           <span

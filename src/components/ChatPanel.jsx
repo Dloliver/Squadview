@@ -13,6 +13,33 @@ import {
 
 const MAX_NATIVE_MESSAGES = 250;
 const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
+// Only emote IDs and local usage counts are saved; never Twitch messages or tokens.
+const NATIVE_EMOTE_USAGE_KEY = 'squadview:native-emote-usage:v1';
+const MAX_EMOTE_USAGE_ENTRIES = 60;
+
+function readNativeEmoteUsage() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(NATIVE_EMOTE_USAGE_KEY) || '[]');
+    if (!Array.isArray(stored)) return [];
+    return stored.filter((entry) =>
+      entry && typeof entry.id === 'string' && entry.id.length > 0 && entry.id.length < 128 &&
+      Number.isFinite(entry.count) && entry.count > 0
+    ).slice(0, MAX_EMOTE_USAGE_ENTRIES);
+  } catch {
+    return [];
+  }
+}
+
+function nextNativeEmoteUsage(current, id) {
+  const safeId = String(id || '').trim();
+  if (!safeId || safeId.length >= 128) return current;
+  const previous = current.find((entry) => entry.id === safeId);
+  return [
+    { id: safeId, count: Math.min((previous?.count || 0) + 1, 9999), lastUsed: Date.now() },
+    ...current.filter((entry) => entry.id !== safeId),
+  ].slice(0, MAX_EMOTE_USAGE_ENTRIES);
+}
+
 // Short local chat history; messages are never uploaded to SquadView.
 const NATIVE_CHAT_HISTORY_PREFIX = 'squadview:native-chat-history:v1:';
 const NATIVE_CHAT_HISTORY_TTL_MS = 10 * 60 * 1000;
@@ -237,8 +264,46 @@ function ChatMessageBody({ message }) {
 
 
 
-// Keep Twitch emotes grouped by their real broadcaster, not a generic channel label.
-// Twitch returns owner_id with each emote; names are enriched by twitch-account.
+// Group emotes by their real Twitch owner ID internally, but do not show raw
+// numeric IDs to viewers when Twitch does not return the owner's name.
+// These hints describe emote text, NOT verified creator names.
+function nativeEmoteNameHint(ownerEmotes) {
+  const names = ownerEmotes
+    .map((item) => String(item?.name || '').trim())
+    .filter(Boolean);
+  if (!names.length) return 'Emotes';
+  let prefix = names[0];
+  for (const name of names.slice(1)) {
+    let common = 0;
+    while (common < prefix.length && common < name.length &&
+      prefix[common].toLowerCase() === name[common].toLowerCase()) common += 1;
+    prefix = prefix.slice(0, common);
+    if (prefix.length < 4) break;
+  }
+  const hint = prefix.length >= 4 ? prefix : names[0];
+  return hint.length > 15 ? `${hint.slice(0, 15)}…` : hint;
+}
+
+function nativeEmoteOwnerSource(emote, currentChannel, currentBroadcasterId, availableEmotes = []) {
+  const ownerId = String(emote?.owner_id || '').trim();
+  if ((ownerId && ownerId === currentBroadcasterId) || (emote?.is_channel_emote && !ownerId)) {
+    return { label: `#${currentChannel} · Current chat`, short: `#${currentChannel}` };
+  }
+  if (ownerId && ownerId !== '0') {
+    const sameOwner = availableEmotes.filter((item) => String(item?.owner_id || '').trim() === ownerId);
+    const named = sameOwner.find((item) => item?.owner_name || item?.owner_login) || emote;
+    const name = String(named?.owner_name || named?.owner_login || '').trim();
+    if (name) return { label: `#${name} · Twitch channel`, short: `#${name}` };
+    const hint = nativeEmoteNameHint(sameOwner.length ? sameOwner : [emote]);
+    return { label: `Emote collection · ${hint} · Channel name unavailable`, short: hint };
+  }
+  const type = String(emote?.emote_type || '').trim().toLowerCase();
+  if (['globals', 'smilies', 'none'].includes(type) || !ownerId) {
+    return { label: 'Twitch global emotes', short: 'Global' };
+  }
+  return { label: 'Other unlocked Twitch emotes', short: 'Other' };
+}
+
 function buildNativeEmoteSections(availableEmotes, currentChannel, currentBroadcasterId) {
   const sections = [];
   const byKey = new Map();
@@ -257,20 +322,15 @@ function buildNativeEmoteSections(availableEmotes, currentChannel, currentBroadc
     const ownerId = String(emote?.owner_id || '').trim();
     const type = String(emote?.emote_type || '').trim().toLowerCase();
 
-    if (emote?.is_channel_emote || (ownerId && ownerId === currentBroadcasterId)) {
+    if ((ownerId && ownerId === currentBroadcasterId) || (emote?.is_channel_emote && !ownerId)) {
       append('current-channel', `Current channel · #${currentChannel}`, emote);
       continue;
     }
 
     if (ownerId && ownerId !== '0') {
-      const ownerLogin = String(emote?.owner_login || '').trim();
-      const ownerName = String(emote?.owner_name || '').trim();
-      const displayName = ownerName || ownerLogin;
       append(
         `owner:${ownerId}`,
-        displayName
-          ? `#${displayName} · Channel emotes`
-          : `Channel ID ${ownerId} · Name unavailable`,
+        nativeEmoteOwnerSource(emote, currentChannel, currentBroadcasterId, availableEmotes).label,
         emote,
       );
       continue;
@@ -472,6 +532,12 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const [emoteErrorCode, setEmoteErrorCode] = useState('');
   const [emotes, setEmotes] = useState([]);
   const [emoteSearch, setEmoteSearch] = useState('');
+  const [emoteCollection, setEmoteCollection] = useState('current-channel');
+  const [emoteUsage, setEmoteUsage] = useState(readNativeEmoteUsage);
+  useEffect(() => {
+    try { localStorage.setItem(NATIVE_EMOTE_USAGE_KEY, JSON.stringify(emoteUsage)); }
+    catch { /* Remembering emotes is optional. */ }
+  }, [emoteUsage]);
   const [animatePickerEmotes, setAnimatePickerEmotes] = useState(() => (
     typeof window === 'undefined' || !window.matchMedia ||
     !window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -618,6 +684,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setSendError('');
     setEmotePickerOpen(false);
     setEmoteSearch('');
+    setEmoteCollection('current-channel');
     setEmoteError('');
     setEmoteErrorCode('');
     setError('');
@@ -816,14 +883,40 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     );
   }, [emotes, emoteSearch]);
 
-  const emoteSections = useMemo(
-    () => buildNativeEmoteSections(
-      filteredEmotes,
-      normalizedChannel,
-      String(broadcaster?.id || '').trim(),
-    ),
-    [filteredEmotes, normalizedChannel, broadcaster?.id],
-  );
+  // A compact account rail keeps Twitch emotes separated by their real owner.
+  // Frequent uses only currently available IDs, so stale/unlocked emotes never appear.
+  const emoteSections = useMemo(() => {
+    const ownedSections = buildNativeEmoteSections(
+      emotes, normalizedChannel, String(broadcaster?.id || '').trim(),
+    );
+    const availableById = new Map(emotes.map((emote) => [String(emote.id), emote]));
+    const favorites = emoteUsage
+      .map((entry) => ({ ...entry, emote: availableById.get(entry.id) }))
+      .filter((entry) => entry.emote)
+      .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed)
+      .slice(0, 24)
+      .map((entry) => entry.emote);
+    return favorites.length
+      ? [{ key: 'frequent', label: 'Frequently used', emotes: favorites }, ...ownedSections]
+      : ownedSections;
+  }, [emotes, normalizedChannel, broadcaster?.id, emoteUsage]);
+
+  const activeEmoteSection = emoteSections.find((section) => section.key === emoteCollection)
+    || emoteSections.find((section) => section.key === 'current-channel')
+    || emoteSections[0] || null;
+  const emoteSearchActive = Boolean(emoteSearch.trim());
+  // Search looks across every account; selecting an account returns to that group.
+  const visibleEmoteSections = emoteSearchActive
+    ? buildNativeEmoteSections(
+        filteredEmotes, normalizedChannel, String(broadcaster?.id || '').trim(),
+      )
+    : activeEmoteSection ? [activeEmoteSection] : [];
+
+  function trackInsertedEmote(emote) {
+    const id = String(emote?.id || '');
+    if (!id) return;
+    setEmoteUsage((previous) => nextNativeEmoteUsage(previous, id));
+  }
 
   const switchToTwitchChat = () => {
     disableNativeTwitchChat();
@@ -991,6 +1084,16 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           onUseTwitch={switchToTwitchChat}
         />
       </header>
+      <nav className="native-chat-quick-actions" aria-label="Twitch chat shortcuts">
+        <a href={`https://www.twitch.tv/popout/${encodeURIComponent(normalizedChannel)}/chat`}
+          target="_blank" rel="noopener noreferrer" title="Open Twitch chat for Bits and Cheer">
+          ◆ Bits / Cheer on Twitch
+        </a>
+        <a href={`https://www.twitch.tv/moderator/${encodeURIComponent(normalizedChannel)}`}
+          target="_blank" rel="noopener noreferrer" title="Open official Twitch Mod View (requires moderator permission)">
+          ♢ Mod View
+        </a>
+      </nav>
 
       <div
         role="log"
@@ -1087,12 +1190,12 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           aria-label="Twitch emote picker"
           style={{
             flexShrink: 0,
-            maxHeight: 230,
+            maxHeight: 'min(400px, 52dvh)',
             display: 'flex',
             flexDirection: 'column',
-            gap: 7,
-            padding: '8px 10px',
-            borderBottom: '1px solid rgba(255,255,255,0.08)',
+            gap: 8,
+            padding: '9px 9px 8px',
+            borderBottom: '1px solid rgba(255,255,255,0.10)',
             background: '#18181b',
           }}
         >
@@ -1113,53 +1216,38 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             type="search"
             value={emoteSearch}
             onChange={(event) => setEmoteSearch(event.target.value)}
-            placeholder="Search your Twitch emotes"
-            aria-label="Search Twitch emotes"
+            placeholder="Search emotes or channels…"
+            aria-label="Search emotes and channels"
             style={{
               width: '100%',
               minHeight: 38,
               border: '1px solid rgba(255,255,255,0.16)',
-              borderRadius: 6,
+              borderRadius: 7,
               background: '#0e0e10',
               color: '#efeff1',
-              padding: '7px 9px',
+              padding: '7px 10px',
               font: 'inherit',
               fontSize: 16,
             }}
           />
 
           {emoteStatus === 'loading' ? (
-            <div style={{ padding: 8, color: '#adadb8', fontSize: 11 }}>
+            <div role="status" style={{ padding: 8, color: '#adadb8', fontSize: 12 }}>
               Loading your Twitch emotes…
             </div>
           ) : emoteStatus === 'error' ? (
             <div
-              style={{
-                display: 'grid',
-                gap: 7,
-                padding: 8,
-                borderRadius: 7,
-                background: 'rgba(255,255,255,0.05)',
-                color: '#dedee3',
-                fontSize: 11,
-              }}
+              role="alert"
+              style={{ display: 'grid', gap: 7, padding: 8, borderRadius: 7,
+                background: 'rgba(255,255,255,0.05)', color: '#dedee3', fontSize: 12 }}
             >
               <span>{emoteError}</span>
               {emoteErrorCode === 'twitch_emote_scope_required' && (
                 <button
                   type="button"
-                  onClick={() => {
-                    void signInWithTwitch({ forceVerify: true });
-                  }}
-                  style={{
-                    minHeight: 38,
-                    border: 0,
-                    borderRadius: 6,
-                    background: '#9147ff',
-                    color: '#fff',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
+                  onClick={() => { void signInWithTwitch({ forceVerify: true }); }}
+                  style={{ minHeight: 38, border: 0, borderRadius: 6,
+                    background: '#9147ff', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
                 >
                   Reconnect Twitch for emotes
                 </button>
@@ -1167,118 +1255,184 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             </div>
           ) : (
             <div
+              className="native-chat-emote-browser"
               style={{
-                minHeight: 0,
-                overflowY: 'auto',
                 display: 'grid',
-                gap: 10,
-                padding: '1px 0 4px',
-                overscrollBehavior: 'contain',
+                gridTemplateColumns: '59px minmax(0, 1fr)',
+                gap: 8,
+                flex: '1 1 auto',
+                minHeight: 0,
+                overflow: 'hidden',
               }}
             >
-              {emoteSections.map((section) => (
-                <section
-                  key={section.key}
-                  aria-label={section.label}
-                  style={{
-                    display: 'grid',
-                    gap: 5,
-                  }}
-                >
-                  <div
-                    style={{
-                      position: 'sticky',
-                      top: 0,
-                      zIndex: 1,
-                      padding: '4px 3px',
-                      background: '#18181b',
-                      color: section.key === 'current-channel'
-                        ? '#bf94ff'
-                        : '#adadb8',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: '0.01em',
-                    }}
-                  >
-                    {section.label}
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(42px, 1fr))',
-                      gap: 5,
-                    }}
-                  >
-                    {section.emotes.map((emote) => (
-                      <button
-                        type="button"
-                        key={emote.id}
-                        onClick={() => insertEmote(emote.name)}
-                        title={`${emote.name} · ${section.label}`}
-                        aria-label={`Insert ${emote.name} from ${section.label}`}
-                        style={{
-                          minHeight: 44,
-                          border: emote.is_channel_emote
-                            ? '1px solid rgba(145,71,255,0.55)'
-                            : '1px solid rgba(255,255,255,0.08)',
-                          borderRadius: 6,
-                          background: '#0e0e10',
-                          display: 'grid',
-                          placeItems: 'center',
-                          cursor: 'pointer',
-                          padding: 4,
-                        }}
+              <nav
+                aria-label="Emote accounts"
+                style={{
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  overscrollBehavior: 'contain',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 5,
+                  borderRight: '1px solid rgba(255,255,255,0.09)',
+                  paddingRight: 4,
+                }}
+              >
+                {emoteSections.map((section) => {
+                  const selected = !emoteSearchActive && activeEmoteSection?.key === section.key;
+                  const shortLabel = section.key === 'frequent' ? 'Used'
+                    : section.key === 'twitch-global' ? 'Global'
+                    : section.key === 'current-channel' ? 'Here'
+                    : section.key.startsWith('owner:') && section.label.startsWith('Emote collection · ')
+                      ? section.label.split(' · ')[1]
+                      : section.label.replace(/^#/, '').split(' · ')[0];
+                  const iconEmote = section.key.startsWith('owner:')
+                    ? section.emotes.find((emote) => emote.image_url)
+                    : null;
+                  return (
+                    <button
+                      key={section.key}
+                      type="button"
+                      aria-label={`Show ${section.label} (${section.emotes.length} emotes)`}
+                      aria-pressed={selected}
+                      title={section.label}
+                      onClick={() => {
+                        setEmoteCollection(section.key);
+                        setEmoteSearch('');
+                      }}
+                      style={{
+                        minHeight: 55,
+                        flexShrink: 0,
+                        border: selected ? '1px solid #9147ff' : '1px solid transparent',
+                        borderRadius: 8,
+                        background: selected ? '#3b2066' : 'transparent',
+                        color: selected ? '#fff' : '#c5c2cb',
+                        cursor: 'pointer',
+                        padding: '5px 2px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 2,
+                        width: '100%',
+                      }}
+                    >
+                      {iconEmote ? (
+                        <img
+                          src={nativePickerEmoteUrl(iconEmote, animatePickerEmotes)}
+                          alt=""
+                          loading="lazy"
+                          style={{ width: 27, height: 27, objectFit: 'contain' }}
+                        />
+                      ) : (
+                        <span aria-hidden="true" style={{ fontSize: 21, lineHeight: '27px' }}>
+                          {section.key === 'frequent' ? '◷' : section.key === 'twitch-global' ? '✦' : '●'}
+                        </span>
+                      )}
+                      <span
+                        aria-hidden="true"
+                        style={{ fontSize: 9, fontWeight: 700, maxWidth: 50,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       >
-                        {emote.image_url ? (
-                          <img
-                            src={nativePickerEmoteUrl(emote, animatePickerEmotes)}
-                             onError={(event) => {
-                               if (event.currentTarget.src !== emote.image_url) {
-                                 event.currentTarget.src = emote.image_url;
-                               }
-                             }}
-                            alt={emote.name}
-                            loading="lazy"
-                            decoding="async"
-                            fetchPriority="low"
-                            style={{
-                              width: 28,
-                              height: 28,
-                              objectFit: 'contain',
-                            }}
-                          />
-                        ) : (
-                          <span
-                            style={{
-                              maxWidth: '100%',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              color: '#efeff1',
-                              fontSize: 9,
-                            }}
-                          >
-                            {emote.name}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ))}
+                        {shortLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
 
-              {emoteStatus === 'ready' && !filteredEmotes.length && (
-                <div
-                  style={{
-                    padding: 8,
-                    color: '#adadb8',
-                    fontSize: 11,
-                    textAlign: 'center',
-                  }}
-                >
-                  No matching emotes.
-                </div>
-              )}
+              <div
+                aria-label={emoteSearchActive ? 'Emote search results' : activeEmoteSection?.label || 'Emotes'}
+                style={{ minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain',
+                  display: 'flex', flexDirection: 'column', gap: 11, padding: '0 1px 4px' }}
+              >
+                {visibleEmoteSections.map((section) => (
+                  <section key={section.key} aria-label={section.label}>
+                    <div
+                      style={{
+                        position: 'sticky', top: 0, zIndex: 1,
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        justifyContent: 'space-between',
+                        padding: '4px 2px 8px', background: '#18181b',
+                        color: section.key === 'current-channel' ? '#bf94ff' : '#dedde5',
+                        fontSize: 12, fontWeight: 700,
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflowWrap: 'anywhere',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                        whiteSpace: section.label.startsWith('Emote collection · ') ? 'normal' : 'nowrap' }}>
+                        {section.label}
+                      </span>
+                      <span style={{ color: '#89858f', fontSize: 10, flexShrink: 0 }}>
+                        {section.emotes.length}
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(40px, 1fr))',
+                        gap: 5,
+                      }}
+                    >
+                      {section.emotes.map((emote) => (
+                        <button
+                          type="button"
+                          key={emote.id}
+                          onClick={() => {
+                            insertEmote(emote.name);
+                            trackInsertedEmote(emote);
+                          }}
+                          title={`${emote.name} · ${nativeEmoteOwnerSource(emote, normalizedChannel, String(broadcaster?.id || ''), emotes).label}`}
+                          aria-label={`Insert ${emote.name} from ${nativeEmoteOwnerSource(emote, normalizedChannel, String(broadcaster?.id || ''), emotes).label}`}
+                          style={{
+                            minHeight: section.key === 'frequent' ? 64 : 45,
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: 6,
+                            background: '#0e0e10',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexDirection: 'column', gap: 1,
+                            cursor: 'pointer', padding: 3,
+                          }}
+                        >
+                          {emote.image_url ? (
+                            <img
+                              src={nativePickerEmoteUrl(emote, animatePickerEmotes)}
+                              onError={(event) => {
+                                if (event.currentTarget.src !== emote.image_url) {
+                                  event.currentTarget.src = emote.image_url;
+                                }
+                              }}
+                              alt={emote.name}
+                              loading="lazy"
+                              decoding="async"
+                              fetchPriority="low"
+                              style={{ width: 32, height: 32, objectFit: 'contain' }}
+                            />
+                          ) : (
+                            <span style={{ maxWidth: '100%', overflow: 'hidden',
+                              textOverflow: 'ellipsis', color: '#efeff1', fontSize: 9 }}>
+                              {emote.name}
+                            </span>
+                          )}
+                          {section.key === 'frequent' && (
+                            <small style={{ width: '100%', overflow: 'hidden',
+                              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              fontSize: 8, color: '#a9a3b4', textAlign: 'center' }}>
+                              {nativeEmoteOwnerSource(emote, normalizedChannel, String(broadcaster?.id || ''), emotes).short}
+                            </small>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+                {emoteStatus === 'ready' && !visibleEmoteSections.length && (
+                  <div role="status" style={{ padding: 10, color: '#adadb8', fontSize: 11 }}>
+                    {emoteSearchActive ? 'No matching emotes.' : 'No emotes available for this account.'}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -1333,6 +1487,10 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               setDraft('');
               setComposerCursor(0);
               setMentionActiveIndex(0);
+              // Dismiss the picker only after Twitch accepts the message.
+              // A failed send retains the draft and any open picker for retry.
+              setEmotePickerOpen(false);
+              setEmoteSearch('');
               sentSuccessfully = true;
             } catch (nextError) {
               setSendError(nextError?.message || 'Twitch could not send that message.');
@@ -1353,10 +1511,83 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           }}
           style={{
             display: 'flex',
-            gap: 7,
-            alignItems: 'flex-end',
+            flexDirection: 'column',
+            gap: 8,
+            alignItems: 'stretch',
           }}
         >
+          <div
+            className="native-chat-composer-tools"
+            aria-label="Chat tools"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+
+          <button
+            type="button"
+            aria-label="Switch to Twitch chat for Channel Points rewards"
+            title="Use Channel Points in Twitch chat"
+            onClick={switchToTwitchChat}
+            style={{
+              width: 48,
+              minWidth: 48,
+              height: 44,
+              padding: '3px 2px',
+              border: '1px solid rgba(145,71,255,0.52)',
+              borderRadius: 6,
+              background: '#302241',
+              color: '#e8dbff',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 0,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>◇</span>
+            <span style={{ fontSize: 9, fontWeight: 700, lineHeight: 1.2 }}>Points</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Open Twitch emote picker"
+            aria-expanded={emotePickerOpen}
+            title="Twitch emotes"
+            disabled={!broadcaster?.id || status !== 'ready'}
+            onClick={() => setEmotePickerOpen((open) => !open)}
+            style={{
+              width: 44,
+              minWidth: 44,
+              height: 44,
+              border: '1px solid rgba(255,255,255,0.16)',
+              borderRadius: 6,
+              background: emotePickerOpen ? '#3b2066' : '#26262c',
+              color: '#efeff1',
+              fontSize: 20,
+              lineHeight: 1,
+              cursor: 'pointer',
+              opacity:
+                !broadcaster?.id || status !== 'ready'
+                  ? 0.5
+                  : 1,
+            }}
+          >
+            ☺
+          </button>
+
+          </div>
+          <div
+            className="native-chat-composer-entry"
+            style={{
+              display: 'flex',
+              alignItems: 'flex-end',
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
           <textarea
             ref={composerRef}
             value={draft}
@@ -1410,7 +1641,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             }}
             placeholder={
               broadcaster?.id
-                ? `Chat as your Twitch account`
+                ? 'Send a message…'
                 : 'Connecting to Twitch chat…'
             }
             disabled={!broadcaster?.id || sendBusy || status !== 'ready'}
@@ -1421,7 +1652,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               flex: '1 1 auto',
               minWidth: 0,
               minHeight: 50,
-              maxHeight: 96,
+              maxHeight: 100,
               resize: 'none',
               border: '1px solid rgba(255,255,255,0.16)',
               borderRadius: 6,
@@ -1436,58 +1667,6 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             }}
           />
           <button
-            type="button"
-            aria-label="Switch to Twitch chat for Channel Points rewards"
-            title="Use Channel Points in Twitch chat"
-            onClick={switchToTwitchChat}
-            style={{
-              width: 48,
-              minWidth: 48,
-              height: 44,
-              padding: '3px 2px',
-              border: '1px solid rgba(145,71,255,0.52)',
-              borderRadius: 6,
-              background: '#302241',
-              color: '#e8dbff',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              alignItems: 'center',
-              gap: 0,
-            }}
-          >
-            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>◇</span>
-            <span style={{ fontSize: 9, fontWeight: 700, lineHeight: 1.2 }}>Points</span>
-          </button>
-          <button
-            type="button"
-            aria-label="Open Twitch emote picker"
-            aria-expanded={emotePickerOpen}
-            title="Twitch emotes"
-            disabled={!broadcaster?.id || status !== 'ready'}
-            onClick={() => setEmotePickerOpen((open) => !open)}
-            style={{
-              width: 44,
-              minWidth: 44,
-              height: 44,
-              border: '1px solid rgba(255,255,255,0.16)',
-              borderRadius: 6,
-              background: emotePickerOpen ? '#3b2066' : '#26262c',
-              color: '#efeff1',
-              fontSize: 20,
-              lineHeight: 1,
-              cursor: 'pointer',
-              opacity:
-                !broadcaster?.id || status !== 'ready'
-                  ? 0.5
-                  : 1,
-            }}
-          >
-            ☺
-          </button>
-
-          <button
             type="submit"
             disabled={
               !broadcaster?.id ||
@@ -1496,10 +1675,11 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               !draft.trim()
             }
             style={{
-              minHeight: 36,
+              minHeight: 44,
+              minWidth: 64,
               border: 0,
-              borderRadius: 6,
-              padding: '0 12px',
+              borderRadius: 8,
+              padding: '0 10px',
               background: '#9147ff',
               color: '#fff',
               fontWeight: 700,
@@ -1513,8 +1693,9 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                   : 1,
             }}
           >
-            {sendBusy ? 'Sending…' : 'Chat'}
+            {sendBusy ? 'Sending…' : 'Send'}
           </button>
+          </div>
         </form>
 
         <div
