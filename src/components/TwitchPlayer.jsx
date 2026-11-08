@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { calculateTwitchViewportFit } from '../lib/twitchViewportFit';
 
 let twitchScriptPromise;
 
@@ -882,6 +883,9 @@ export default function TwitchPlayer({
   isFavorite = false,
   onToggleFavorite,
   onRemove,
+  streamLocked = false,
+  lockDisabled = false,
+  onToggleLock,
   canViewerReorder = false,
   viewerDragActive = false,
   onViewerDragStart,
@@ -899,6 +903,7 @@ export default function TwitchPlayer({
   chatCovered = false,
 }) {
   const mountRef = useRef(null);
+  const viewportRef = useRef(null);
   const playerRef = useRef(null);
 
   const stateRef = useRef({
@@ -936,6 +941,62 @@ export default function TwitchPlayer({
   const [liveAudible, setLiveAudible] = useState(Boolean(audioAudible));
   const nativeAudioMismatchCountRef = useRef(0);
   const lastReportedNativeAudioRef = useRef('');
+
+  // Desktop two-by-two cells can be shorter than Twitch's required 300px
+  // iframe height (especially at 720p with chat). Render the *complete* embed
+  // at a valid internal size, then scale it visually to fit instead of cutting
+  // off the bottom. This never touches player or audio state.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const mount = mountRef.current;
+    if (!viewport || !mount) return undefined;
+
+    const clearFit = () => {
+      viewport.classList.remove('squadview-fit-embed');
+      mount.style.removeProperty('--squadview-fit-width');
+      mount.style.removeProperty('--squadview-fit-height');
+      mount.style.removeProperty('--squadview-fit-scale');
+    };
+
+    const syncViewportFit = () => {
+      const shell = viewport.closest('.viewer-shell');
+      const desktopShortViewport = window.matchMedia?.('(min-width: 761px) and (max-height: 800px)').matches ?? false;
+      const inGrid = shell?.matches('.viewer-shell.mode-dual, .viewer-shell.mode-chat.chat-layout-grid');
+      if (!visible || !desktopShortViewport || !inGrid) {
+        clearFit();
+        return;
+      }
+
+      const fit = calculateTwitchViewportFit(viewport.clientWidth, viewport.clientHeight);
+      if (!fit) return;
+      mount.style.setProperty('--squadview-fit-width', `${fit.embedWidth}px`);
+      mount.style.setProperty('--squadview-fit-height', `${fit.embedHeight}px`);
+      mount.style.setProperty('--squadview-fit-scale', String(fit.scale));
+      viewport.classList.add('squadview-fit-embed');
+    };
+
+    syncViewportFit();
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(syncViewportFit)
+      : null;
+    observer?.observe(viewport);
+    // The viewer mode can change without a window resize (Grid ↔ Focus).
+    // Observe its class as well so the fit is cleared or restored promptly.
+    const modeObserver = typeof MutationObserver !== 'undefined' && viewport.closest('.viewer-shell')
+      ? new MutationObserver(syncViewportFit)
+      : null;
+    const modeShell = viewport.closest('.viewer-shell');
+    if (modeObserver && modeShell) {
+      modeObserver.observe(modeShell, { attributes: true, attributeFilter: ['class'] });
+    }
+    window.addEventListener('resize', syncViewportFit);
+    return () => {
+      observer?.disconnect();
+      modeObserver?.disconnect();
+      window.removeEventListener('resize', syncViewportFit);
+      clearFit();
+    };
+  }, [visible]);
 
   useEffect(() => {
     onStreamStatusChange?.(channel, status);
@@ -1491,6 +1552,17 @@ export default function TwitchPlayer({
         </button>
 
         <div className="stream-card-actions">
+          {visible && typeof onToggleLock === 'function' && (
+            <button
+              type="button"
+              className={`stream-lock-chip ${streamLocked ? 'is-locked' : ''}`}
+              onClick={onToggleLock}
+              aria-pressed={streamLocked}
+              aria-label={streamLocked ? `Unlock ${channel} to rotate` : `Lock ${channel} on screen`}
+              title={lockDisabled ? 'Unlock another stream first' : streamLocked ? `Unlock ${channel}` : `Keep ${channel} visible when paging`}
+              disabled={lockDisabled}
+            ><span aria-hidden="true">{streamLocked ? '🔒' : '🔓'}</span> {streamLocked ? 'Locked' : 'Lock'}</button>
+          )}
           {visible && (canMoveEarlier || canMoveLater) && (
             <span className="viewer-mobile-reorder" aria-label={`Reorder ${channel}`}>
               <button type="button" onClick={onMoveEarlier} disabled={!canMoveEarlier}
@@ -1616,7 +1688,7 @@ export default function TwitchPlayer({
         </div>
       )}
 
-      <div className="player-viewport">
+      <div className="player-viewport" ref={viewportRef}>
         <div
           className="player-mount"
           ref={mountRef}

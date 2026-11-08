@@ -8755,3 +8755,201 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     flex: 0 0 auto !important;
   }
 }
+
+
+/* SquadView Phase 6.3.4A: visible, low-distraction stream lock state. */
+.stream-lock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  border: 1px solid rgba(168, 179, 199, .45);
+  border-radius: 999px;
+  padding: .35rem .55rem;
+  background: rgba(35, 47, 70, .75);
+  color: #eef2ff;
+  font: inherit;
+  font-size: .74rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.stream-lock-chip.is-locked {
+  border-color: rgba(151, 185, 255, .95);
+  background: rgba(78, 71, 139, .8);
+  color: #fff;
+}
+.stream-lock-chip:disabled { opacity: .5; cursor: not-allowed; }
+.stream-lock-chip:focus-visible { outline: 2px solid #c9b4ff; outline-offset: 2px; }
+
+/* SquadView Phase 6.3.4A.1 — compact viewer chrome.
+   Layout only: no playback, audio, chat, roster, lock or paging changes. */
+@media (min-width: 900px) {
+  .viewer-shell .viewer-header {
+    flex: 0 0 42px;
+    min-height: 42px;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    padding: 2px 9px;
+  }
+  .viewer-shell .viewer-header .icon-button {
+    width: 30px;
+    height: 30px;
+  }
+  .viewer-shell .viewer-header > div:nth-child(2) {
+    align-items: baseline;
+    gap: 6px;
+  }
+  .viewer-shell .viewer-header > div:nth-child(2) strong {
+    font-size: 16px;
+  }
+  .viewer-shell .viewer-header > div:nth-child(2) span {
+    font-size: 10px;
+  }
+  .viewer-shell .viewer-primary-actions {
+    gap: 5px;
+  }
+  .viewer-shell .viewer-primary-actions .viewer-manage-action,
+  .viewer-shell .viewer-primary-actions .viewer-share-action {
+    min-height: 30px;
+    padding-inline: 11px;
+    font-size: 10px;
+  }
+  .viewer-shell .viewer-settings-trigger {
+    min-height: 30px;
+    padding-inline: 10px;
+  }
+  .viewer-shell .viewer-settings-trigger > span:first-child {
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 761px) {
+  /* Container sizing reacts to the actual stream tile, including a chat rail. */
+  .viewer-shell .stream-card {
+    container: squadview-stream / inline-size;
+  }
+  .viewer-shell .stream-card-header,
+  .viewer-shell.compact-multiview .stream-card-header {
+    box-sizing: border-box;
+    min-height: 33px;
+    padding: 2px 5px;
+    gap: 4px;
+  }
+  .viewer-shell .stream-card-header strong {
+    font-size: 11px;
+  }
+  .viewer-shell .stream-card-header small {
+    font-size: 8px;
+  }
+  .viewer-shell .stream-card-actions {
+    gap: 3px;
+    flex: 0 0 auto;
+  }
+  .viewer-shell .viewer-reorder-handle {
+    width: 22px;
+    height: 26px;
+    flex-basis: 22px;
+  }
+  .viewer-shell .remove-stream-chip {
+    width: 20px;
+    height: 24px;
+    font-size: 15px;
+  }
+  .viewer-shell .twitch-follow-state {
+    min-height: 20px;
+    padding: 2px 5px;
+    font-size: 9px;
+  }
+  .viewer-shell .stream-lock-chip {
+    min-height: 26px;
+    padding: 4px 7px;
+    gap: 3px;
+    font-size: 10px;
+    line-height: 1;
+  }
+  .viewer-shell .refresh-stream-chip {
+    width: 26px;
+    min-height: 26px;
+    flex-basis: 26px;
+  }
+  .viewer-shell .volume-chip {
+    width: 26px;
+    height: 26px;
+    flex-basis: 26px;
+  }
+  .viewer-shell .listen-chip,
+  .viewer-shell .focus-chip,
+  .viewer-shell .chat-chip,
+  .viewer-shell .favorite-chip {
+    min-height: 26px;
+    padding-inline: 6px;
+    font-size: 9px;
+  }
+  .viewer-shell .favorite-chip {
+    width: 26px;
+    padding: 0;
+  }
+  /* Retain full follow/status labels on wide tiles. On narrow 2x2 cells,
+     favor stream name and key playback controls. Full follow state remains
+     accessible via the original title/text in the DOM. */
+  @container squadview-stream (max-width: 560px) {
+    .stream-card-header > strong {
+      min-width: 0;
+      flex: 1 1 auto;
+      max-width: none;
+    }
+    .stream-card-header .twitch-follow-state {
+      box-sizing: border-box;
+      flex: 0 0 24px;
+      width: 24px;
+      max-width: 24px;
+      min-height: 24px;
+      padding: 3px;
+      justify-content: center;
+      overflow: hidden;
+      font-size: 0;
+      letter-spacing: 0;
+    }
+    .stream-card-header .twitch-follow-state::after {
+      content: '✓';
+      font-size: 12px;
+      line-height: 1;
+    }
+    .stream-card-header > small {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+}
+
+/* SquadView Phase 6.3.4A.2 — full-frame Twitch desktop grid fit.
+   Twitch must still initialize at >=400x300. Scale a complete 16:9 embed
+   into the available tile on SHORT desktop viewports instead of cropping its bottom.
+   This is strictly a desktop grid presentation rule: audio, player lifecycle,
+   chat, stream locks, paging, 1080p+ full-height views and mobile layouts are unchanged. */
+@media (min-width: 761px) and (max-height: 800px) {
+  .viewer-shell.mode-dual .stream-card.is-visible .player-viewport.squadview-fit-embed,
+  .viewer-shell.mode-chat.chat-layout-grid .stream-card.is-visible .player-viewport.squadview-fit-embed {
+    position: relative;
+    background: #000;
+    overflow: hidden;
+  }
+
+  .viewer-shell.mode-dual .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount,
+  .viewer-shell.mode-chat.chat-layout-grid .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    inset: auto;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--squadview-fit-width) !important;
+    height: var(--squadview-fit-height) !important;
+    min-width: 400px;
+    min-height: 300px;
+    transform: translate(-50%, -50%) scale(var(--squadview-fit-scale));
+    transform-origin: center center;
+  }
+}

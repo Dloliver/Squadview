@@ -3,6 +3,7 @@ import TwitchPlayer from './components/TwitchPlayer';
 import YouTubeCompanion from './components/YouTubeCompanion';
 import YouTubeCompanionModal from './components/YouTubeCompanionModal';
 import ChatPanel from './components/ChatPanel';
+import { buildLockedPage, rotateMobilePair } from './lib/streamLocks';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
@@ -627,6 +628,14 @@ function SquadViewApp() {
   // Opt-in on browsers that can try multiple audible Twitch embeds.
   const [mobileDualAudioEnabled, setMobileDualAudioEnabled] = useState(false);
   const [slotChannels, setSlotChannels] = useState(() => initialViewer?.slotChannels || []);
+  // Locks follow Twitch channel identities, not array positions or the audio owner.
+  // Session-only: refresh restores locks, but starting a new viewer resets them.
+  const [streamLockSlots, setStreamLockSlots] = useState(() => {
+    const saved = initialViewer?.streamLockSlots;
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) return saved;
+    const lead = initialViewer?.channels?.[0];
+    return lead ? { [lead]: 0 } : {};
+  });
   const [desktopPage, setDesktopPage] = useState(() => initialViewer?.desktopPage || 0);
   // Keep the displayed desktop page independent from the stream that is focused.
   // Focusing a stream can enable its audio without reshuffling the grid.
@@ -1682,12 +1691,13 @@ function SquadViewApp() {
         desktopPage,
         desktopLeadChannel,
         chatLayout,
+        streamLockSlots,
       }));
       writeViewerHeartbeat();
     } catch {
       // Storage can be unavailable in private or restricted browsing contexts.
     }
-  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout]);
+  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout, streamLockSlots]);
 
   // Do not expire a viewer merely because the tab/app is hidden. A streamer may
   // intentionally keep SquadView running in the background for hours. Instead,
@@ -2759,6 +2769,7 @@ function SquadViewApp() {
       : 'single';
     setViewMode(initialViewMode);
     setSlotChannels(unique.slice(0, 2));
+    setStreamLockSlots(unique[0] ? { [unique[0]]: 0 } : {});
     setDesktopPage(0);
     setDesktopLeadChannel(unique[0]);
     setDesktopChatRotationChannels(unique.slice(1));
@@ -3268,18 +3279,38 @@ function SquadViewApp() {
     resumeAudioSelectedPlayers(nextPolicy);
   }
 
+  function toggleStreamLock(channel, visibleSlot, maxLocks) {
+    const cleaned = cleanChannel(channel);
+    if (!cleaned || !channels.includes(cleaned)) return;
+    setStreamLockSlots((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([candidate]) => channels.includes(candidate)),
+      );
+      if (Object.prototype.hasOwnProperty.call(next, cleaned)) {
+        delete next[cleaned];
+        return next;
+      }
+      if (!isDesktopGrid) {
+        // One tap moves the mobile lock from stream A to stream B.
+        // With no lock both mobile positions can rotate together.
+        return { [cleaned]: Math.min(1, Math.max(0, Number(visibleSlot) || 0)) };
+      }
+      if (Object.keys(next).length >= maxLocks) return current;
+      next[cleaned] = Math.max(0, Math.floor(Number(visibleSlot) || 0));
+      return next;
+    });
+  }
+
   function rotateOther(direction) {
     if (channels.length <= 2 || slotChannels.length < 2) return;
-
-    const activeSlotIndex = slotChannels.indexOf(activeChannel);
-    const replaceIndex = activeSlotIndex === 0 ? 1 : 0;
-    const currentOther = slotChannels[replaceIndex];
-    const candidates = channels.filter((channel) => channel !== activeChannel);
-    const currentIndex = Math.max(0, candidates.indexOf(currentOther));
-    const nextIndex = (currentIndex + direction + candidates.length) % candidates.length;
-    const nextChannel = candidates[nextIndex];
-
-    setSlotChannels((current) => current.map((channel, index) => index === replaceIndex ? nextChannel : channel));
+    const nextPair = rotateMobilePair({
+      channels,
+      pair: slotChannels,
+      lockedSlots: streamLockSlots,
+      direction,
+    });
+    resumeViewerChannelsFromGesture(nextPair);
+    setSlotChannels(nextPair);
   }
 
   function previousOther() {
@@ -3454,8 +3485,9 @@ function SquadViewApp() {
       setChatChannel(cleaned);
       return;
     }
-    const anchor = pair.includes(activeChannel) ? activeChannel : pair[0];
-    const nextPair = [anchor, cleaned].filter(Boolean);
+    const anchor = pair.find((channel) => Object.prototype.hasOwnProperty.call(streamLockSlots, channel))
+      || (pair.includes(activeChannel) ? activeChannel : pair[0]);
+    const nextPair = pair.map((channel) => channel === anchor ? channel : cleaned);
     resumeViewerChannelsFromGesture(nextPair);
     setSlotChannels(nextPair);
     setChatChannel(cleaned);
@@ -4146,6 +4178,7 @@ function SquadViewApp() {
       setListeningChannels(new Set());
       setAudibleChannels(new Set());
       setSlotChannels([]);
+      setStreamLockSlots({});
       setAudioEnabled(false);
       setDesktopPage(0);
       setDesktopLeadChannel('');
@@ -4861,29 +4894,51 @@ function SquadViewApp() {
     // Standard Grid + Chat deliberately retains its established pinned chat
     // owner and rotating-page behavior.
     const compactPagedChat = compactViewerEnabled && desktopGridChat && showDesktopChatRail;
-    const desktopPageCount = desktopGridChat && !compactPagedChat
-      ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
-      : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
-    const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
     const requestedChatChannel = channels.includes(chatChannel) ? chatChannel : activeChannel;
     const desktopPinnedChannel = desktopGridChat
       ? requestedChatChannel
       : desktopLeadChannel;
-    const desktopChannels = desktopGridChat && !compactPagedChat
-      ? getDesktopChatPageChannels(
-          channels,
-          desktopPinnedChannel,
-          desktopChatPinnedSlot,
-          desktopPageForRender,
-          desktopVisibleTwitchLimit,
-          desktopChatRotationChannels,
-        )
-      : getDesktopPageChannels(
-          channels,
-          desktopPinnedChannel,
-          desktopPageForRender,
-          desktopVisibleTwitchLimit,
-        );
+    const lockedDesktopGrid = Object.keys(streamLockSlots).some((channel) => channels.includes(channel));
+    const desktopRotationRoster = desktopGridChat && !compactPagedChat
+      ? [requestedChatChannel, ...getDesktopChatRotationChannels(channels, requestedChatChannel, desktopChatRotationChannels)]
+      : channels;
+    const desktopLockPageArgs = {
+      channels: desktopRotationRoster,
+      capacity: desktopVisibleTwitchLimit,
+      lockedSlots: streamLockSlots,
+      impliedPinnedChannel: desktopGridChat && !compactPagedChat ? requestedChatChannel : '',
+      impliedPinnedSlot: desktopChatPinnedSlot,
+      rotationOrder: desktopRotationRoster,
+    };
+    // Keep the original paging behavior if the viewer deliberately unlocks all.
+    const desktopPageModel = lockedDesktopGrid
+      ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPage })
+      : null;
+    const legacyDesktopPageCount = desktopGridChat && !compactPagedChat
+      ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
+      : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
+    const desktopPageCount = desktopPageModel?.pageCount || legacyDesktopPageCount;
+    const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
+    const desktopChannels = desktopPageModel
+      ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPageForRender }).channels
+      : desktopGridChat && !compactPagedChat
+        ? getDesktopChatPageChannels(
+            channels,
+            desktopPinnedChannel,
+            desktopChatPinnedSlot,
+            desktopPageForRender,
+            desktopVisibleTwitchLimit,
+            desktopChatRotationChannels,
+          )
+        : getDesktopPageChannels(
+            channels,
+            desktopPinnedChannel,
+            desktopPageForRender,
+            desktopVisibleTwitchLimit,
+          );
+    const maxVisibleStreamLocks = isDesktopGrid
+      ? Math.min(3, Math.max(0, desktopVisibleTwitchLimit - 1))
+      : 1;
     // When paging to a new set, temporarily show its first chat unless the
     // selected chat is already on that page. Do not rewrite the saved choice.
     const activeChatChannel = compactPagedChat && !desktopChannels.includes(requestedChatChannel)
@@ -4957,7 +5012,7 @@ function SquadViewApp() {
     const baseTwitchTileOrder = (channel) => {
       if (!isDesktopGrid || !visibleChannels.includes(channel)) return undefined;
       if (viewMode !== 'dual' && !desktopGridChat) return undefined;
-      const visibleIndex = visibleChannels.indexOf(channel);
+      const visibleIndex = desktopPageModel?.slotsByChannel?.[channel] ?? visibleChannels.indexOf(channel);
       if (desktopChatUsesGridTile) {
         const freeSlots = [1, 2, 3, 4].filter(
           (slot) => slot !== effectiveChatTileSlot && (!youtubeVisible || slot !== 2),
@@ -4990,7 +5045,7 @@ function SquadViewApp() {
       Boolean(accountSession?.user?.id),
     );
     const referralNextProgress = Math.max(0, Math.min(5, Number(referralSummary?.nextMonthProgress) || (referralQualifiedCount % 5)));
-    const rotatingChannel = dualChannels.find((channel) => channel !== activeChannel) || dualChannels[1] || '';
+    const rotatingChannel = dualChannels.find((channel) => !Object.prototype.hasOwnProperty.call(streamLockSlots, channel)) || dualChannels[1] || '';
     const desktopPagedMode = viewMode === 'dual' || desktopGridChat;
     const cycleForward = desktopPagedMode ? null : () => cycleFocused(1);
     const moveDesktopPage = (direction) => {
@@ -4998,7 +5053,9 @@ function SquadViewApp() {
       rememberFocusedAudioVolume(activeChannel);
 
       const nextPage = (desktopPageForRender + direction + desktopPageCount) % desktopPageCount;
-      const nextVisibleChannels = desktopGridChat && !compactPagedChat
+      const nextVisibleChannels = desktopPageModel
+        ? buildLockedPage({ ...desktopLockPageArgs, page: nextPage }).channels
+        : desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
             channels,
             desktopPinnedChannel,
@@ -5216,6 +5273,19 @@ function SquadViewApp() {
                     isFavorite={favoriteStreamers.includes(channel)}
                     onToggleFavorite={() => toggleFavoriteStreamer(channel)}
                     onRemove={() => removeChannelFromGroup(channel)}
+                    onToggleLock={visibleChannels.includes(channel) && viewMode !== 'solo' &&
+                      (isDesktopGrid || (!mobileYoutubeDual && (viewMode === 'dual' || mobileSplitChat)))
+                      ? () => toggleStreamLock(
+                          channel,
+                          isDesktopGrid
+                            ? (desktopPageModel?.slotsByChannel?.[channel] ?? visibleChannels.indexOf(channel))
+                            : visibleChannels.indexOf(channel),
+                          maxVisibleStreamLocks,
+                        )
+                      : undefined}
+                    streamLocked={Object.prototype.hasOwnProperty.call(streamLockSlots, channel)}
+                    lockDisabled={isDesktopGrid && !Object.prototype.hasOwnProperty.call(streamLockSlots, channel) &&
+                      Object.keys(streamLockSlots).filter((name) => channels.includes(name)).length >= maxVisibleStreamLocks}
                     canViewerReorder={isDesktopGrid && (viewMode === 'dual' || desktopGridChat) && visibleChannels.length > 1}
                     viewerDragActive={draggedViewerChannel === channel}
                     onViewerDragStart={() => setDraggedViewerChannel(channel)}
@@ -5410,7 +5480,7 @@ function SquadViewApp() {
               </div>
             )}
 
-            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && viewMode !== 'solo' && !mobileSplitChat && (
+            {!isDesktopGrid && channels.length > 2 && !mobileYoutubeDual && viewMode !== 'solo' && (
               <div className="mobile-stream-pager" aria-label="Move through streams">
                 <button
                   onClick={viewMode === 'dual' || mobileSplitChat ? previousOther : () => cycleFocused(-1)}
