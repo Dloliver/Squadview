@@ -10,6 +10,7 @@ import TermsPage from './pages/TermsPage';
 import SupportPage from './pages/SupportPage';
 import AboutPage from './pages/AboutPage';
 import HomePage from './pages/HomePage';
+import { FeaturesPage, UpdatesPage, UpdatesNavLink } from './pages/ProductGuidePages';
 import CreatorDashboardPage from './pages/CreatorDashboardPage';
 import CreatorPublicSquadPage from './pages/CreatorPublicSquadPage';
 import TournamentDirectorPage from './pages/TournamentDirectorPage';
@@ -5595,6 +5596,8 @@ function SquadViewApp() {
               )}
               <div className="viewer-settings-section viewer-settings-shortcuts">
                 <h3>Quick actions</h3>
+                <a className="sv-guide-viewer-link" href="/features" target="_blank" rel="noreferrer">Explore all features ↗</a>
+                <a className="sv-guide-viewer-link" href="/updates" target="_blank" rel="noreferrer">What’s New ↗</a>
                 <button type="button" onClick={() => { setShowViewerSettings(false); openYouTubeCompanion(); }}>
                   {youtubeCompanion ? 'Replace YouTube Companion' : 'Add YouTube Companion'}
                 </button>
@@ -6351,6 +6354,8 @@ function SquadViewApp() {
             )}
           </button>
           <a className="topbar-streamer-setup-link" href="/dashboard">Streamer Setup</a>
+          <a className="sv-guide-topnav" href="/features">Features</a>
+          <UpdatesNavLink className="sv-guide-topnav" />
           <button
             type="button"
             className="topbar-help-link"
@@ -7423,6 +7428,8 @@ export default function App() {
   if (route === '/dashboard') return <CreatorDashboardPage />;
   if (route.startsWith('/s/') && /^[a-z0-9][a-z0-9_-]{2,39}$/.test(route.slice(3))) return <CreatorPublicSquadPage slug={route.slice(3)} />;
   if (route === '/learn' || route === '/home') return <HomePage />;
+  if (route === '/features') return <FeaturesPage />;
+  if (route === '/updates') return <UpdatesPage />;
   if (route === '/about') return <AboutPage />;
   if (route === '/privacy') return <PrivacyPage />;
   if (route === '/terms') return <TermsPage />;

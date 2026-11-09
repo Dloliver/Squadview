@@ -9,6 +9,8 @@ export default function SiteFooter() {
         <a href="/">Home</a>
         <a href="/watch">Open SquadView</a>
         <a href="/about">About</a>
+        <a href="/features">Features</a>
+        <a href="/updates">What’s New</a>
         <a href="/support">Help &amp; FAQ</a>
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import HomeAdSlot from '../components/ads/HomeAdSlot';
 import FooterAdSlot from '../components/ads/FooterAdSlot';
 import SiteFooter from '../components/legal/SiteFooter';
+import { UpdatesNavLink } from './ProductGuidePages';
 import InstallSquadView from '../components/InstallSquadView';
 
 const features = [
@@ -226,7 +227,8 @@ export default function HomePage() {
         <nav className="marketing-nav" aria-label="SquadView navigation">
           <button type="button" onClick={() => setModal('how')}>How it works</button>
           <button type="button" onClick={() => setModal('twitch')}>Twitch connected</button>
-          <button type="button" onClick={() => setModal('features')}>Features</button>
+          <a className="sv-guide-marketing-nav" href="/features">Features</a>
+          <UpdatesNavLink className="sv-guide-marketing-nav" />
           <button type="button" onClick={() => setModal('faq')}>FAQ</button>
         </nav>
         <a className="marketing-open-button" href="/">Open SquadView <span aria-hidden="true">→</span></a>
@@ -279,6 +281,7 @@ export default function HomePage() {
             <span className="marketing-section-label">Explore SquadView</span>
             <h2 id="explore-heading">Start simple. Use more when you need it.</h2>
             <p>The homepage stays compact, while the details behind the current SquadView experience are one click away.</p>
+            <p className="sv-guide-home-links"><a href="/features">Browse the full feature library →</a> <a href="/updates">See the latest updates →</a></p>
           </div>
           <div className="marketing-explore-grid">
             <button type="button" onClick={() => setModal('how')}>
