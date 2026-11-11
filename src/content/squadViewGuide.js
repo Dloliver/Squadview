@@ -14,6 +14,23 @@
 
 export const RELEASE_NOTES = [
   {
+    id: '2026-11-11-squadview-1-0-1',
+    version: '1.0.1',
+    date: '2026-11-11',
+    label: 'Viewer stability + layouts',
+    title: 'More ways to watch, with steadier streams',
+    summary: 'A more reliable multi-stream viewer, new desktop layout controls, and more ways to follow two conversations at once.',
+    highlights: [
+      { title: 'Steadier desktop playback', text: 'Bounded Twitch player mounting reduces inactive background embeds. Playback and Listening improvements avoid unnecessary restarts during supported view changes.' },
+      { title: 'Short-screen video safety', text: 'On shorter supported desktop windows, SquadView uses two streams per page rather than shrinking embedded Twitch video below its minimum dimensions.' },
+      { title: 'Dual Chat', text: 'Choose an optional two-stream desktop view with two tall, independent chats. Swap either stream while keeping its corresponding chat together.' },
+      { title: '6 Streams ultrawide preview', text: 'On eligible large ultrawide browser windows, select a 3 by 2 Twitch grid with one selectable chat and separate paging. Requires at least six selected Twitch channels.' },
+      { title: 'Faster layout switching', text: 'Grid, Dual Chat, and 6 Streams live together in the desktop footer, with centered page navigation. Mobile retains its existing viewing controls.' },
+      { title: 'Native Chat resilience', text: 'Eligible signed-in viewers can attempt to send messages even while the separate Twitch live message reader reconnects.' },
+    ],
+    notes: 'Six Streams is an ultrawide preview for viewports at least 2100 × 850 CSS pixels and still needs broader device testing. Intermittent Twitch buffering may occur. Twitch can block owner/moderator sending inside embedded chat; use the official Mod View shortcut for moderation. Native Chat message reading may reconnect briefly.',
+  },
+  {
     id: '2026-11-08-phase-6-3-4a',
     version: 'Phase 6.3.4A',
     date: '2026-11-08',
@@ -66,6 +83,9 @@ export const FEATURE_SECTIONS = [
     description: 'Build a lineup, control which streams are on screen, and move between different ways to watch.',
     features: [
       { id: 'multi-view', title: 'Multi-stream viewing', access: 'Everyone', description: 'Build a Twitch lineup with up to eight channels on Free, or up to sixteen on Premium. The viewer displays a manageable set of feeds at a time.', how: 'Open SquadView, add Twitch usernames, and select Start watching.' },
+      { id: 'dual-chat-layout', title: 'Dual Chat desktop', access: 'Everyone', description: 'An optional desktop layout with two Twitch streams and two tall, independent chats.', how: 'On a supported desktop window at least 1500 × 800 CSS pixels, choose Dual Chat in the viewer footer.' },
+      { id: 'six-stream-preview', title: 'Six Streams ultrawide preview', access: 'Everyone', description: 'Preview a three-column, two-row Twitch grid with one selectable chat on eligible ultrawide displays.', how: 'Select at least six Twitch channels on a browser viewport at least 2100 × 850 CSS pixels, then choose 6 Streams in the viewer footer.' },
+      { id: 'short-desktop-two-up', title: 'Short-screen playback layout', access: 'Everyone', description: 'On supported shorter desktop windows, SquadView automatically reduces the visible player count to protect Twitch embed sizing.', how: 'Use the regular viewer on a short desktop browser window. Page controls rotate through the lineup.' },
       { id: 'grid-layout', title: 'Desktop Grid', access: 'Everyone', description: 'Watch several Twitch streams together in a desktop grid, with page controls for a larger lineup.', how: 'Choose Grid and use Next or Previous to move between streams.' },
       { id: 'mobile-view', title: 'Mobile Dual and Split + Chat', access: 'Everyone', description: 'Keep two Twitch streams on screen on supported mobile layouts, with chat available in the same workspace.', how: 'Use One or Two in the mobile viewer, or choose your mobile chat layout in Settings.' },
       { id: 'solo-focus', title: 'Solo / Focus mode', access: 'Everyone', description: 'Give one creator more space without rebuilding the current roster.', how: 'Tap Focus on a visible stream, then return to Grid or Dual when ready.' },
@@ -97,8 +117,8 @@ export const FEATURE_SECTIONS = [
     features: [
       { id: 'listen', title: 'Choose the audible stream', access: 'Everyone', description: 'Use Listen to select which displayed Twitch stream you want to hear without changing the roster.', how: 'Tap Listen on the stream or open the mobile Audio Mix controls.' },
       { id: 'volumes', title: 'Per-stream volume controls', access: 'Everyone', description: 'Adjust supported player volumes and retain useful listening levels during the viewing session.', how: 'Open the speaker or Audio Mix controls on a stream.' },
-      { id: 'native-chat', title: 'SquadView native Twitch chat', access: 'Twitch sign-in', description: 'Read and send Twitch messages through your connected account, with emote support and channel badges where available.', how: 'Open Chat, choose Native, and sign in with Twitch.' },
-      { id: 'twitch-chat', title: 'Embedded Twitch chat fallback', access: 'Everyone', description: 'Switch to Twitch-hosted chat when you want Twitch-specific controls such as certain moderator actions or channel-point features.', how: 'Use the Twitch option in the chat panel.' },
+      { id: 'native-chat', title: 'SquadView native Twitch chat', access: 'Twitch sign-in', description: 'Read and send Twitch messages through your connected account, with emote support and channel badges where available. Sending can remain available during temporary reader reconnections.', how: 'Open Chat, choose Native, and sign in with Twitch.' },
+      { id: 'twitch-chat', title: 'Embedded Twitch chat fallback', access: 'Everyone', description: 'View Twitch-hosted chat with Twitch-specific controls where permitted. Twitch may block owner/moderator sending inside its embed.', how: 'Use Twitch to view hosted chat, or the official Mod View shortcut for moderation tools.' },
       { id: 'chat-target', title: 'Chat target switching', access: 'Everyone', description: 'Switch whose chat you are following without necessarily changing the stream you are hearing.', how: 'Choose a stream chat or switch the chat target in the chat area.' },
       { id: 'mobile-ios', title: 'Mobile playback stability', access: 'Everyone', description: 'iOS-aware video and audio handling helps make returning to a recently viewed stream smoother. Mobile browsers may still enforce their own audio restrictions.', how: 'Use Dual, Split + Chat, and Listen on your phone.' },
     ],

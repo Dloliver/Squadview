@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { signInWithTwitch } from '../services/accountService';
 import { supabase } from '../lib/supabase';
+import { canSendNativeChatMessage } from '../lib/nativeChatSendAvailability';
 import {
   createNativeTwitchChat,
   disableNativeTwitchChat,
@@ -461,30 +462,55 @@ function IframeChat({
         />
       </header>
 
-      <div
-        role="note"
+      {/* Keep the iframe fully visible: help is collapsed by default and never
+          floats over Twitch's own controls. Moderation actions use Twitch's
+          official site, not a simulated control layer over the iframe. */}
+      <details
         className="twitch-embedded-mod-guidance"
         style={{
-          flexShrink: 0,
-          padding: '7px 9px',
+          flex: '0 0 auto',
+          borderBottom: '1px solid rgba(255,255,255,0.12)',
           background: '#211c2b',
           color: '#ded5eb',
           fontSize: 11,
           lineHeight: 1.35,
-          borderBottom: '1px solid rgba(255,255,255,0.12)',
         }}
       >
-        <strong>Moderating?</strong> If embedded Twitch chat controls don't work,
-        switch to Native for chatting. For bans, timeouts, and other mod actions,{' '}
-        <a
-          href={`https://www.twitch.tv/moderator/${encodeURIComponent(channel)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: '#c6a6ff', textDecoration: 'underline' }}
+        <summary
+          style={{
+            cursor: 'pointer',
+            padding: '5px 9px',
+            minHeight: 24,
+            boxSizing: 'border-box',
+            fontWeight: 700,
+          }}
         >
-          open Twitch Mod View
-        </a>.
-      </div>
+          Twitch chat options
+        </summary>
+        <div style={{ padding: '1px 9px 9px' }}>
+          If embedded chat is blocked or you're moderating, use Native to send
+          messages or open Twitch's own chat window. Full moderation tools are
+          available in Twitch Mod View.
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 6 }}>
+            <a
+              href={`https://www.twitch.tv/popout/${encodeURIComponent(channel)}/chat`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#c6a6ff', textDecoration: 'underline' }}
+            >
+              Open Twitch chat
+            </a>
+            <a
+              href={`https://www.twitch.tv/moderator/${encodeURIComponent(channel)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#c6a6ff', textDecoration: 'underline' }}
+            >
+              Open Mod View
+            </a>
+          </div>
+        </div>
+      </details>
       <div
         style={{ flex: '1 1 auto', minHeight: 0 }}
         onPointerDownCapture={() => onActivity?.({ type: 'twitch_iframe_pointer', channel })}
@@ -593,6 +619,14 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     readerAuthorized === true ||
     (readerAuthorized === false && nativeEnabled === true)
   );
+
+  // Reading uses EventSub; sending uses an independent authenticated Twitch API.
+  // A reconnecting or failed reader must not lock an otherwise authorized composer.
+  const canComposeNativeChat = canSendNativeChatMessage({
+    readerAuthorized,
+    broadcasterUserId: broadcaster?.id,
+    sendBusy,
+  });
 
   const mentionUsers = useMemo(() => {
     const users = [];
@@ -736,6 +770,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
       onStatus(nextStatus, details) {
         setStatus(nextStatus);
         if (details?.broadcaster?.id) setBroadcaster(details.broadcaster);
+        if (nextStatus === 'ready') setError('');
       },
       onMessage(message) {
         const current = readNativeChatHistory(normalizedChannel);
@@ -1119,9 +1154,14 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             }}
           >
             <strong style={{ display: 'block', marginBottom: 5 }}>
-              Native chat could not connect
+              Live Twitch message reader unavailable
             </strong>
             <span>{error}</span>
+            {canComposeNativeChat && (
+              <div style={{ marginTop: 6, fontSize: 11, color: '#adadb8' }}>
+                Your Twitch account can still attempt to send messages while the live reader is offline.
+              </div>
+            )}
             <button
               type="button"
               onClick={useIframeFallback}
@@ -1472,7 +1512,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             event.preventDefault();
 
             const message = draft.trim();
-            if (!message || sendBusy) return;
+            if (!message || !canComposeNativeChat) return;
 
             onActivity?.({ type: 'native_send', channel: normalizedChannel });
             setSendBusy(true);
@@ -1556,7 +1596,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             aria-label="Open Twitch emote picker"
             aria-expanded={emotePickerOpen}
             title="Twitch emotes"
-            disabled={!broadcaster?.id || status !== 'ready'}
+            disabled={!canComposeNativeChat}
             onClick={() => setEmotePickerOpen((open) => !open)}
             style={{
               width: 44,
@@ -1570,7 +1610,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               lineHeight: 1,
               cursor: 'pointer',
               opacity:
-                !broadcaster?.id || status !== 'ready'
+                !canComposeNativeChat
                   ? 0.5
                   : 1,
             }}
@@ -1641,10 +1681,12 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             }}
             placeholder={
               broadcaster?.id
-                ? 'Send a message…'
+                ? readerAuthorized === true
+                  ? 'Send a message…'
+                  : 'Sign in with Twitch to chat…'
                 : 'Connecting to Twitch chat…'
             }
-            disabled={!broadcaster?.id || sendBusy || status !== 'ready'}
+            disabled={!canComposeNativeChat}
             rows={2}
             maxLength={500}
             aria-label="Send a Twitch chat message"
@@ -1668,12 +1710,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           />
           <button
             type="submit"
-            disabled={
-              !broadcaster?.id ||
-              status !== 'ready' ||
-              sendBusy ||
-              !draft.trim()
-            }
+            disabled={!canComposeNativeChat || !draft.trim()}
             style={{
               minHeight: 44,
               minWidth: 64,
@@ -1684,13 +1721,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               color: '#fff',
               fontWeight: 700,
               cursor: 'pointer',
-              opacity:
-                !broadcaster?.id ||
-                status !== 'ready' ||
-                sendBusy ||
-                !draft.trim()
-                  ? 0.55
-                  : 1,
+              opacity: !canComposeNativeChat || !draft.trim() ? 0.55 : 1,
             }}
           >
             {sendBusy ? 'Sending…' : 'Send'}
@@ -1709,7 +1740,9 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             fontSize: 10,
           }}
         >
-          <span>{sendError || 'Enter to send · Shift+Enter for a new line'}</span>
+          <span>{sendError || (canComposeNativeChat && status !== 'ready'
+            ? 'Live messages are reconnecting. Sending may still work.'
+            : 'Enter to send · Shift+Enter for a new line')}</span>
           <span>{draft.length}/500</span>
         </div>
       </div>

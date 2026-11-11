@@ -8,7 +8,7 @@ const css = fs.readFileSync(path.join(root, 'src/styles.css'), 'utf8');
 
 const checks = [
   ['desktop lead audio behavior stays intact while mobile starts muted', app.includes('setAudioEnabled(isDesktopGrid ? Boolean(unique[0]) : false);')],
-  ['mobile still uses exactly one audio owner', app.includes('const mobileSingleAudioMode = !isDesktopGrid;') && app.includes('muteOtherMobilePlayers(channel);')],
+  ['mobile single-owner mode remains default outside optional non-iOS dual mix', app.includes('const mobileSingleAudioMode = !isDesktopGrid && !mobileDualAudioMix;') && app.includes('muteOtherMobilePlayers(channel);') && app.includes('const mobileDualAudioMix = !isDesktopGrid && !iosSingleAudioMode &&') && app.includes("mobileDualAudioEnabled && viewMode === 'chat' && mobileChatPresentation === 'split'")],
   ['mobile Listen claims Twitch audio inside the user gesture', app.includes('function claimMobileAudioFromGesture') && app.includes('player.setMuted?.(false);')],
   ['mobile silence toggle mutes immediately', app.includes('currentPlayer?.setMuted?.(true);') && app.includes('audioEnabled: false')],
   ['mobile Focus/Chat can claim the focused stream from the tap', app.includes('nextFocusAudioEnabled = claimMobileAudioFromGesture') && app.includes('audioEnabled: nextFocusAudioEnabled')],

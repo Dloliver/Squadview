@@ -1,0 +1,18 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const app=fs.readFileSync('src/App.jsx','utf8');
+const css=fs.readFileSync('src/styles.css','utf8');
+const chat=fs.readFileSync('src/components/ChatPanel.jsx','utf8');
+const check=(desc,cond)=>{assert.ok(cond,desc); console.log('PASS:',desc);};
+check('Explicit opt-in flag defaults OFF',app.includes('const [desktopDualChatEnabled, setDesktopDualChatEnabled] = useState(false)'));
+check('Minimum desktop viewport 1500x800',app.includes("'(min-width: 1500px) and (min-height: 800px)'") && css.includes('@media (min-width: 1500px) and (min-height: 800px)'));
+check('Dual chat restricted to existing Grid + Chat, two channels, Twitch-only',app.includes('desktopGridChat && channels.length >= 2 && !youtubeVisible && !referralPromoVisible'));
+check('No default second chat or desktop rail in dual mode',app.includes('const showDesktopChatRail = !desktopDualChat') && app.includes('const desktopChatUsesGridTile = !shortDesktopTwoUp && !desktopDualChat'));
+check('Only 2 Twitch players per page in dual mode',app.includes('const desktopVisibleTwitchLimit = shortDesktopTwoUp') && app.includes('      : desktopDualChat'));
+check('Each chat uses its matching channel',app.includes('desktopDualChat && visibleChannels.map((channel, index) => (') && app.includes('<ChatPanel channel={channel} mentionCandidates={visibleChannels}'));
+check('Players occupy grid columns 1 and 3; chats 2 and 4',app.includes('gridColumn: index * 2 + 1') && app.includes('gridColumn: index * 2 + 2'));
+check('Separate two chat components are opt-in, without replacement of existing ChatPanel',app.includes('className="squadview-dual-channel-chat"') && chat.includes('export default function ChatPanel'));
+check('Player iframe geometry 400x300 unscaled in opt-in layout',css.includes('minmax(400px, 1fr)') && css.includes('min-height: 300px;') && css.includes('transform: none !important;'));
+check('Prior short-desktop two-up left in place',app.includes('squadview-short-desktop-two-up') && css.includes('squadview-short-desktop-two-up'));
+check('Previous viewer warm mount policy intact',app.includes('selectBoundedMountedChannels({'));
+console.log('PASS: Opt-in two stream / two chat structural checks complete. Browser UX required before release.');

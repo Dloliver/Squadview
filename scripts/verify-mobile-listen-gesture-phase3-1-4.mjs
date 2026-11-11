@@ -21,7 +21,7 @@ const checks = [
   ['successful mobile claim commits one-owner state only after the direct claim', mobileBlock.includes('setListeningChannels(nextListening);') && mobileBlock.indexOf('setListeningChannels(nextListening);') > claimIndex],
   ['mobile Listen does not immediately replay the selected player after a successful direct claim', !mobileBlock.includes('resumeAudioSelectedPlayers(')],
   ['iOS claim still unmutes before replaying a paused embed', app.includes('player.setMuted?.(false);') && app.includes('if (wasPaused) player.play?.();')],
-  ['Dual return control remains in the mobile focus stream rail', app.includes('className="mobile-focus-return-dual"') && app.includes('onClick={returnToDual}')],
+  ['Mobile One/Two quick-view controls provide return to two streams', app.includes('className="mobile-quick-viewbar"') && app.includes('onClick={chooseMobileOneStream}') && app.includes('onClick={chooseMobileTwoStreams}') && app.includes('function chooseMobileTwoStreams()') && app.includes("setMobileChatMode('split');")],
 ];
 
 let failed = false;

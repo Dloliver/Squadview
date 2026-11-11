@@ -4,6 +4,9 @@ import YouTubeCompanion from './components/YouTubeCompanion';
 import YouTubeCompanionModal from './components/YouTubeCompanionModal';
 import ChatPanel from './components/ChatPanel';
 import { buildLockedPage, rotateMobilePair } from './lib/streamLocks';
+import { buildUltrawideSixPage } from './lib/ultrawideSixPage';
+import { selectDesktopDualSwap, rotateDesktopDualOther } from './lib/desktopDualChatSwap';
+import { selectBoundedMountedChannels } from './lib/viewerPlayerMounts';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
@@ -671,6 +674,26 @@ function SquadViewApp() {
   const [compactViewerEnabled, setCompactViewerEnabled] = useState(() => readStoredBoolean('squadview:compact-multiview:v1', true));
   const [isDesktopGrid, setIsDesktopGrid] = useState(() => window.matchMedia?.('(min-width: 761px)').matches ?? false);
   const [isWideDesktopChat, setIsWideDesktopChat] = useState(() => window.matchMedia?.('(min-width: 1100px)').matches ?? false);
+  // Phase B: only the short, sufficiently wide Twitch-only desktop workspace
+  // can display two policy-compliant 400x300 embeds beside its chat rail.
+  const [shortDesktopTwoUpViewport, setShortDesktopTwoUpViewport] = useState(
+    () => window.matchMedia?.('(min-width: 1200px) and (min-height: 560px) and (max-height: 790px)').matches ?? false,
+  );
+  // Opt-in layout experiment: two independent channel chats alongside two visible videos.
+  const [desktopDualChatEnabled, setDesktopDualChatEnabled] = useState(false);
+  // Optional six-up ultrawide layout; not persisted or used on normal desktops.
+  const [desktopSixStreamEnabled, setDesktopSixStreamEnabled] = useState(false);
+  const [desktopSixStreamViewport, setDesktopSixStreamViewport] = useState(
+    () => window.matchMedia?.('(min-width: 2100px) and (min-height: 850px)').matches ?? false,
+  );
+  const [desktopDualChatViewport, setDesktopDualChatViewport] = useState(
+    () => window.matchMedia?.('(min-width: 1500px) and (min-height: 800px)').matches ?? false,
+  );
+  // Above 2100px there is room for horizontal [video|chat] [video|chat].
+  // On regular desktop, stack the two pairs to give each video more usable area.
+  const [desktopDualChatWideViewport, setDesktopDualChatWideViewport] = useState(
+    () => window.matchMedia?.('(min-width: 2100px) and (min-height: 800px)').matches ?? false,
+  );
   const [chatDockSide, setChatDockSide] = useState(() => {
     try {
       return localStorage.getItem('squadview:chat-dock-side-v1') === 'left' ? 'left' : 'right';
@@ -822,6 +845,10 @@ function SquadViewApp() {
 
     playersRef.current.forEach((player, channel) => {
       if (!audioPolicySelectsChannel(policy, channel)) return;
+      // Respect a fresh Listen-button mute even if Twitch's getMuted/getVolume
+      // still reflect the previous audio level. A zero target is intentional;
+      // a stale native read must not restore it during reconciliation.
+      if (getPlayerAudioTarget(channel, player, policy).targetVolume <= 0) return;
 
       try {
         const muted = player?.getMuted?.();
@@ -993,10 +1020,10 @@ function SquadViewApp() {
     });
   }
 
-  // Twitch players are created lazily. The initial page creates only its
-  // visible players. Once a channel has been visited, its player stays mounted
-  // and pauses while off page so returning can resume without rebuilding every
-  // Twitch embed. A completely new viewer session resets this cache.
+  // Retain stable DOM order for the currently permitted Twitch embeds only.
+  // Unlike the old visited-channel cache, inactive desktop pages are released
+  // instead of accumulating hidden iframes throughout a long viewer session.
+  // Existing desktop Focus and iOS warm playback keep their limited exceptions.
   const mountedPlayerChannelsRef = useRef(new Set());
   // iOS/WebKit visibly restarts Twitch embeds after SquadView pauses an
   // off-page player and later calls play() again. Keep only the immediately
@@ -1767,6 +1794,38 @@ function SquadViewApp() {
     syncWideDesktopChat();
     media.addEventListener?.('change', syncWideDesktopChat);
     return () => media.removeEventListener?.('change', syncWideDesktopChat);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1200px) and (min-height: 560px) and (max-height: 790px)');
+    const syncShortDesktopTwoUp = () => setShortDesktopTwoUpViewport(media.matches);
+    syncShortDesktopTwoUp();
+    media.addEventListener?.('change', syncShortDesktopTwoUp);
+    return () => media.removeEventListener?.('change', syncShortDesktopTwoUp);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1500px) and (min-height: 800px)');
+    const syncDualChatViewport = () => setDesktopDualChatViewport(media.matches);
+    syncDualChatViewport();
+    media.addEventListener?.('change', syncDualChatViewport);
+    return () => media.removeEventListener?.('change', syncDualChatViewport);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 2100px) and (min-height: 800px)');
+    const syncDualChatWide = () => setDesktopDualChatWideViewport(media.matches);
+    syncDualChatWide();
+    media.addEventListener?.('change', syncDualChatWide);
+    return () => media.removeEventListener?.('change', syncDualChatWide);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 2100px) and (min-height: 850px)');
+    const syncSixStreamViewport = () => setDesktopSixStreamViewport(media.matches);
+    syncSixStreamViewport();
+    media.addEventListener?.('change', syncSixStreamViewport);
+    return () => media.removeEventListener?.('change', syncSixStreamViewport);
   }, []);
 
   useEffect(() => {
@@ -3229,7 +3288,9 @@ function SquadViewApp() {
           candidate !== cleaned && channels.includes(candidate),
         );
         setAudioEnabled(hasOtherDesktopAudio);
-        reconcileViewerAudio({ audioEnabled: hasOtherDesktopAudio });
+        // We just wrote the explicit 0%/mute intent above. Do not snapshot
+        // Twitch's potentially delayed old state and silently re-enable #1.
+        reconcileViewerAudio({ audioEnabled: hasOtherDesktopAudio }, { captureCurrent: false });
         return;
       }
 
@@ -3516,6 +3577,7 @@ function SquadViewApp() {
 
   // Presentation controls never change the roster, persisted Squad or audio policy.
   function setCompactViewerPresentation(enabled) {
+    if (!enabled) setDesktopSixStreamEnabled(false);
     setCompactViewerEnabled(enabled);
     if (enabled && isDesktopGrid) {
       const selected = channels.includes(chatChannel) ? chatChannel : activeChannel;
@@ -3529,6 +3591,50 @@ function SquadViewApp() {
       setViewMode('chat');
     } else if (!enabled && isDesktopGrid && viewMode === 'chat' && chatLayout === 'grid') {
       setViewMode('dual');
+    }
+  }
+
+  // Direct, temporary viewer-mode shortcuts: no roster, saved Squad, backend,
+  // audio ownership or mobile behavior changes. Grid remains the default.
+  function activateDesktopViewerLayout(next) {
+    if (!isDesktopGrid) return;
+    if (next === 'grid') {
+      if (viewMode === 'solo') returnToDual();
+      setDesktopDualChatEnabled(false);
+      setDesktopSixStreamEnabled(false);
+      setCompactViewerPresentation(true);
+      return;
+    }
+    if (next === 'dual-chat') {
+      if (!desktopDualChatViewport || channels.length < 2 || youtubeCompanion) return;
+      if (viewMode === 'solo') returnToDual();
+      const lead = channels.includes(chatChannel) ? chatChannel : (channels[0] || activeChannel);
+      setDesktopSixStreamEnabled(false);
+      setDesktopDualChatEnabled(true);
+      setCompactViewerEnabled(false);
+      setChatPlacement('right');
+      setChatDockSide('right');
+      setChatLayout('grid');
+      setChatChannel(lead);
+      setDesktopChatPinnedSlot(0);
+      setDesktopChatRotationChannels(channels.filter((channel) => channel !== lead));
+      setDesktopPage(0);
+      setViewMode('chat');
+      return;
+    }
+    if (next === 'six-stream') {
+      if (!desktopSixStreamViewport || channels.length < 6 || youtubeCompanion) return;
+      if (viewMode === 'solo') returnToDual();
+      const selected = channels.includes(chatChannel) ? chatChannel : (channels[0] || activeChannel);
+      setDesktopDualChatEnabled(false);
+      setDesktopSixStreamEnabled(true);
+      setCompactViewerEnabled(true);
+      setChatPlacement('right');
+      setChatDockSide('right');
+      setChatLayout('grid');
+      setChatChannel(selected);
+      setDesktopPage(0);
+      setViewMode('chat');
     }
   }
 
@@ -3675,13 +3781,9 @@ function SquadViewApp() {
         ? [restoredActive].filter(Boolean)
         : (slotChannels.length ? slotChannels : channels.slice(0, 2));
 
-    resumeChannels.forEach((channel) => {
-      try {
-        playersRef.current.get(channel)?.play?.();
-      } catch {
-        // Twitch's native controls remain available if the browser rejects play.
-      }
-    });
+    // A returning warm desktop stream may already be playing. Preserve the
+    // click-gesture resume for genuinely paused streams without restarting the rest.
+    resumeViewerChannelsFromGesture(resumeChannels);
 
     if (leavingSolo) {
       const restoredFocusedVolume = getSessionChannelVolume(restoredActive, 1);
@@ -4870,11 +4972,27 @@ function SquadViewApp() {
     // squeezing all three streams sideways for an unnecessary rail.
     const narrowDesktopGridChat = desktopGridChat && !isWideDesktopChat;
     const threeStreamDesktopChat = desktopGridChat && !youtubeVisible && channels.length === 3;
-    const desktopChatUsesGridTile = !referralPromoVisible && desktopGridChat && (
+    // Phase B trial: four 400x300 Twitch embeds cannot physically fit inside
+    // this short viewport with the chat rail. Keep two Twitch players on each
+    // paged screen; on taller viewports preserve the original four-player grid.
+    // A short desktop chat tile moves to the existing side rail so no third
+    // 300px-high grid cell is created. YouTube is deliberately excluded.
+    const shortDesktopTwoUp = shortDesktopTwoUpViewport && isDesktopGrid &&
+      !youtubeVisible && (viewMode === 'dual' || desktopGridChat);
+    // Two player/chat pairs require room for two 400px videos and separate chat rails.
+    // Never render a dual chat by overlaying a Twitch player or placing it in a video tile.
+    const desktopDualChat = desktopDualChatEnabled && desktopDualChatViewport &&
+      desktopGridChat && channels.length >= 2 && !youtubeVisible && !referralPromoVisible;
+    // Only a sufficiently tall ultrawide can fit six Twitch iframes at native
+    // 400x300 minimum alongside one real (never overlaid) selectable chat rail.
+    const desktopSixStream = desktopSixStreamEnabled && desktopSixStreamViewport &&
+      desktopGridChat && compactViewerEnabled && channels.length >= 6 &&
+      !desktopDualChat && !youtubeVisible && !referralPromoVisible;
+    const desktopChatUsesGridTile = !shortDesktopTwoUp && !desktopDualChat && !desktopSixStream && !referralPromoVisible && desktopGridChat && (
       chatPlacement === 'tile' || (chatPlacement === 'auto' && (narrowDesktopGridChat || threeStreamDesktopChat))
     );
     const effectiveChatTileSlot = youtubeVisible ? 4 : chatTileSlot;
-    const showDesktopChatRail = !referralPromoVisible && isDesktopGrid && (
+    const showDesktopChatRail = !desktopDualChat && !referralPromoVisible && isDesktopGrid && (
       viewMode === 'solo' ||
       (viewMode === 'chat' && !desktopChatUsesGridTile)
     );
@@ -4885,11 +5003,17 @@ function SquadViewApp() {
       : youtubeVisible
         ? (desktopChatUsesGridTile ? 2 : 3)
         : (desktopChatUsesGridTile ? 3 : 4);
-    const desktopVisibleTwitchLimit = referralPromoVisible
-      ? responsiveDesktopVisibleTwitchLimit
-      : threeStreamDesktopChat
-        ? 3
-        : responsiveDesktopVisibleTwitchLimit;
+    const desktopVisibleTwitchLimit = shortDesktopTwoUp
+      ? 2
+      : desktopDualChat
+        ? 2
+      : desktopSixStream
+        ? 6
+      : referralPromoVisible
+        ? responsiveDesktopVisibleTwitchLimit
+        : threeStreamDesktopChat
+          ? 3
+          : responsiveDesktopVisibleTwitchLimit;
     // Compact side-chat uses true, independent video pages. Changing chats
     // never pins an old-page streamer or moves the currently visible videos.
     // Standard Grid + Chat deliberately retains its established pinned chat
@@ -4912,16 +5036,20 @@ function SquadViewApp() {
       rotationOrder: desktopRotationRoster,
     };
     // Keep the original paging behavior if the viewer deliberately unlocks all.
-    const desktopPageModel = lockedDesktopGrid
-      ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPage })
-      : null;
+    const desktopPageModel = desktopSixStream
+      ? buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: streamLockSlots })
+      : lockedDesktopGrid
+        ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPage })
+        : null;
     const legacyDesktopPageCount = desktopGridChat && !compactPagedChat
       ? Math.max(1, Math.ceil(Math.max(0, channels.length - 1) / Math.max(1, desktopVisibleTwitchLimit - 1)))
       : Math.max(1, Math.ceil(channels.length / Math.max(1, desktopVisibleTwitchLimit)));
     const desktopPageCount = desktopPageModel?.pageCount || legacyDesktopPageCount;
     const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
     const desktopChannels = desktopPageModel
-      ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPageForRender }).channels
+      ? (desktopSixStream
+          ? buildUltrawideSixPage({ channels, page: desktopPageForRender, lockedSlots: streamLockSlots }).channels
+          : buildLockedPage({ ...desktopLockPageArgs, page: desktopPageForRender }).channels)
       : desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
             channels,
@@ -4980,18 +5108,29 @@ function SquadViewApp() {
       mobileWarmPlaybackHistoryRef.current = { key: '', current: [], previous: [] };
     }
 
-    // Only instantiate Twitch embeds as the user actually visits channels.
-    // Previously visited channels remain mounted but receive visible={false},
-    // which pauses them in TwitchPlayer until their page becomes active again.
-    visibleChannels.forEach((channel) => {
-      mountedPlayerChannelsRef.current.add(channel);
-    });
+    // Viewer Core A: an iframe belongs to the current visible layout, or to
+    // an *explicit* warm playback exception. Leaving a desktop page unmounts
+    // its old embeds instead of retaining every channel ever visited. This
+    // avoids hidden-page accumulation without changing TwitchPlayer or audio.
+    // Match TwitchPlayer's existing keepPlaybackWarm rule exactly: desktop
+    // Focus can retain only its current <=4 page, and iOS only the previous
+    // mobile layout (at most two channels). Other pages never stay mounted.
+    const desktopFocusWarmChannels = isDesktopGrid && viewMode === 'solo' && desktopChannels.length <= 4
+      ? desktopChannels.filter((channel) => !visibleChannels.includes(channel))
+      : [];
+    const approvedWarmChannels = !isDesktopGrid && iosSingleAudioMode
+      ? [...mobileWarmPlaybackChannels]
+      : desktopFocusWarmChannels;
 
-    // Keep an iframe's DOM position stable during roster reordering. Grid slot
-    // placement is driven by tileOrder, not a React move of mounted embeds.
-    const mountedChannels = [...mountedPlayerChannelsRef.current].filter(
-      (channel) => channels.includes(channel),
-    );
+    // Preserve the insertion order of surviving keyed React players. This
+    // keeps a still-visible iframe in place when the page or chat changes.
+    const mountedChannels = selectBoundedMountedChannels({
+      previouslyMounted: mountedPlayerChannelsRef.current,
+      roster: channels,
+      visible: visibleChannels,
+      warm: approvedWarmChannels,
+    });
+    mountedPlayerChannelsRef.current = new Set(mountedChannels);
 
     const mobileManualAudioOwner = mobileSingleAudioMode
       ? [...listeningChannels][0] || ''
@@ -5031,6 +5170,23 @@ function SquadViewApp() {
     };
 
     const twitchGridPosition = (channel) => {
+      if (desktopSixStream) {
+        const index = desktopPageModel?.slotsByChannel?.[channel] ?? visibleChannels.indexOf(channel);
+        return index < 0 ? {} : {
+          gridColumn: (index % 3) + 1,
+          gridRow: Math.floor(index / 3) + 1,
+          chatCovered: false,
+        };
+      }
+      if (desktopDualChat) {
+        const index = visibleChannels.indexOf(channel);
+        if (index < 0) return {};
+        if (desktopDualChatWideViewport) {
+          return { gridColumn: index * 2 + 1, gridRow: 1, chatCovered: false };
+        }
+        // Regular desktop: Chat A | two stacked videos | Chat B.
+        return { gridColumn: 2, gridRow: index + 1, chatCovered: false };
+      }
       if (!desktopGridChat) return {};
       const tile = twitchTileOrder(channel);
       if (!Number.isFinite(tile)) return {};
@@ -5055,7 +5211,9 @@ function SquadViewApp() {
 
       const nextPage = (desktopPageForRender + direction + desktopPageCount) % desktopPageCount;
       const nextVisibleChannels = desktopPageModel
-        ? buildLockedPage({ ...desktopLockPageArgs, page: nextPage }).channels
+        ? (desktopSixStream
+            ? buildUltrawideSixPage({ channels, page: nextPage, lockedSlots: streamLockSlots }).channels
+            : buildLockedPage({ ...desktopLockPageArgs, page: nextPage }).channels)
         : desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
             channels,
@@ -5081,13 +5239,54 @@ function SquadViewApp() {
     const previousDesktopPage = () => moveDesktopPage(-1);
     const nextDesktopPage = () => moveDesktopPage(1);
 
+    // Desktop dual-chat uses the same anchor + rotating-stream mental model as
+    // mobile Dual. Swapping a channel moves its matching chat with it, but does
+    // not alter the saved squad, volume targets, or Listening selections.
+    const dualLead = desktopDualChat ? visibleChannels[0] : '';
+    const dualOther = desktopDualChat ? visibleChannels[1] : '';
+    const dualLeadSwapDisabled = visibleChannels.some((channel) =>
+      Object.prototype.hasOwnProperty.call(streamLockSlots, channel),
+    );
+    const dualOtherSwapDisabled = Boolean(dualOther) &&
+      Object.prototype.hasOwnProperty.call(streamLockSlots, dualOther);
+
+    const chooseDesktopDualStream = (slot, nextChannel) => {
+      if (!desktopDualChat || (slot === 'lead' ? dualLeadSwapDisabled : dualOtherSwapDisabled)) return;
+      const selection = selectDesktopDualSwap({
+        channels,
+        lead: dualLead,
+        other: dualOther,
+        selected: cleanChannel(nextChannel),
+        slot,
+        rotationOrder: getDesktopChatRotationChannels(channels, dualLead, desktopChatRotationChannels),
+      });
+      if (!selection ||
+          (selection.lead === dualLead && selection.other === dualOther)) return;
+      // Explicit selection is a user gesture. Only newly visible Twitch players
+      // may require a play call; the unchanged channel retains its existing key.
+      resumeViewerChannelsFromGesture([selection.lead, selection.other]);
+      setChatChannel(selection.lead);
+      setDesktopChatPinnedSlot(0);
+      setDesktopChatRotationChannels(selection.rotationOrder);
+      setDesktopPage(0);
+    };
+
+    const cycleDesktopDualOther = (direction) => {
+      if (!desktopDualChat || dualOtherSwapDisabled) return;
+      const candidate = rotateDesktopDualOther({
+        channels, lead: dualLead, other: dualOther, direction,
+      });
+      chooseDesktopDualStream('other', candidate);
+    };
+
+
     return (
-      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''} ${shortDesktopTwoUp ? 'squadview-short-desktop-two-up' : ''} ${shortDesktopTwoUp && visibleChannels.length === 1 ? 'squadview-short-desktop-one' : ''} ${desktopDualChat ? 'squadview-desktop-dual-chat' : ''} ${desktopSixStream ? 'squadview-desktop-six-stream' : ''}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : mobileSplitChat ? 'Split + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
+            <span>{desktopSixStream ? 'Six streams + chat' : desktopDualChat ? 'Two streams + two chats' : viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : mobileSplitChat ? 'Split + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
           </div>
           <div className="header-actions viewer-primary-actions">
             <button type="button" className="edit-group-button viewer-manage-action" onClick={() => openEditGroup()}>Manage streams</button>
@@ -5103,7 +5302,7 @@ function SquadViewApp() {
 
         <main className="viewer-content">
           <div className="viewer-workspace">
-            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} ${referralPromoVisible ? 'has-premium-rail' : ''} chat-dock-${chatDockSide} ${chatPlacement === 'left' || chatPlacement === 'right' ? 'user-chat-rail' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''}`}>
+            <div className={`viewer-primary-layout ${showDesktopChatRail ? 'has-chat-rail' : ''} ${desktopChatUsesGridTile ? 'has-chat-grid-tile' : ''} ${referralPromoVisible ? 'has-premium-rail' : ''} chat-dock-${chatDockSide} ${chatPlacement === 'left' || chatPlacement === 'right' ? 'user-chat-rail' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${desktopDualChat ? 'has-dual-chat-pairs' : ''}`}>
               {isDesktopGrid && viewMode === 'solo' && channels.length > 1 && (
                 <div className="focus-stream-selector" aria-label="Choose focused stream">
                   {channels.map((channel) => (
@@ -5239,9 +5438,15 @@ function SquadViewApp() {
                     preserveAudibleSession={iosSingleAudioMode}
                     mobileSingleAudioMode={mobileSingleAudioMode}
                     keepPlaybackWarm={
-                      iosSingleAudioMode &&
-                      !visibleChannels.includes(channel) &&
-                      mobileWarmPlaybackChannels.has(channel)
+                      (iosSingleAudioMode &&
+                        !visibleChannels.includes(channel) &&
+                        mobileWarmPlaybackChannels.has(channel)) ||
+                      // Reuse the existing muted, low-quality warm-player path for
+                      // the three desktop grid tiles hidden temporarily by Focus.
+                      // Do not warm other pages or change mobile/audio ownership.
+                      (isDesktopGrid && viewMode === 'solo' &&
+                        !visibleChannels.includes(channel) &&
+                        desktopChannels.includes(channel) && desktopChannels.length <= 4)
                     }
                     allowBackgroundAudio={false}
                     focusVolume={focusedAudioVolumeRef.current}
@@ -5311,6 +5516,19 @@ function SquadViewApp() {
                     gridRow={twitchGridPosition(channel).gridRow}
                     chatCovered={twitchGridPosition(channel).chatCovered}
                   />
+                ))}
+
+                {desktopDualChat && visibleChannels.map((channel, index) => (
+                  <section
+                    className="squadview-dual-channel-chat"
+                    key={`dual-chat-${channel}`}
+                    style={desktopDualChatWideViewport
+                      ? { gridColumn: index * 2 + 2, gridRow: 1 }
+                      : { gridColumn: index === 0 ? 1 : 3, gridRow: '1 / span 2' }}
+                    aria-label={`Chat with ${channel}`}
+                  >
+                    <ChatPanel channel={channel} mentionCandidates={visibleChannels} onActivity={noteViewerChatActivity} />
+                  </section>
                 ))}
 
                 {desktopChatUsesGridTile && activeChatChannel && (
@@ -5529,8 +5747,24 @@ function SquadViewApp() {
             )}
           </div>
 
-          <nav className={`viewer-toolbar ${isDesktopGrid && desktopPageCount > 1 && desktopPagedMode ? 'has-page-controls' : ''}`}>
-            <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ {isDesktopGrid ? 'Grid' : 'Dual'}</button>
+          <nav className={`viewer-toolbar ${isDesktopGrid ? 'squadview-layout-toolbar' : ''} ${isDesktopGrid && desktopPageCount > 1 && desktopPagedMode ? 'has-page-controls' : ''}`}>
+            {isDesktopGrid ? (
+              <div className="squadview-view-mode-switch" role="group" aria-label="Choose desktop viewer layout">
+                <button type="button" className={!desktopDualChat && !desktopSixStream && viewMode !== 'solo' ? 'is-current' : ''}
+                  aria-pressed={!desktopDualChat && !desktopSixStream && viewMode !== 'solo'}
+                  onClick={() => activateDesktopViewerLayout('grid')}>▦ Grid</button>
+                <button type="button" className={desktopDualChat ? 'is-current' : ''} aria-pressed={desktopDualChat}
+                  disabled={!desktopDualChatViewport || channels.length < 2 || Boolean(youtubeCompanion)}
+                  title="Two streams with a full-height chat for each"
+                  onClick={() => activateDesktopViewerLayout('dual-chat')}>Dual Chat</button>
+                <button type="button" className={desktopSixStream ? 'is-current' : ''} aria-pressed={desktopSixStream}
+                  disabled={!desktopSixStreamViewport || channels.length < 6 || Boolean(youtubeCompanion)}
+                  title="Six Twitch streams on a 2100 × 850+ ultrawide, with one selectable chat"
+                  onClick={() => activateDesktopViewerLayout('six-stream')}>6 Streams</button>
+              </div>
+            ) : (
+              <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ Dual</button>
+            )}
             {isDesktopGrid && desktopPageCount > 1 && desktopPagedMode && (
               <div className="toolbar-page-controls" aria-label="Change visible stream page">
                 <button type="button" onClick={previousDesktopPage} aria-label="Previous stream page">←</button>
@@ -5540,12 +5774,45 @@ function SquadViewApp() {
             )}
 
             {isDesktopGrid && (
-              <button
-                onClick={desktopPagedMode ? nextDesktopPage : cycleForward}
-                disabled={desktopPagedMode ? desktopPageCount <= 1 : channels.length <= 1}
-              >
-                Next →
-              </button>
+              <div className="squadview-toolbar-trailing" aria-label="Desktop page and stream controls">
+                {desktopDualChat && (
+                  <div className="squadview-dual-chat-swapbar" role="group" aria-label="Swap dual-chat streams">
+                    <label className="squadview-dual-chat-swap-select">
+                      <span>Stream 1 {dualLeadSwapDisabled ? '🔒' : ''}</span>
+                      <select value={dualLead || ''} disabled={dualLeadSwapDisabled}
+                        aria-label="Choose first dual-chat stream"
+                        title={dualLeadSwapDisabled ? 'Unlock the stream before changing this slot' : 'Change stream 1 and its chat'}
+                        onChange={(event) => chooseDesktopDualStream('lead', event.target.value)}>
+                        {channels.map((channel) => <option key={channel} value={channel}>{channel}</option>)}
+                      </select>
+                    </label>
+                    <button type="button" className="squadview-dual-chat-swap-arrow"
+                      onClick={() => cycleDesktopDualOther(-1)}
+                      disabled={channels.length <= 2 || dualOtherSwapDisabled}
+                      aria-label="Previous second stream" title="Previous second stream">←</button>
+                    <label className="squadview-dual-chat-swap-select">
+                      <span>Stream 2 {dualOtherSwapDisabled ? '🔒' : ''}</span>
+                      <select value={dualOther || ''} disabled={dualOtherSwapDisabled}
+                        aria-label="Choose second dual-chat stream"
+                        title={dualOtherSwapDisabled ? 'Unlock the stream before changing this slot' : 'Change stream 2 and its chat'}
+                        onChange={(event) => chooseDesktopDualStream('other', event.target.value)}>
+                        {channels.filter((channel) => channel !== dualLead)
+                          .map((channel) => <option key={channel} value={channel}>{channel}</option>)}
+                      </select>
+                    </label>
+                    <button type="button" className="squadview-dual-chat-swap-arrow"
+                      onClick={() => cycleDesktopDualOther(1)}
+                      disabled={channels.length <= 2 || dualOtherSwapDisabled}
+                      aria-label="Next second stream" title="Next second stream">→</button>
+                  </div>
+                )}
+                <button type="button" className="squadview-toolbar-next"
+                  onClick={desktopPagedMode ? nextDesktopPage : cycleForward}
+                  disabled={desktopPagedMode ? desktopPageCount <= 1 : channels.length <= 1}
+                  aria-label="Next stream page">
+                  Next →
+                </button>
+              </div>
             )}
           </nav>
         </main>
@@ -5562,6 +5829,11 @@ function SquadViewApp() {
               {isDesktopGrid ? (
                 <div className="viewer-settings-section">
                   <h3>Desktop layout</h3>
+                  <label className="viewer-settings-control">
+                    <span><strong>Two streams + two chats</strong><small>Each chat stays beside its own video. On regular desktops, pairs stack for larger video; on ultrawides they sit side by side. Swap either stream below.</small></span>
+                    <input type="checkbox" checked={desktopDualChatEnabled} disabled={!desktopDualChatViewport || channels.length < 2 || Boolean(youtubeCompanion)}
+                      onChange={(event) => activateDesktopViewerLayout(event.target.checked ? 'dual-chat' : 'grid')} />
+                  </label>
                   <label className="viewer-settings-control">
                     <span><strong>Compact View</strong><small>Four videos with tabbed chat on the side</small></span>
                     <input type="checkbox" checked={compactViewerEnabled}

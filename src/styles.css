@@ -8953,3 +8953,343 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     transform-origin: center center;
   }
 }
+
+
+/* SquadView 1.0.1 Viewer Core B — restricted short-desktop two-up trial.
+   1280x598 Grid + Chat was measuring Twitch iframe rectangles at 373x210,
+   below Twitch's published 400x300 minimum. Two videos per page, no scaling.
+   On taller desktops, YouTube layouts, and mobile, retain the prior layout. */
+@media (min-width: 1200px) and (min-height: 560px) and (max-height: 790px) {
+  .viewer-shell.squadview-short-desktop-two-up .viewer-primary-layout
+    .stream-stage.mode-dual .stream-stage-players,
+  .viewer-shell.squadview-short-desktop-two-up .viewer-primary-layout
+    .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  .viewer-shell.squadview-short-desktop-two-up
+    .stream-card.is-visible .player-viewport {
+    min-height: 300px;
+  }
+
+  .viewer-shell.squadview-short-desktop-one .viewer-primary-layout
+    .stream-stage.mode-dual .stream-stage-players,
+  .viewer-shell.squadview-short-desktop-one .viewer-primary-layout
+    .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* The older short-screen fit visually scaled a 400x300 embed to 373x210.
+     Override only for this approved two-up desktop layout. */
+  .viewer-shell.squadview-short-desktop-two-up
+    .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    position: absolute;
+    inset: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 400px;
+    min-height: 300px;
+    transform: none !important;
+  }
+}
+
+
+/* SquadView 1.0.1 — opt-in desktop two-stream/two-chat pair layout.
+   Each channel's Twitch player and ChatPanel occupy separate grid cells.
+   Two video columns retain >=400px actual iframe width and >=300px height.
+   No second chat is added to normal Grid, Focus, or ultrawide views. */
+@media (min-width: 1500px) and (min-height: 800px) {
+  .viewer-shell.squadview-desktop-dual-chat .viewer-primary-layout.has-dual-chat-pairs {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    padding: 6px;
+    overflow: hidden;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .viewer-primary-layout.has-dual-chat-pairs .stream-stage {
+    grid-area: auto;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: minmax(400px, 1fr) minmax(290px, 315px) minmax(400px, 1fr) minmax(290px, 315px) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    gap: 5px !important;
+    min-height: 0;
+    height: 100%;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .stream-card.is-visible .player-viewport {
+    min-width: 400px;
+    min-height: 300px;
+    overflow: hidden;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    position: absolute;
+    inset: 0;
+    left: 0;
+    top: 0;
+    min-width: 400px;
+    min-height: 300px;
+    width: 100% !important;
+    height: 100% !important;
+    transform: none !important;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-channel-chat {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-channel-chat .chat-panel,
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-channel-chat .native-twitch-chat,
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-channel-chat iframe {
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    flex: 1 1 auto;
+  }
+}
+
+
+/* SquadView 1.0.1 dual-chat Phase 3 — full-height chat wings.
+   Regular desktop: [Chat A (both rows) | Video A / Video B | Chat B (both rows)].
+   The two chats span the full player-grid height, and each video has its own
+   row in the middle column. No overlays or rescaled Twitch iframes.
+   At >=2100px the Phase 2 four-column ultrawide arrangement remains intact.
+   This is only active in explicitly opted-in desktop dual-chat mode. */
+@media (min-width: 1500px) and (max-width: 2099px) and (min-height: 800px) {
+  .viewer-shell.squadview-desktop-dual-chat .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: clamp(290px, 20vw, 330px) minmax(400px, 1fr) clamp(290px, 20vw, 330px) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-channel-chat {
+    grid-row: 1 / span 2;
+    align-self: stretch;
+    min-height: 0;
+  }
+}
+
+/* Keep the familiar mobile-style secondary-stream rotation at the foot of the
+   desktop view, so the swap controls consume no player height. */
+@media (min-width: 1500px) and (min-height: 800px) {
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swapbar {
+    display: flex;
+    gap: 5px;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 auto;
+    padding: 2px 8px;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swap-select {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swap-select select {
+    min-width: 0;
+    max-width: 145px;
+    width: min(11vw, 145px);
+    border-radius: 7px;
+    padding: 6px;
+    background: #0a211b;
+    color: #e9fff7;
+    border: 1px solid #315248;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swap-select select:disabled {
+    opacity: .65;
+    cursor: not-allowed;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swap-arrow {
+    min-width: 30px;
+    min-height: 30px;
+    border: 1px solid #315248;
+    border-radius: 7px;
+    background: #0a211b;
+    color: #e9fff7;
+    cursor: pointer;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .squadview-dual-chat-swap-arrow:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+}
+
+
+/* On wide ultrawides, keep each video at its natural 16:9 footprint instead
+   of making a tall portrait-shaped iframe beside the full-height chat. */
+@media (min-width: 2100px) and (min-height: 800px) {
+  .viewer-shell.squadview-desktop-dual-chat .stream-card.is-visible {
+    height: auto;
+    align-self: start;
+  }
+  .viewer-shell.squadview-desktop-dual-chat .stream-card.is-visible .player-viewport {
+    flex: 0 0 auto;
+    aspect-ratio: 16 / 9;
+    height: auto;
+    min-height: 300px;
+  }
+}
+
+
+/* SquadView 1.0.1 — desktop footer balance / mobile guard.
+   The original 52px player-height budget is preserved. Three desktop zones:
+   left: layout modes; middle: page controls; right: swap (Dual Chat) + Next.
+   Desktop-only; mobile retains the existing Dual return control. */
+@media (min-width: 761px) {
+  .viewer-toolbar.squadview-layout-toolbar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 220px minmax(0, 1fr);
+    grid-template-rows: 1fr;
+    flex: 0 0 52px;
+    height: 52px;
+    min-height: 0;
+    align-items: center;
+    column-gap: 12px;
+    padding: 4px clamp(10px, 1.4vw, 24px);
+    box-sizing: border-box;
+    min-width: 0;
+  }
+  .viewer-toolbar.squadview-layout-toolbar .squadview-view-mode-switch {
+    grid-column: 1;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px;
+    border-radius: 10px;
+    background: rgba(11, 31, 25, .9);
+  }
+  .viewer-toolbar .squadview-view-mode-switch > button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    min-width: 78px;
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid rgba(69,224,181,.2);
+    border-radius: 8px;
+    background: #0a2018;
+    color: #c7e3d8;
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .viewer-toolbar .squadview-view-mode-switch > button.is-current {
+    background: rgba(69,224,181,.18);
+    border-color: #45e0b5;
+    color: #f3fffa;
+  }
+  .viewer-toolbar .squadview-view-mode-switch > button:disabled {
+    opacity: .38;
+    cursor: not-allowed;
+  }
+  .viewer-toolbar.squadview-layout-toolbar > .toolbar-page-controls {
+    grid-column: 2;
+    justify-self: center;
+    width: 220px;
+    min-width: 0;
+    height: 40px;
+    padding: 2px 5px;
+    border: 1px solid rgba(69,224,181,.16);
+    border-radius: 10px;
+    background: rgba(3, 10, 8, .72);
+    box-sizing: border-box;
+  }
+  .viewer-toolbar.squadview-layout-toolbar > .squadview-toolbar-trailing {
+    grid-column: 3;
+    justify-self: end;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: clamp(6px, .7vw, 14px);
+    min-width: 0;
+    max-width: 100%;
+  }
+  .viewer-toolbar.squadview-layout-toolbar .squadview-toolbar-trailing > .squadview-dual-chat-swapbar {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0;
+  }
+  .viewer-toolbar.squadview-layout-toolbar .squadview-toolbar-trailing > .squadview-toolbar-next {
+    flex: 0 0 auto;
+    min-width: 74px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid rgba(69,224,181,.2);
+    border-radius: 9px;
+    background: #0b201a;
+    color: #d9f1e7;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .viewer-toolbar.squadview-layout-toolbar .squadview-toolbar-trailing > .squadview-toolbar-next:disabled {
+    opacity: .38;
+  }
+}
+/* Mid-size desktop/tablet: paging controls are hidden at this width by the
+   existing UI, so give the mode group and Next each a stable edge zone. */
+@media (min-width: 761px) and (max-width: 1099px) {
+  .viewer-toolbar.squadview-layout-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .viewer-toolbar.squadview-layout-toolbar > .squadview-toolbar-trailing {
+    grid-column: 2;
+  }
+}
+/* Phones use their existing mobile Dual return control, never the desktop modes. */
+@media (max-width: 760px) {
+  .viewer-toolbar .squadview-view-mode-switch,
+  .viewer-toolbar .squadview-toolbar-trailing {
+    display: none !important;
+  }
+}
+
+/* Six-up is opt-in, ultrawide-only and always retains ONE independent chat rail.
+   2100x850 CSS viewport minimum leaves >400px player width and >300px
+   player height even after stream headers and the footer. */
+@media (min-width: 2100px) and (min-height: 850px) {
+  .viewer-shell.squadview-desktop-six-stream .viewer-primary-layout.has-chat-rail .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: repeat(3, minmax(400px, 1fr)) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    height: 100%;
+    min-height: 0;
+  }
+  .viewer-shell.squadview-desktop-six-stream .stream-card.is-visible .player-viewport {
+    min-width: 400px;
+    min-height: 300px;
+    overflow: hidden;
+  }
+  .viewer-shell.squadview-desktop-six-stream .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    position: absolute;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 400px;
+    min-height: 300px;
+    transform: none !important;
+  }
+}

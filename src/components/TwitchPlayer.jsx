@@ -695,9 +695,12 @@ function applyPlayerState(
       player.__squadViewLiveEdgeStatus = 'audible_stream_returned';
     } else {
       try {
-        // A redundant play() call can restart iOS media initialization.
-        // Resume only if Twitch itself reports the stream paused.
-        if (!state.preserveAudibleSession || player.isPaused?.() === true) {
+        // Avoid a redundant play() for a desktop embed that is already playing.
+        // Scheduler-paused desktop streams still get a resume attempt even if
+        // Twitch has not reflected pause() yet. Keep iOS's existing protection.
+        const needsPlaybackResume = player.isPaused?.() === true ||
+          (!state.preserveAudibleSession && schedulerPaused);
+        if (needsPlaybackResume) {
           player.play?.();
         }
       } catch {
@@ -1026,12 +1029,12 @@ export default function TwitchPlayer({
     // iframe's mute/volume intent differs from SquadView for two consecutive
     // reads, report that native user change back to the central audio controller
     // so Chat/page changes do not erase it. Pause is status only, not intent.
-    setLiveAudible(Boolean(audioAudible));
-
+    // Audio policy describes intent; only Twitch's live reads can confirm
+    // whether the Listening label should be active.
     const syncLiveAudioStatus = () => {
       const player = playerRef.current;
       if (!player) {
-        setLiveAudible(Boolean(audioAudible));
+        setLiveAudible(false);
         return;
       }
 
@@ -1040,11 +1043,11 @@ export default function TwitchPlayer({
         const currentVolume = Number(player.getVolume?.());
         const paused = player.isPaused?.();
 
-        if (Number.isFinite(currentVolume)) {
+        if (typeof muted === 'boolean' && Number.isFinite(currentVolume)) {
           const clampedVolume = Math.max(0, Math.min(1, currentVolume));
           const nextPercent = Math.round(clampedVolume * 100);
-          const nativeWantsAudio = muted !== true && clampedVolume > 0;
-          const actuallyAudible = nativeWantsAudio && paused !== true;
+          const nativeWantsAudio = muted === false && clampedVolume > 0;
+          const actuallyAudible = nativeWantsAudio && paused === false;
 
           setMobileVolumePercent((current) => current === nextPercent ? current : nextPercent);
           setLiveAudible(actuallyAudible);
@@ -1085,7 +1088,8 @@ export default function TwitchPlayer({
         // Twitch can briefly reject reads while an iframe is initializing.
       }
 
-      setLiveAudible(Boolean(audioAudible));
+      // Unknown Twitch state is not proof of sound; remain retryable.
+      setLiveAudible(false);
     };
 
     syncLiveAudioStatus();
@@ -1464,7 +1468,13 @@ export default function TwitchPlayer({
     // Make the label react immediately to SquadView's slider. The live Twitch
     // poll above will correct this optimistic value if the embed reports a
     // different mute state.
-    setLiveAudible(Boolean(visible && audioSelected && nextVolume > 0));
+    if (mobileSingleAudioMode) {
+      // Preserve existing mobile slider feedback and gesture behavior.
+      setLiveAudible(Boolean(visible && audioSelected && nextVolume > 0));
+    } else {
+      // On desktop, do not claim Listening until Twitch confirms the change.
+      setLiveAudible(false);
+    }
     onVolumeChange?.(nextVolume);
   }
 

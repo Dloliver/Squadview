@@ -429,7 +429,9 @@ export function createNativeTwitchChat({
       primarySocket = socket;
     }
 
-    emitStatus(mode === 'handoff' ? 'reconnecting' : 'connecting');
+    // The resolved channel ID is enough for authenticated API sends.
+    // Do not wait for the independent EventSub message reader to be ready.
+    emitStatus(mode === 'handoff' ? 'reconnecting' : 'connecting', { broadcaster });
 
     let watchdogTimer = null;
     let keepaliveSeconds = 30;
