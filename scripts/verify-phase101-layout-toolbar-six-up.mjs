@@ -4,9 +4,9 @@ import { buildUltrawideSixPage } from '../src/lib/ultrawideSixPage.js';
 const app=fs.readFileSync('src/App.jsx','utf8');
 const css=fs.readFileSync('src/styles.css','utf8');
 const check=(name,valid)=>{assert.ok(valid,name);console.log('PASS:',name)};
-check('Grid, Dual Chat and 6 Streams appear together in bottom toolbar',
+check('Grid, Dual Chat and 5–6 Streams appear together in bottom toolbar',
   app.includes('squadview-view-mode-switch') && app.includes('>▦ Grid</button>') &&
-  app.includes('>Dual Chat</button>') && app.includes('>6 Streams</button>'));
+  app.includes('>Dual Chat</button>') && app.includes('>5–6 Streams</button>'));
 check('Buttons are active stateful controls and not inert',
   app.includes("activateDesktopViewerLayout('grid')") &&
   app.includes("activateDesktopViewerLayout('dual-chat')") &&
@@ -15,9 +15,9 @@ check('Buttons are active stateful controls and not inert',
 check('Dual Chat preserves previous opt-in and 1500x800 guard',
   app.includes("next === 'dual-chat'") &&
   app.includes("(min-width: 1500px) and (min-height: 800px)"));
-check('Six Streams is opt-in, 2100x850-gated, Twitch-only with 6 channels',
+check('Wide Grid is opt-in, 2100x850-gated, Twitch-only with 5 or 6 channels',
   app.includes("(min-width: 2100px) and (min-height: 850px)") &&
-  app.includes('channels.length < 6 || youtubeCompanion') &&
+  app.includes('channels.length < 5 || youtubeCompanion') &&
   app.includes('desktopSixStreamEnabled && desktopSixStreamViewport'));
 check('Six-player page count, channel selection and next page use separate helper',
   app.includes('buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: streamLockSlots })') &&

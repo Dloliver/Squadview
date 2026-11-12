@@ -8982,7 +8982,12 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 
   /* The older short-screen fit visually scaled a 400x300 embed to 373x210.
      Override only for this approved two-up desktop layout. */
-  .viewer-shell.squadview-short-desktop-two-up
+  /* Include mode classes so this rule outranks the earlier centering rule.
+     Otherwise left/top:50% win while transform:none wins, shifting the
+     iframe into the bottom-right corner of its black tile. */
+  .viewer-shell.squadview-short-desktop-two-up.mode-dual
+    .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount,
+  .viewer-shell.squadview-short-desktop-two-up.mode-chat.chat-layout-grid
     .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
     position: absolute;
     inset: 0;
@@ -9291,5 +9296,136 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     min-width: 400px;
     min-height: 300px;
     transform: none !important;
+  }
+}
+
+
+/* SquadView 1.0.2 — static responsive quad. A player must never require a
+   vertical grid scroll. Page capacity follows measured viewer workspace.
+   Audio, chat, mobile, dual-chat and ultrawide player lifecycle are untouched. */
+@media (min-width: 761px) {
+  .viewer-shell.squadview-responsive-quad .viewer-workspace,
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout,
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-chat,
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-dual {
+    overflow: hidden !important;
+    min-height: 0;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-chat,
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-dual {
+    width: 100%;
+    height: 100% !important;
+    padding: 0;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    display: grid !important;
+    width: 100%;
+    height: 100% !important;
+    min-height: 0 !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .viewer-shell.squadview-static-quad-4 .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-static-quad-4 .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    grid-template-columns: repeat(2, minmax(400px, 1fr)) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .viewer-shell.squadview-static-quad-2 .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-static-quad-2 .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    grid-template-columns: repeat(2, minmax(400px, 1fr)) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+  .viewer-shell.squadview-static-quad-1 .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-static-quad-1 .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    grid-template-columns: minmax(400px, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-card.is-visible {
+    min-height: 0 !important;
+    height: 100% !important;
+    display: flex;
+    flex-direction: column;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-card.is-visible .player-viewport {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 300px;
+    height: auto;
+    aspect-ratio: auto;
+    overflow: hidden;
+  }
+}
+
+/* Tall portrait desktops can keep all four native-size players without
+   sacrificing the chat composer. The chat has a fixed lower section, not a
+   scrolling page or an overlay on top of Twitch embeds. */
+@media (min-width: 761px) and (max-width: 1099px) {
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout.has-chat-rail {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) 250px !important;
+    grid-template-areas: 'stream' 'chat' !important;
+    gap: 6px;
+    padding: 6px;
+    overflow: hidden !important;
+    box-sizing: border-box;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .stream-stage {
+    grid-area: stream;
+    min-width: 0;
+    height: 100% !important;
+    min-height: 0;
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .desktop-chat-rail {
+    grid-area: chat;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+  .viewer-shell.squadview-responsive-quad .viewer-primary-layout .desktop-chat-rail .chat-panel {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+/* Legacy short-screen fit centered and scaled Twitch iframes. The static
+   layout instead keeps native-sized players anchored to their own tiles. */
+@media (min-width: 761px) and (max-height: 800px) {
+  .viewer-shell.squadview-responsive-quad.mode-dual .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount,
+  .viewer-shell.squadview-responsive-quad.mode-chat.chat-layout-grid .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    position: absolute;
+    inset: 0 !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 400px;
+    min-height: 300px;
+    transform: none !important;
+  }
+}
+
+/* SquadView 1.0.2 — opt-in centered five-up on ultrawide.
+   Exactly five selected channels: 3 on top, 2 centered below; still one chat
+   rail, native >=400x300 player dimensions, and no overlay or grid scrolling.
+   The existing six-player and paginated multi-page layouts are unchanged. */
+@media (min-width: 2100px) and (min-height: 850px) {
+  .viewer-shell.squadview-desktop-six-stream.squadview-ultrawide-five
+    .viewer-primary-layout.has-chat-rail .stream-stage.mode-chat .stream-stage-players {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
   }
 }
