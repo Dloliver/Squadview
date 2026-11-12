@@ -11,6 +11,7 @@ import {
   sendNativeTwitchChatMessage,
   shouldUseNativeTwitchChat,
 } from '../services/twitchNativeChatService';
+import { EMPTY_SEVEN_TV, loadSevenTvEmotes, tokenizeSevenTvText } from '../lib/sevenTvEmotes';
 
 const MAX_NATIVE_MESSAGES = 250;
 const NATIVE_CHAT_DRAFT_PREFIX = 'squadview:native-chat-draft:v1:';
@@ -241,28 +242,41 @@ function TwitchEmote({ fragment }) {
   );
 }
 
-function ChatMessageBody({ message }) {
-  const fragments = Array.isArray(message?.fragments)
-    ? message.fragments
-    : [];
-
-  if (!fragments.length) return <>{message?.text || ''}</>;
-
-  return (
-    <>
-      {fragments.map((fragment, index) => {
-        const key = `${message?.id || 'message'}:${index}`;
-
-        if (fragment?.type === 'emote' && fragment?.emoteId) {
-          return <TwitchEmote key={key} fragment={fragment} />;
-        }
-
-        return <span key={key}>{fragment?.text || ''}</span>;
-      })}
-    </>
-  );
+function SevenTvText({ text, lookup }) {
+  return <>{tokenizeSevenTvText(text, lookup).map((token, index) => (
+    token.type === 'emote'
+      ? <SevenTvEmote key={index} emote={token.emote} />
+      : <span key={index}>{token.text}</span>
+  ))}</>;
 }
 
+function SevenTvEmote({ emote }) {
+  const [failed, setFailed] = useState(false);
+  if (!emote?.image_url || failed) return <>{emote?.name || ''}</>;
+  return <img
+    src={emote.image_url}
+    alt={emote.name}
+    title={`${emote.name} · 7TV`}
+    loading="lazy"
+    decoding="async"
+    onError={() => setFailed(true)}
+    style={{ width: 28, height: 28, objectFit: 'contain', verticalAlign: 'middle', margin: '0 1px' }}
+  />;
+}
+
+function ChatMessageBody({ message, sevenTvLookup }) {
+  const fragments = Array.isArray(message?.fragments) ? message.fragments : [];
+  if (!fragments.length) return <SevenTvText text={message?.text || ''} lookup={sevenTvLookup} />;
+  return <>
+    {fragments.map((fragment, index) => {
+      const key = `${message?.id || 'message'}:${index}`;
+      if (fragment?.type === 'emote' && fragment?.emoteId) {
+        return <TwitchEmote key={key} fragment={fragment} />;
+      }
+      return <SevenTvText key={key} text={fragment?.text || ''} lookup={sevenTvLookup} />;
+    })}
+  </>;
+}
 
 
 // Group emotes by their real Twitch owner ID internally, but do not show raw
@@ -286,6 +300,9 @@ function nativeEmoteNameHint(ownerEmotes) {
 }
 
 function nativeEmoteOwnerSource(emote, currentChannel, currentBroadcasterId, availableEmotes = []) {
+  if (emote?.provider === '7tv') return emote.source === 'channel'
+    ? { label: `7TV channel emotes · #${currentChannel}`, short: '7TV Here' }
+    : { label: '7TV global emotes', short: '7TV Global' };
   const ownerId = String(emote?.owner_id || '').trim();
   if ((ownerId && ownerId === currentBroadcasterId) || (emote?.is_channel_emote && !ownerId)) {
     return { label: `#${currentChannel} · Current chat`, short: `#${currentChannel}` };
@@ -557,6 +574,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const [emoteError, setEmoteError] = useState('');
   const [emoteErrorCode, setEmoteErrorCode] = useState('');
   const [emotes, setEmotes] = useState([]);
+  const [sevenTvEmotes, setSevenTvEmotes] = useState(EMPTY_SEVEN_TV);
   const [emoteSearch, setEmoteSearch] = useState('');
   const [emoteCollection, setEmoteCollection] = useState('current-channel');
   const [emoteUsage, setEmoteUsage] = useState(readNativeEmoteUsage);
@@ -759,6 +777,19 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     return () => { cancelled = true; };
   }, [broadcaster?.id]);
 
+  // 7TV only affects artwork shown in Native Chat; never touches Twitch auth,
+  // the EventSub reader, composer data or backend. The module caches requests
+  // across chat panels. Channel changes cannot reuse a different channel's set.
+  useEffect(() => {
+    setSevenTvEmotes(EMPTY_SEVEN_TV);
+    if (nativeEnabled !== true || !broadcaster?.id) return undefined;
+    let cancelled = false;
+    void loadSevenTvEmotes(broadcaster.id).then((result) => {
+      if (!cancelled) setSevenTvEmotes(result);
+    }).catch(() => { if (!cancelled) setSevenTvEmotes(EMPTY_SEVEN_TV); });
+    return () => { cancelled = true; };
+  }, [nativeEnabled, broadcaster?.id, normalizedChannel]);
+
   // The Twitch iframe never owns this connection: switching tabs must not
   // disconnect the reader and create gaps in the short-lived local history.
   useEffect(() => {
@@ -908,6 +939,16 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     broadcaster?.id,
   ]);
 
+  const sevenTvPickerSections = useMemo(() => {
+    const channelEmotes = sevenTvEmotes.channel || [];
+    const ownedNames = new Set(channelEmotes.map((emote) => emote.name));
+    const globalEmotes = (sevenTvEmotes.global || []).filter((emote) => !ownedNames.has(emote.name));
+    return [
+      { key: '7tv-channel', label: `7TV · #${normalizedChannel}`, emotes: channelEmotes },
+      { key: '7tv-global', label: '7TV · Global', emotes: globalEmotes },
+    ].filter((section) => section.emotes.length > 0);
+  }, [sevenTvEmotes, normalizedChannel]);
+
   const filteredEmotes = useMemo(() => {
     const query = emoteSearch.trim().toLowerCase();
     if (!query) return emotes;
@@ -921,10 +962,12 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   // A compact account rail keeps Twitch emotes separated by their real owner.
   // Frequent uses only currently available IDs, so stale/unlocked emotes never appear.
   const emoteSections = useMemo(() => {
-    const ownedSections = buildNativeEmoteSections(
-      emotes, normalizedChannel, String(broadcaster?.id || '').trim(),
-    );
-    const availableById = new Map(emotes.map((emote) => [String(emote.id), emote]));
+    const ownedSections = [
+      ...buildNativeEmoteSections(emotes, normalizedChannel, String(broadcaster?.id || '').trim()),
+      ...sevenTvPickerSections,
+    ];
+    const availableById = new Map([...emotes, ...sevenTvPickerSections.flatMap(section => section.emotes)]
+      .map((emote) => [String(emote.id), emote]));
     const favorites = emoteUsage
       .map((entry) => ({ ...entry, emote: availableById.get(entry.id) }))
       .filter((entry) => entry.emote)
@@ -934,7 +977,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     return favorites.length
       ? [{ key: 'frequent', label: 'Frequently used', emotes: favorites }, ...ownedSections]
       : ownedSections;
-  }, [emotes, normalizedChannel, broadcaster?.id, emoteUsage]);
+  }, [emotes, normalizedChannel, broadcaster?.id, emoteUsage, sevenTvPickerSections]);
 
   const activeEmoteSection = emoteSections.find((section) => section.key === emoteCollection)
     || emoteSections.find((section) => section.key === 'current-channel')
@@ -942,9 +985,13 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const emoteSearchActive = Boolean(emoteSearch.trim());
   // Search looks across every account; selecting an account returns to that group.
   const visibleEmoteSections = emoteSearchActive
-    ? buildNativeEmoteSections(
-        filteredEmotes, normalizedChannel, String(broadcaster?.id || '').trim(),
-      )
+    ? [
+        ...buildNativeEmoteSections(filteredEmotes, normalizedChannel, String(broadcaster?.id || '').trim()),
+        ...sevenTvPickerSections.map((section) => ({
+          ...section,
+          emotes: section.emotes.filter((emote) => emote.name.toLowerCase().includes(emoteSearch.trim().toLowerCase())),
+        })).filter((section) => section.emotes.length > 0),
+      ]
     : activeEmoteSection ? [activeEmoteSection] : [];
 
   function trackInsertedEmote(emote) {
@@ -1216,7 +1263,7 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
                   {message.chatterName || message.chatterLogin || 'viewer'}
                 </button>
                 <span style={{ color: '#adadb8' }}>:</span>{' '}
-                <span><ChatMessageBody message={message} /></span>
+                <span><ChatMessageBody message={message} sevenTvLookup={sevenTvEmotes.lookup} /></span>
               </div>
             ))}
             <div ref={endRef} />
@@ -1271,11 +1318,11 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             }}
           />
 
-          {emoteStatus === 'loading' ? (
+          {emoteStatus === 'loading' && !sevenTvPickerSections.length ? (
             <div role="status" style={{ padding: 8, color: '#adadb8', fontSize: 12 }}>
               Loading your Twitch emotes…
             </div>
-          ) : emoteStatus === 'error' ? (
+          ) : emoteStatus === 'error' && !sevenTvPickerSections.length ? (
             <div
               role="alert"
               style={{ display: 'grid', gap: 7, padding: 8, borderRadius: 7,
@@ -1320,7 +1367,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               >
                 {emoteSections.map((section) => {
                   const selected = !emoteSearchActive && activeEmoteSection?.key === section.key;
-                  const shortLabel = section.key === 'frequent' ? 'Used'
+                  const shortLabel = section.key.startsWith('7tv-') ? (section.key === '7tv-channel' ? '7TV Here' : '7TV All')
+                    : section.key === 'frequent' ? 'Used'
                     : section.key === 'twitch-global' ? 'Global'
                     : section.key === 'current-channel' ? 'Here'
                     : section.key.startsWith('owner:') && section.label.startsWith('Emote collection · ')
