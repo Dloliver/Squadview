@@ -9428,4 +9428,11 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
     grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
   }
+  /* A five-up tile spans two half-width tracks, matching one six-up tile.
+     Keep numeric starts (TwitchPlayer ignores string gridColumn values). */
+  .viewer-shell.squadview-desktop-six-stream.squadview-ultrawide-five
+    .viewer-primary-layout.has-chat-rail .stream-stage.mode-chat .stream-stage-players
+    > .stream-card.is-visible {
+    grid-column-end: span 2 !important;
+  }
 }
