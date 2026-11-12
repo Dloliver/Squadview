@@ -1,5 +1,5 @@
 // SquadView 1.0.1: isolated, pure ultrawide paging. No player/audio effects.
-// A maximum of three explicit locks stay at their chosen slots on every page.
+// UltraWide allows at most five explicit locks; at least one slot can rotate.
 // Other streams advance in groups of the available unoccupied slots.
 export function buildUltrawideSixPage({ channels = [], page = 0, lockedSlots = {} } = {}) {
   const roster = [...new Set((channels || []).filter(Boolean))];
@@ -7,7 +7,7 @@ export function buildUltrawideSixPage({ channels = [], page = 0, lockedSlots = {
   const slots = Array(6).fill(null);
   let anchoredCount = 0;
   for (const [channel, requestedSlot] of Object.entries(lockedSlots || {})) {
-    if (anchoredCount >= 3) break;
+    if (anchoredCount >= 5) break;
     if (!roster.includes(channel)) continue;
     const slot = Number(requestedSlot);
     const proposed = Number.isInteger(slot) && slot >= 0 && slot < 6 && !slots[slot]

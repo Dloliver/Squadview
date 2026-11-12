@@ -643,6 +643,12 @@ function SquadViewApp() {
     const lead = initialViewer?.channels?.[0];
     return lead ? { [lead]: 0 } : {};
   });
+  // UltraWide keeps an independent 5-lock preset; null means it has not yet
+  // inherited the current Grid locks. An empty object is an intentional unlock-all.
+  const [ultrawideStreamLockSlots, setUltrawideStreamLockSlots] = useState(() => {
+    const saved = initialViewer?.ultrawideStreamLockSlots;
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : null;
+  });
   const [desktopPage, setDesktopPage] = useState(() => initialViewer?.desktopPage || 0);
   // Keep the displayed desktop page independent from the stream that is focused.
   // Focusing a stream can enable its audio without reshuffling the grid.
@@ -1729,12 +1735,13 @@ function SquadViewApp() {
         desktopLeadChannel,
         chatLayout,
         streamLockSlots,
+        ultrawideStreamLockSlots,
       }));
       writeViewerHeartbeat();
     } catch {
       // Storage can be unavailable in private or restricted browsing contexts.
     }
-  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout, streamLockSlots]);
+  }, [screen, channels, activeChannel, viewMode, slotChannels, desktopPage, desktopLeadChannel, chatLayout, streamLockSlots, ultrawideStreamLockSlots]);
 
   // Do not expire a viewer merely because the tab/app is hidden. A streamer may
   // intentionally keep SquadView running in the background for hours. Instead,
@@ -2866,6 +2873,7 @@ function SquadViewApp() {
     setViewMode(initialViewMode);
     setSlotChannels(unique.slice(0, 2));
     setStreamLockSlots(unique[0] ? { [unique[0]]: 0 } : {});
+    setUltrawideStreamLockSlots(null);
     setDesktopPage(0);
     setDesktopLeadChannel(unique[0]);
     setDesktopChatRotationChannels(unique.slice(1));
@@ -3377,12 +3385,14 @@ function SquadViewApp() {
     resumeAudioSelectedPlayers(nextPolicy);
   }
 
-  function toggleStreamLock(channel, visibleSlot, maxLocks) {
+  function toggleStreamLock(channel, visibleSlot, maxLocks, scope = 'standard') {
     const cleaned = cleanChannel(channel);
     if (!cleaned || !channels.includes(cleaned)) return;
-    setStreamLockSlots((current) => {
+    const updateLocks = scope === 'ultrawide' ? setUltrawideStreamLockSlots : setStreamLockSlots;
+    updateLocks((current) => {
+      const previous = current ?? (scope === 'ultrawide' ? streamLockSlots : {});
       const next = Object.fromEntries(
-        Object.entries(current).filter(([candidate]) => channels.includes(candidate)),
+        Object.entries(previous).filter(([candidate]) => channels.includes(candidate)),
       );
       if (Object.prototype.hasOwnProperty.call(next, cleaned)) {
         delete next[cleaned];
@@ -3662,6 +3672,11 @@ function SquadViewApp() {
       if (!desktopSixStreamViewport || channels.length < 5 || youtubeCompanion) return;
       if (viewMode === 'solo') returnToDual();
       const selected = channels.includes(chatChannel) ? chatChannel : (channels[0] || activeChannel);
+      // First entry inherits existing Grid locks. Later switches keep UltraWide's
+      // independent choices, including when the user has unlocked everything.
+      setUltrawideStreamLockSlots((current) => current ?? Object.fromEntries(
+        Object.entries(streamLockSlots).filter(([channel]) => channels.includes(channel)).slice(0, 3),
+      ));
       setDesktopDualChatEnabled(false);
       setDesktopSixStreamEnabled(true);
       setCompactViewerEnabled(true);
@@ -4318,6 +4333,7 @@ function SquadViewApp() {
       setAudibleChannels(new Set());
       setSlotChannels([]);
       setStreamLockSlots({});
+      setUltrawideStreamLockSlots(null);
       setAudioEnabled(false);
       setDesktopPage(0);
       setDesktopLeadChannel('');
@@ -5076,6 +5092,11 @@ function SquadViewApp() {
     const desktopPinnedChannel = desktopGridChat
       ? requestedChatChannel
       : desktopLeadChannel;
+    // Lock choices are scoped by active viewer layout: Grid/Dual Chat/mobile
+    // keep their original limits; UltraWide can pin up to five of six tiles.
+    const currentViewLockSlots = desktopSixStream
+      ? (ultrawideStreamLockSlots ?? streamLockSlots)
+      : streamLockSlots;
     const lockedDesktopGrid = Object.keys(streamLockSlots).some((channel) => channels.includes(channel));
     const desktopRotationRoster = desktopGridChat && !compactPagedChat
       ? [requestedChatChannel, ...getDesktopChatRotationChannels(channels, requestedChatChannel, desktopChatRotationChannels)]
@@ -5090,7 +5111,7 @@ function SquadViewApp() {
     };
     // Keep the original paging behavior if the viewer deliberately unlocks all.
     const desktopPageModel = desktopSixStream
-      ? buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: streamLockSlots })
+      ? buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: currentViewLockSlots })
       : lockedDesktopGrid
         ? buildLockedPage({ ...desktopLockPageArgs, page: desktopPage })
         : null;
@@ -5101,7 +5122,7 @@ function SquadViewApp() {
     const desktopPageForRender = Math.min(desktopPage, desktopPageCount - 1);
     const desktopChannels = desktopPageModel
       ? (desktopSixStream
-          ? buildUltrawideSixPage({ channels, page: desktopPageForRender, lockedSlots: streamLockSlots }).channels
+          ? buildUltrawideSixPage({ channels, page: desktopPageForRender, lockedSlots: currentViewLockSlots }).channels
           : buildLockedPage({ ...desktopLockPageArgs, page: desktopPageForRender }).channels)
       : desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
@@ -5119,7 +5140,7 @@ function SquadViewApp() {
             desktopVisibleTwitchLimit,
           );
     const maxVisibleStreamLocks = isDesktopGrid
-      ? Math.min(3, Math.max(0, desktopVisibleTwitchLimit - 1))
+      ? Math.min(desktopSixStream ? 5 : 3, Math.max(0, desktopVisibleTwitchLimit - 1))
       : 1;
     // A chat target is explicit viewer intent. Page visibility, video pause,
     // advertisements and transient Twitch OFFLINE status cannot change it.
@@ -5271,7 +5292,7 @@ function SquadViewApp() {
       const nextPage = (desktopPageForRender + direction + desktopPageCount) % desktopPageCount;
       const nextVisibleChannels = desktopPageModel
         ? (desktopSixStream
-            ? buildUltrawideSixPage({ channels, page: nextPage, lockedSlots: streamLockSlots }).channels
+            ? buildUltrawideSixPage({ channels, page: nextPage, lockedSlots: currentViewLockSlots }).channels
             : buildLockedPage({ ...desktopLockPageArgs, page: nextPage }).channels)
         : desktopGridChat && !compactPagedChat
         ? getDesktopChatPageChannels(
@@ -5553,11 +5574,12 @@ function SquadViewApp() {
                             ? (desktopPageModel?.slotsByChannel?.[channel] ?? visibleChannels.indexOf(channel))
                             : visibleChannels.indexOf(channel),
                           maxVisibleStreamLocks,
+                          desktopSixStream ? 'ultrawide' : 'standard',
                         )
                       : undefined}
-                    streamLocked={Object.prototype.hasOwnProperty.call(streamLockSlots, channel)}
-                    lockDisabled={isDesktopGrid && !Object.prototype.hasOwnProperty.call(streamLockSlots, channel) &&
-                      Object.keys(streamLockSlots).filter((name) => channels.includes(name)).length >= maxVisibleStreamLocks}
+                    streamLocked={Object.prototype.hasOwnProperty.call(currentViewLockSlots, channel)}
+                    lockDisabled={isDesktopGrid && !Object.prototype.hasOwnProperty.call(currentViewLockSlots, channel) &&
+                      Object.keys(currentViewLockSlots).filter((name) => channels.includes(name)).length >= maxVisibleStreamLocks}
                     canViewerReorder={isDesktopGrid && (viewMode === 'dual' || desktopGridChat) && visibleChannels.length > 1}
                     viewerDragActive={draggedViewerChannel === channel}
                     onViewerDragStart={() => setDraggedViewerChannel(channel)}

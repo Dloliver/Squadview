@@ -25,9 +25,9 @@ check('Wide Grid is opt-in, 2100x850-gated, Twitch-only with 5 or 6 channels',
   app.includes('channels.length < 5 || youtubeCompanion') &&
   app.includes('desktopSixStreamEnabled && desktopSixStreamViewport'));
 check('Six-player page count, channel selection and next page use separate helper',
-  app.includes('buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: streamLockSlots })') &&
-  app.includes('buildUltrawideSixPage({ channels, page: desktopPageForRender, lockedSlots: streamLockSlots })') &&
-  app.includes('buildUltrawideSixPage({ channels, page: nextPage, lockedSlots: streamLockSlots })'));
+  app.includes('buildUltrawideSixPage({ channels, page: desktopPage, lockedSlots: currentViewLockSlots })') &&
+  app.includes('buildUltrawideSixPage({ channels, page: desktopPageForRender, lockedSlots: currentViewLockSlots })') &&
+  app.includes('buildUltrawideSixPage({ channels, page: nextPage, lockedSlots: currentViewLockSlots })'));
 check('Six-up layout positions 3 columns by 2 rows',
   app.includes('gridColumn: (index % 3) + 1') &&
   app.includes('gridRow: Math.floor(index / 3) + 1') &&
