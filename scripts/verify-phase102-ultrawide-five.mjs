@@ -15,6 +15,11 @@ check('Button enables 5+ only on ultrawide',
  app.includes('channels.length < 5 || Boolean(youtubeCompanion)') &&
  app.includes('desktopGridChat && compactViewerEnabled && channels.length >= 5 &&') &&
  app.includes('(min-width: 2100px) and (min-height: 850px)'));
+check('Ultrawide label and viewport-only rendering preserve five-stream eligibility',
+  app.includes('{desktopSixStreamViewport && (') &&
+  app.includes('>UltraWide</button>') &&
+  app.includes('disabled={channels.length < 5 || Boolean(youtubeCompanion)}') &&
+  !app.includes('>5–6 Streams</button>'));
 check('Five streams use centered helper, six retain original positions',
  app.includes('const desktopFiveStream = desktopSixStream && channels.length === 5 && visibleChannels.length === 5;') &&
  app.includes('const fivePosition = centeredFivePosition(visibleChannels.indexOf(channel));') &&

@@ -5823,10 +5823,12 @@ function SquadViewApp() {
                   disabled={!desktopDualChatViewport || channels.length < 2 || Boolean(youtubeCompanion)}
                   title="Two streams with a full-height chat for each"
                   onClick={() => activateDesktopViewerLayout('dual-chat')}>Dual Chat</button>
-                <button type="button" className={desktopSixStream ? 'is-current' : ''} aria-pressed={desktopSixStream}
-                  disabled={!desktopSixStreamViewport || channels.length < 5 || Boolean(youtubeCompanion)}
-                  title="Five or six Twitch streams on a 2100 × 850+ ultrawide, with one selectable chat"
-                  onClick={() => activateDesktopViewerLayout('six-stream')}>5–6 Streams</button>
+                {desktopSixStreamViewport && (
+                  <button type="button" className={desktopSixStream ? 'is-current' : ''} aria-pressed={desktopSixStream}
+                    disabled={channels.length < 5 || Boolean(youtubeCompanion)}
+                    title="UltraWide: five or six Twitch streams with one selectable chat"
+                    onClick={() => activateDesktopViewerLayout('six-stream')}>UltraWide</button>
+                )}
               </div>
             ) : (
               <button className={viewMode === 'dual' ? 'is-current' : ''} onClick={returnToDual}>▦ Dual</button>

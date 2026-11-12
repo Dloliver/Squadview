@@ -4,9 +4,14 @@ import { buildUltrawideSixPage } from '../src/lib/ultrawideSixPage.js';
 const app=fs.readFileSync('src/App.jsx','utf8');
 const css=fs.readFileSync('src/styles.css','utf8');
 const check=(name,valid)=>{assert.ok(valid,name);console.log('PASS:',name)};
-check('Grid, Dual Chat and 5–6 Streams appear together in bottom toolbar',
+check('Grid, Dual Chat and UltraWide appear together on eligible desktops',
   app.includes('squadview-view-mode-switch') && app.includes('>▦ Grid</button>') &&
-  app.includes('>Dual Chat</button>') && app.includes('>5–6 Streams</button>'));
+  app.includes('>Dual Chat</button>') && app.includes('>UltraWide</button>'));
+check('Ultrawide control is hidden completely outside eligible viewports',
+  app.includes('{desktopSixStreamViewport && (') &&
+  app.includes('>UltraWide</button>') &&
+  app.includes('disabled={channels.length < 5 || Boolean(youtubeCompanion)}') &&
+  app.includes('(min-width: 2100px) and (min-height: 850px)'));
 check('Buttons are active stateful controls and not inert',
   app.includes("activateDesktopViewerLayout('grid')") &&
   app.includes("activateDesktopViewerLayout('dual-chat')") &&
