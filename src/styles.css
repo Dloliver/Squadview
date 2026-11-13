@@ -9401,6 +9401,62 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
   }
 }
 
+/* SquadView 1.0.2 compact desktop/PWA quad restoration.
+   A 1080x763 app window has ~1080x669 of viewer workspace. Earlier 1.0.2
+   CSS mistook all <1100px windows for TALL portrait and put chat BELOW the
+   grid, inadvertently paginating four streams to two. Keep the existing tall
+   portrait/below-chat layout; in this narrowly measured short desktop case,
+   put one chat rail BESIDE four unscaled, minimum-size Twitch players.
+   Pixel budgets are shared with supportsCompactSideQuad() and covered by tests.
+   No overrides apply to phone/mobile, Focus, Dual Chat or UltraWide. */
+@media (min-width: 1000px) and (max-width: 1099px) and (max-height: 800px) {
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout.has-chat-rail {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) clamp(205px, 20vw, 220px) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    grid-template-areas: 'stream chat' !important;
+    gap: 4px !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout.has-chat-rail.chat-dock-left {
+    grid-template-columns: clamp(205px, 20vw, 220px) minmax(0, 1fr) !important;
+    grid-template-areas: 'chat stream' !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout .stream-stage {
+    padding: 0 !important;
+    min-height: 0 !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    gap: 3px !important;
+    grid-template-columns: repeat(2, minmax(400px, 1fr)) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .stream-card.is-visible .stream-card-header {
+    box-sizing: border-box;
+    flex: 0 0 27px !important;
+    height: 27px !important;
+    min-height: 27px !important;
+    padding: 0 3px !important;
+    gap: 3px !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .stream-card.is-visible .player-viewport {
+    min-height: 300px !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .stream-card.is-visible .player-viewport.squadview-fit-embed > .player-mount {
+    min-width: 400px !important;
+    min-height: 300px !important;
+    transform: none !important;
+  }
+  .viewer-shell.squadview-compact-side-quad .viewer-primary-layout .desktop-chat-rail {
+    grid-area: chat;
+    min-width: 0;
+    min-height: 0;
+    height: 100% !important;
+  }
+}
+
 /* Legacy short-screen fit centered and scaled Twitch iframes. The static
    layout instead keeps native-sized players anchored to their own tiles. */
 @media (min-width: 761px) and (max-height: 800px) {

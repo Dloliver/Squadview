@@ -7,7 +7,7 @@ import { buildLockedPage, rotateMobilePair } from './lib/streamLocks';
 import { buildUltrawideSixPage } from './lib/ultrawideSixPage';
 import { selectDesktopDualSwap, rotateDesktopDualOther } from './lib/desktopDualChatSwap';
 import { centeredFivePosition } from './lib/ultrawideFivePositions';
-import { chooseStaticQuadCapacity } from './lib/staticQuadCapacity';
+import { chooseStaticQuadCapacity, supportsCompactSideQuad } from './lib/staticQuadCapacity';
 import { filterOfflineAutoRemoval, chatForExplicitPageChange } from './lib/chatSelectionPersistence';
 import { selectBoundedMountedChannels } from './lib/viewerPlayerMounts';
 import SiteFooter from './components/legal/SiteFooter';
@@ -5034,9 +5034,17 @@ function SquadViewApp() {
           workspaceWidth: staticQuadWorkspace.width,
           workspaceHeight: staticQuadWorkspace.height,
           viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
           compactChatRail: compactViewerEnabled,
         })
       : 4;
+    const compactSideQuad = quadGridRequested && staticQuadCapacity === 4 &&
+      supportsCompactSideQuad({
+        workspaceWidth: staticQuadWorkspace.width,
+        workspaceHeight: staticQuadWorkspace.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
     // Phase B trial: four 400x300 Twitch embeds cannot physically fit inside
     // this short viewport with the chat rail. Keep two Twitch players on each
     // paged screen; on taller viewports preserve the original four-player grid.
@@ -5368,7 +5376,7 @@ function SquadViewApp() {
 
 
     return (
-      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''} ${shortDesktopTwoUp ? 'squadview-short-desktop-two-up' : ''} ${quadGridRequested && !desktopDualChat && !desktopSixStream ? `squadview-responsive-quad squadview-static-quad-${staticQuadCapacity}` : ''} ${shortDesktopTwoUp && visibleChannels.length === 1 ? 'squadview-short-desktop-one' : ''} ${desktopDualChat ? 'squadview-desktop-dual-chat' : ''} ${desktopSixStream ? 'squadview-desktop-six-stream' : ''} ${desktopFiveStream ? 'squadview-ultrawide-five' : ''}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''} ${shortDesktopTwoUp ? 'squadview-short-desktop-two-up' : ''} ${quadGridRequested && !desktopDualChat && !desktopSixStream ? `squadview-responsive-quad squadview-static-quad-${staticQuadCapacity}` : ''} ${compactSideQuad && !desktopDualChat && !desktopSixStream ? 'squadview-compact-side-quad' : ''} ${shortDesktopTwoUp && visibleChannels.length === 1 ? 'squadview-short-desktop-one' : ''} ${desktopDualChat ? 'squadview-desktop-dual-chat' : ''} ${desktopSixStream ? 'squadview-desktop-six-stream' : ''} ${desktopFiveStream ? 'squadview-ultrawide-five' : ''}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
