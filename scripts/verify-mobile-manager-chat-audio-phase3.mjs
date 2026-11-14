@@ -19,7 +19,7 @@ const checks = [
   ['native Chat builds mention candidates from recent chatters', chat.includes('[...messages].reverse()') && chat.includes('message?.chatterLogin')],
   ['native Chat @ parser exists', chat.includes("match(/(^|\\s)@([A-Za-z0-9_]{0,25})$/)")],
   ['native Chat renders mention suggestions', chat.includes('native-chat-mention-suggestions') && chat.includes('Mention a Twitch user')],
-  ['native Chat usernames are clickable mentions', chat.includes('native-chat-username') && chat.includes('insertMention(message.chatterLogin')],
+  ['native Chat usernames open profile actions with a separate Mention option', chat.includes('native-chat-username') && chat.includes('openNativeProfile(message)') && chat.includes('insertMention(activeProfileTarget.login)')],
   ['native Chat keyboard can select mention suggestions', chat.includes("event.key === 'ArrowDown'") && chat.includes("event.key === 'Tab'")],
   ['mobile Manage Streams uses horizontal selected lineup rail', css.includes('.stream-manager-current-list {\n    display: flex;') && css.includes('scroll-snap-type: x proximity')],
   ['mobile selected lineup cards are compact', css.includes('flex: 0 0 min(74vw, 270px)')],

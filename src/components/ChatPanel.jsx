@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { signInWithTwitch } from '../services/accountService';
 import { supabase } from '../lib/supabase';
 import { canSendNativeChatMessage } from '../lib/nativeChatSendAvailability';
+import { nativeChatReplyTarget, nativeChatProfileTarget, nativeChatProfileUrl } from '../lib/nativeChatInteractions';
 import {
   createNativeTwitchChat,
   disableNativeTwitchChat,
@@ -569,6 +570,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
   const [draft, setDraft] = useState('');
   const [sendBusy, setSendBusy] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [profileTarget, setProfileTarget] = useState(null);
   const [emotePickerOpen, setEmotePickerOpen] = useState(false);
   const [emoteStatus, setEmoteStatus] = useState('idle');
   const [emoteError, setEmoteError] = useState('');
@@ -606,6 +609,10 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     () => String(channel || '').trim().toLowerCase(),
     [channel],
   );
+  // Never reuse a reply or profile from a different selected stream, even
+  // during the render before the channel-change cleanup effect runs.
+  const activeReplyTarget = replyTarget?.channel === normalizedChannel ? replyTarget : null;
+  const activeProfileTarget = profileTarget?.channel === normalizedChannel ? profileTarget : null;
 
   // Keep exactly one live EventSub reader for the selected channel when the
   // viewer is authenticated, even while the Twitch iframe is selected.
@@ -734,6 +741,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setComposerCursor(restoredDraft.length);
     setMentionActiveIndex(0);
     setSendError('');
+    setReplyTarget(null);
+    setProfileTarget(null);
     setEmotePickerOpen(false);
     setEmoteSearch('');
     setEmoteCollection('current-channel');
@@ -1005,6 +1014,8 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     setNativeEnabled(false);
     setError('');
     setEmotePickerOpen(false);
+    setReplyTarget(null);
+    setProfileTarget(null);
   };
 
   const switchToNativeChat = () => {
@@ -1048,9 +1059,26 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
     });
   };
 
+  const selectNativeReply = (message) => {
+    const next = nativeChatReplyTarget(message, normalizedChannel);
+    if (!next) return;
+    setReplyTarget(next);
+    setProfileTarget(null);
+    setSendError('');
+    onActivity?.({ type: 'native_input', channel: normalizedChannel });
+    window.requestAnimationFrame(() => composerRef.current?.focus?.({ preventScroll: true }));
+  };
+
+  const openNativeProfile = (message) => {
+    const next = nativeChatProfileTarget(message, normalizedChannel);
+    if (!next) return;
+    setProfileTarget(next);
+  };
+
   const insertMention = (loginValue) => {
     const login = String(loginValue || '').trim().replace(/^@+/, '').toLowerCase();
     if (!login) return;
+    setProfileTarget(null);
 
     const input = composerRef.current;
     const cursor = Math.max(0, Math.min(
@@ -1247,29 +1275,69 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
             {messages.map((message) => (
               <div
                 key={message.id || `${message.chatterLogin}:${message.sentAt}:${message.text}`}
-                style={{
-                  padding: '2px 0',
-                  overflowWrap: 'anywhere',
+                className={`native-chat-message-row ${nativeChatReplyTarget(message, normalizedChannel) ? 'can-reply' : ''}`}
+                onClick={() => {
+                  // Selecting/copying text must not accidentally start a reply.
+                  if (window.getSelection?.()?.toString().trim()) return;
+                  selectNativeReply(message);
                 }}
               >
                 <NativeChatBadges badges={message.badges} catalogs={badgeCatalogs} />
                 <button
                   type="button"
                   className="native-chat-username"
-                  onClick={() => insertMention(message.chatterLogin || message.chatterName)}
-                  title={`Mention @${message.chatterLogin || message.chatterName || 'viewer'}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openNativeProfile(message);
+                  }}
+                  title={`View ${message.chatterName || message.chatterLogin || 'viewer'} on Twitch`}
+                  aria-label={`Open Twitch profile options for ${message.chatterName || message.chatterLogin || 'viewer'}`}
                   style={{ color: message.color || '#bf94ff' }}
                 >
                   {message.chatterName || message.chatterLogin || 'viewer'}
                 </button>
                 <span style={{ color: '#adadb8' }}>:</span>{' '}
-                <span><ChatMessageBody message={message} sevenTvLookup={sevenTvEmotes.lookup} /></span>
+                <button
+                  type="button"
+                  className="native-chat-message-reply"
+                  disabled={!nativeChatReplyTarget(message, normalizedChannel)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    selectNativeReply(message);
+                  }}
+                  title="Reply to this message"
+                  aria-label={`Reply to ${message.chatterName || message.chatterLogin || 'viewer'}: ${String(message.text || '').slice(0, 80)}`}
+                >
+                  <ChatMessageBody message={message} sevenTvLookup={sevenTvEmotes.lookup} />
+                </button>
               </div>
             ))}
             <div ref={endRef} />
           </>
         )}
       </div>
+
+      {activeProfileTarget && (
+        <section className="native-chat-profile-card" aria-label="Twitch user profile options">
+          <div className="native-chat-profile-header">
+            <span className="native-chat-profile-initial" aria-hidden="true">
+              {activeProfileTarget.name.charAt(0).toUpperCase()}
+            </span>
+            <div className="native-chat-profile-identity">
+              <strong>{activeProfileTarget.name}</strong>
+              <span>@{activeProfileTarget.login}</span>
+            </div>
+            <button type="button" className="native-chat-profile-close" onClick={() => setProfileTarget(null)} aria-label="Close Twitch profile options">×</button>
+          </div>
+          <div className="native-chat-profile-actions">
+            <a href={nativeChatProfileUrl(activeProfileTarget.login)} target="_blank" rel="noopener noreferrer" onClick={() => setProfileTarget(null)}>
+              Open profile / Follow on Twitch ↗
+            </a>
+            <button type="button" onClick={() => insertMention(activeProfileTarget.login)}>Mention</button>
+          </div>
+          <small>Following happens on Twitch; SquadView cannot follow accounts directly.</small>
+        </section>
+      )}
 
       {emotePickerOpen && (
         <section
@@ -1555,6 +1623,15 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
           background: '#18181b',
         }}
       >
+        {activeReplyTarget && (
+          <div className="native-chat-reply-context" aria-label="Replying to a Twitch message">
+            <div className="native-chat-reply-text">
+              <strong>Replying to {activeReplyTarget.name}</strong>
+              <span>{activeReplyTarget.preview || 'Twitch message'}</span>
+            </div>
+            <button type="button" onClick={() => setReplyTarget(null)} aria-label="Cancel chat reply">×</button>
+          </div>
+        )}
         <form
           onSubmit={async (event) => {
             event.preventDefault();
@@ -1571,7 +1648,9 @@ export default function ChatPanel({ channel, compact = false, mentionCandidates 
               await sendNativeTwitchChatMessage({
                 broadcasterUserId: broadcaster?.id,
                 message,
+                replyParentMessageId: activeReplyTarget?.id || '',
               });
+              setReplyTarget(null);
               setDraft('');
               setComposerCursor(0);
               setMentionActiveIndex(0);

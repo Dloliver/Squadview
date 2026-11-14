@@ -472,11 +472,8 @@ function forceLiveResync(
         // Native Twitch play remains available.
       }
 
-      applyQualityPolicy(
-        player,
-        latestState.active,
-        latestState.visibleCount || 1,
-      );
+      // Do not force Twitch to switch renditions during live-edge recovery.
+      // The embed (or viewer's own Quality setting) owns that choice.
 
       applyPlayerState(
         player,
@@ -604,8 +601,8 @@ function applyPlayerState(
         // WebKit may be finishing the page transition. Keep the player mounted.
       }
 
-      // Switching quality can reload iOS media. Leave the warm embed alone.
-      if (!state.preserveAudibleSession) applyWarmHiddenQuality(player);
+      // Switching renditions on a warm, hidden embed can interrupt playback.
+      // Preserve its current quality on desktop and iOS.
       player.__squadViewPausedByScheduler = false;
       player.__squadViewWasVisible = false;
       player.__squadViewWarmHidden = true;
@@ -717,11 +714,10 @@ function applyPlayerState(
     }
   }
 
-  // On iOS let Twitch choose its startup rendition. Repeated automatic
-  // setQuality() calls while READY/PLAYING transitions can interrupt playback.
-  if (!state.preserveAudibleSession) {
-    applyQualityPolicy(player, active, visibleCount);
-  }
+  // Twitch owns initial quality selection in every desktop layout too.
+  // In multi-stream grids, forcing 480p during READY/PLAYING can strand
+  // embeds at zero FPS or unexpectedly paused. Preserve viewer-set quality.
+  // Keep any explicit manual Twitch Quality setting intact.
 
   player.__squadViewPausedByScheduler = false;
   player.__squadViewWasVisible = true;
@@ -1093,7 +1089,12 @@ export default function TwitchPlayer({
     };
 
     syncLiveAudioStatus();
-    const statusTimer = window.setInterval(syncLiveAudioStatus, 300);
+    // Desktop multi-stream grids can run several embedded-player reads each
+    // second for every visible tile. A 750ms status cadence reduces this work
+    // without touching Twitch decoding, stream mounts, or audio ownership.
+    // Preserve 300ms mobile feedback for single-owner Listen interactions.
+    const statusPollMs = window.matchMedia?.('(min-width: 761px)').matches ? 750 : 300;
+    const statusTimer = window.setInterval(syncLiveAudioStatus, statusPollMs);
 
     return () => window.clearInterval(statusTimer);
   }, [

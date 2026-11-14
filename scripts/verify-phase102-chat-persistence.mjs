@@ -15,5 +15,5 @@ check(app.includes('const activeChatChannel = requestedChatChannel;'), 'Chat tar
 check(app.includes('chatForExplicitPageChange(requestedChatChannel, nextVisibleChannels)'), 'Chat changes on deliberate page navigation only');
 check(app.includes('    chatChannel,\n    activeChannel,\n    desktopLeadChannel,'), 'Offline cleanup responds when chat selection changes');
 check(app.includes('onStreamStatusChange={handleViewerStreamStatusChange}'), 'Existing player live-status wiring remains intact');
-check(app.includes('<ChatPanel channel={viewMode === \'chat\' ? activeChatChannel : activeChannel}'), 'Existing chat rail uses selected channel');
+check(app.includes("<ChatPanel channel={viewMode === 'chat' ? displayedChatChannel : activeChannel}"), 'Desktop chat rail uses on-page chat while preserving stored channel selection');
 console.log('PASS: 1.0.2 Sticky Chat structural and behavior tests. Browser verification still required.');

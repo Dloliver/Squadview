@@ -10,6 +10,7 @@ import { centeredFivePosition } from './lib/ultrawideFivePositions';
 import { chooseStaticQuadCapacity, supportsCompactSideQuad } from './lib/staticQuadCapacity';
 import { filterOfflineAutoRemoval, chatForExplicitPageChange } from './lib/chatSelectionPersistence';
 import { selectBoundedMountedChannels } from './lib/viewerPlayerMounts';
+import { chooseDesktopPageAudioFallback } from './lib/desktopPageAudio';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
@@ -741,6 +742,10 @@ function SquadViewApp() {
   const audioPolicyRef = useRef(null);
   const lastAppliedAudioPolicyRef = useRef(null);
   const focusReturnAudioRef = useRef(null);
+  // A deliberate desktop mute must not be overridden by a later page change.
+  // This tracks explicit Listen/volume interactions only, never Twitch loading
+  // or autoplay states. Session-scoped, not persisted to user settings.
+  const desktopExplicitMutedChannelsRef = useRef(new Set());
 
   function clampFocusedAudioVolume(value, fallback = 1) {
     const numeric = Number(value);
@@ -2842,6 +2847,7 @@ function SquadViewApp() {
     mountedPlayerChannelsRef.current = new Set();
     mobileWarmPlaybackHistoryRef.current = { key: '', current: [], previous: [] };
     resetSessionChannelVolumes();
+    desktopExplicitMutedChannelsRef.current = new Set();
     clearNativeChatDrafts();
     referralPromoWatchMsRef.current = 0;
     referralPromoLastTickRef.current = Date.now();
@@ -3003,6 +3009,10 @@ function SquadViewApp() {
     snapshotAudioLevels(lastAppliedAudioPolicyRef.current || audioPolicyRef.current);
 
     const nextVolume = clampFocusedAudioVolume(value, 1);
+    if (isDesktopGrid) {
+      if (nextVolume <= 0) desktopExplicitMutedChannelsRef.current.add(cleaned);
+      else desktopExplicitMutedChannelsRef.current.delete(cleaned);
+    }
     if (nextVolume > 0) rememberSessionChannelVolume(cleaned, nextVolume);
     const player = playersRef.current.get(cleaned);
 
@@ -3316,6 +3326,7 @@ function SquadViewApp() {
       // stream. A 0 focused volume deselects only this stream while preserving
       // any other desktop Listen selections.
       if (actuallyAudible) {
+        if (isDesktopGrid) desktopExplicitMutedChannelsRef.current.add(cleaned);
         try {
           const currentVolume = Number(player?.getVolume?.());
           if (Number.isFinite(currentVolume) && currentVolume > 0) {
@@ -3338,6 +3349,7 @@ function SquadViewApp() {
         return;
       }
 
+      if (isDesktopGrid) desktopExplicitMutedChannelsRef.current.delete(cleaned);
       if (clampFocusedAudioVolume(focusedAudioVolumeRef.current, 0) <= 0) {
         const restoredVolume = getSessionChannelVolume(cleaned, 1);
         focusedAudioVolumeRef.current = restoredVolume;
@@ -3356,6 +3368,7 @@ function SquadViewApp() {
       : nextListening.has(cleaned);
 
     if (displayedListening) {
+      if (isDesktopGrid) desktopExplicitMutedChannelsRef.current.add(cleaned);
       try {
         const currentVolume = Number(player?.getVolume?.());
         if (Number.isFinite(currentVolume) && currentVolume > 0) {
@@ -3368,6 +3381,7 @@ function SquadViewApp() {
         player?.setVolume?.(0);
       } catch {}
     } else {
+      if (isDesktopGrid) desktopExplicitMutedChannelsRef.current.delete(cleaned);
       nextListening.add(cleaned);
       if (player && clampFocusedAudioVolume(player.__squadViewManualVolume, 0) <= 0) {
         player.__squadViewManualVolume = getSessionChannelVolume(cleaned, 1);
@@ -4354,6 +4368,9 @@ function SquadViewApp() {
       return;
     }
 
+    desktopExplicitMutedChannelsRef.current = new Set(
+      [...desktopExplicitMutedChannelsRef.current].filter((channel) => unique.includes(channel)),
+    );
     const requestedActive = cleanChannel(preferredActive);
     const nextActive = unique.includes(requestedActive) ? requestedActive : unique[0];
 
@@ -5153,6 +5170,15 @@ function SquadViewApp() {
     // A chat target is explicit viewer intent. Page visibility, video pause,
     // advertisements and transient Twitch OFFLINE status cannot change it.
     const activeChatChannel = requestedChatChannel;
+    // A responsive 4-up to 2-up resize, locked-page reshuffle, or restored
+    // desktop page can change visible streams without a page-arrow click.
+    // For compact paged chat, display the selected stream's chat only while it
+    // is visible; otherwise show the first stream on this page. This affects
+    // presentation only: do not overwrite the viewer's saved chat preference
+    // during ordinary renders, playback changes or transient OFFLINE events.
+    const displayedChatChannel = compactPagedChat
+      ? chatForExplicitPageChange(activeChatChannel, desktopChannels)
+      : activeChatChannel;
     const mobileVisibleChatChannel = mobileSplitChat && !dualChannels.includes(activeChatChannel)
       ? (dualChannels[0] || activeChatChannel)
       : activeChatChannel;
@@ -5317,6 +5343,23 @@ function SquadViewApp() {
             nextPage,
             desktopVisibleTwitchLimit,
           );
+
+      // An audible selection from the old desktop page can disappear on Next.
+      // Carry audio into the incoming page only when it has no selected source.
+      // Do not override a deliberate mute, or turn an already-silent viewer on.
+      // The new selection is remembered so returning to any page restores the
+      // user's prior Listen choices; existing audio policy still gates visibility.
+      const pageAudioFallback = chooseDesktopPageAudioFallback({
+        audioEnabled,
+        visibleChannels: nextVisibleChannels,
+        activeChannel,
+        activeVolume: focusedAudioVolumeRef.current,
+        listeningChannels,
+        explicitlyMuted: desktopExplicitMutedChannelsRef.current,
+      });
+      if (pageAudioFallback) {
+        setListeningChannels((current) => new Set([...current, pageAudioFallback]));
+      }
 
       // Page arrows are explicit user gestures. Resume already-mounted incoming
       // embeds here; TwitchPlayer still owns the off-page pause policy after
@@ -5517,7 +5560,7 @@ function SquadViewApp() {
                     active={activeChannel === channel}
                     highlightActive={
                       desktopGridChat
-                        ? activeChatChannel === channel
+                        ? displayedChatChannel === channel
                         : activeChannel === channel
                     }
                     focusActive={viewMode === 'solo' && activeChannel === channel}
@@ -5564,7 +5607,7 @@ function SquadViewApp() {
                     onLiveAudioStateChange={syncNativeTwitchAudioIntent}
                     onStreamStatusChange={handleViewerStreamStatusChange}
                     chatActive={
-                      (viewMode === 'chat' && activeChatChannel === channel) ||
+                      (viewMode === 'chat' && displayedChatChannel === channel) ||
                       (viewMode === 'solo' && activeChannel === channel)
                     }
                     isTwitchFollowed={
@@ -5752,7 +5795,7 @@ function SquadViewApp() {
                 </aside>
               )}
 
-              {showDesktopChatRail && (activeChatChannel || activeChannel) && (
+              {showDesktopChatRail && (displayedChatChannel || activeChannel) && (
                 <aside className="desktop-chat-rail" aria-label="Twitch chat">
                   {isWideDesktopChat && !compactViewerEnabled && (
                     <div className="desktop-chat-dock-toolbar"><span>Chat</span></div>
@@ -5760,15 +5803,15 @@ function SquadViewApp() {
                   {compactViewerEnabled && viewMode === 'chat' && (
                     <nav className="compact-chat-tabs" role="tablist" aria-label={`Chats on viewing page ${desktopPageForRender + 1}`}>
                       {visibleChannels.map((channel) => (
-                        <button key={channel} type="button" role="tab" aria-selected={activeChatChannel === channel}
-                          className={activeChatChannel === channel ? 'is-current' : ''}
+                        <button key={channel} type="button" role="tab" aria-selected={displayedChatChannel === channel}
+                          className={displayedChatChannel === channel ? 'is-current' : ''}
                           onClick={() => setChatChannel(channel)} title={`Chat with ${channel}`}>
                           {channel}
                         </button>
                       ))}
                     </nav>
                   )}
-                  <ChatPanel channel={viewMode === 'chat' ? activeChatChannel : activeChannel} mentionCandidates={compactPagedChat ? visibleChannels : channels} onActivity={noteViewerChatActivity} />
+                  <ChatPanel channel={viewMode === 'chat' ? displayedChatChannel : activeChannel} mentionCandidates={compactPagedChat ? visibleChannels : channels} onActivity={noteViewerChatActivity} />
                 </aside>
               )}
             </div>

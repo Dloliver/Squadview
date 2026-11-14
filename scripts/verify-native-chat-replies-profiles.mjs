@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { nativeChatReplyTarget, nativeChatProfileTarget, nativeChatLogin, nativeChatProfileUrl } from '../src/lib/nativeChatInteractions.js';
+
+const panel = readFileSync(new URL('../src/components/ChatPanel.jsx', import.meta.url), 'utf8');
+const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+const service = readFileSync(new URL('../src/services/twitchNativeChatService.js', import.meta.url), 'utf8');
+const backend = readFileSync(new URL('../supabase/functions/twitch-account/index.ts', import.meta.url), 'utf8');
+const check = (label, value) => { assert.ok(value, label); console.log(`PASS: ${label}`); };
+
+const message = { id: '142f46b8-a159-4c58-a5b0-30a13142dddc', chatterLogin: 'MissJas', chatterName: 'MissJas', text: '  That boss fight was crazy!\n  We survived.  ' };
+const reply = nativeChatReplyTarget(message, 'CHANNEL_A');
+check('real Twitch event message IDs are valid reply parents', reply?.id === message.id);
+check('reply stores the original channel', reply?.channel === 'channel_a');
+check('reply preview is readable and bounded', reply.preview === 'That boss fight was crazy! We survived.');
+check('missing message ID never enables reply', nativeChatReplyTarget({ chatterLogin: 'x', text: 'hi' }, 'x') === null);
+check('invalid message ID never enables reply', nativeChatReplyTarget({ id: '<script>' }, 'x') === null);
+check('oversized message ID never enables reply', nativeChatReplyTarget({ id: 'a'.repeat(129) }, 'x') === null);
+check('profile requires a safe Twitch login', nativeChatLogin('MissJas') === 'missjas' && !nativeChatProfileTarget({ chatterLogin: 'https://evil.example' }, 'x'));
+check('Twitch profile URL is built from a normalized login', nativeChatProfileUrl('MISSJAS') === 'https://www.twitch.tv/missjas' && nativeChatProfileUrl('../fake') === '');
+check('profile selection is restricted to current chat', nativeChatProfileTarget(message, 'CHANNEL_A')?.channel === 'channel_a');
+check('row click replies and username click opens profile only', panel.includes('selectNativeReply(message)') && panel.includes('openNativeProfile(message)') && /onClick=\{\(event\) => \{\s*event.stopPropagation\(\);\s*openNativeProfile\(message\)/.test(panel));
+check('message body has keyboard-operable reply button', panel.includes('className="native-chat-message-reply"') && panel.includes('aria-label={`Reply to'));
+check('selected/copied chat text does not trigger row replies', panel.includes('window.getSelection?.()?.toString().trim()'));
+check('reply has cancel action and preserves failed draft', panel.includes('aria-label="Cancel chat reply"') && panel.includes('setReplyTarget(null)') && panel.includes("setSendError(nextError?.message || 'Twitch could not send that message.');"));
+check('send passes Twitch parent ID through existing service', panel.includes("replyParentMessageId: activeReplyTarget?.id || ''") && service.includes('reply_parent_message_id: cleanReplyParentMessageId || undefined'));
+check('server already supports reply parent; no deployment required', backend.includes('body.reply_parent_message_id = replyParentMessageId;'));
+check('per-channel guard prevents replying in another stream', panel.includes('replyTarget?.channel === normalizedChannel') && panel.includes('profileTarget?.channel === normalizedChannel'));
+check('profile has an external follow path and distinct Mention', panel.includes('Open profile / Follow on Twitch') && panel.includes('insertMention(activeProfileTarget.login)') && panel.includes('target="_blank" rel="noopener noreferrer"'));
+check('no unsupported in-app Twitch follow API', !panel.includes('user:edit:follows') && !panel.includes('followTwitchUser('));
+check('native message row, reply preview, profile styles installed', ['.native-chat-message-row', '.native-chat-reply-context', '.native-chat-profile-card'].every((selector) => css.includes(selector)));
+check('unchanged reader and composer guard remain', panel.includes('createNativeTwitchChat({') && panel.includes('canSendNativeChatMessage({') && panel.includes('NativeChatBadges'));
+console.log('PASS: Native Chat Reply + Twitch Profile structural and helper tests complete. Browser tests still required.');
