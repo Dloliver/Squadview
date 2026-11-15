@@ -9571,3 +9571,29 @@ ins.adsbygoogle[data-ad-status="unfilled"] {
 .native-chat-profile-actions button:focus-visible,
 .native-chat-profile-close:focus-visible,
 .native-chat-reply-context button:focus-visible { outline: 2px solid #bf94ff; outline-offset: 2px; }
+
+
+/* SquadView — auto-expand one visible desktop stream beside its chat rail.
+   This is a grid presentation change only: no Focus audio transition, no
+   iframe transforms, no remount, no chat-dock resizing and no mobile impact.
+   Apply only when the runtime marks one stream and no chat grid tile. */
+@media (min-width: 761px) {
+  .viewer-shell.squadview-single-stream-fill .viewer-primary-layout .stream-stage.mode-chat .stream-stage-players,
+  .viewer-shell.squadview-single-stream-fill .viewer-primary-layout .stream-stage.mode-dual .stream-stage-players {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+  .viewer-shell.squadview-single-stream-fill .viewer-primary-layout .stream-stage .stream-card.is-visible {
+    grid-column: 1 / -1 !important;
+    grid-row: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0;
+    min-height: 0;
+  }
+}

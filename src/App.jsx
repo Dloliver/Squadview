@@ -11,6 +11,7 @@ import { chooseStaticQuadCapacity, supportsCompactSideQuad } from './lib/staticQ
 import { filterOfflineAutoRemoval, chatForExplicitPageChange } from './lib/chatSelectionPersistence';
 import { selectBoundedMountedChannels } from './lib/viewerPlayerMounts';
 import { chooseDesktopPageAudioFallback } from './lib/desktopPageAudio';
+import { shouldAutoExpandSingleStream, shouldAutoEnterDesktopFocus } from './lib/singleStreamFocusLayout';
 import SiteFooter from './components/legal/SiteFooter';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
@@ -742,6 +743,7 @@ function SquadViewApp() {
   const audioPolicyRef = useRef(null);
   const lastAppliedAudioPolicyRef = useRef(null);
   const focusReturnAudioRef = useRef(null);
+  const oneStreamAutoFocusRef = useRef({ channel: '', automatic: false, previousMode: 'chat', previousChatLayout: 'grid' });
   // A deliberate desktop mute must not be overridden by a later page change.
   // This tracks explicit Listen/volume interactions only, never Twitch loading
   // or autoplay states. Session-scoped, not persisted to user settings.
@@ -1652,6 +1654,54 @@ function SquadViewApp() {
     desktopLeadChannel,
     channels,
   ]);
+
+  // A true one-stream desktop lineup opens in existing Focus mode, with the
+  // Twitch player and chat owned by that channel. This is deliberately scoped
+  // to the whole lineup, not a last page containing one of several streams.
+  // Change the view state without calling play(), mutating Listen, or remounting
+  // the keyed TwitchPlayer: automatic transitions have no user gesture.
+  useEffect(() => {
+    if (screen !== 'viewer') {
+      oneStreamAutoFocusRef.current = { channel: '', automatic: false, previousMode: 'chat', previousChatLayout: 'grid' };
+      return;
+    }
+    const soleChannel = shouldAutoEnterDesktopFocus({
+      isDesktopGrid,
+      streamCount: channels.length,
+      youtubeCompanionPresent: Boolean(youtubeCompanion),
+    }) ? channels[0] : '';
+    const previous = oneStreamAutoFocusRef.current;
+    if (soleChannel) {
+      // Do not override a deliberate Grid selection on subsequent renders.
+      if (previous.channel === soleChannel) return;
+      oneStreamAutoFocusRef.current = {
+        channel: soleChannel,
+        automatic: true,
+        previousMode: viewMode === 'solo' ? (compactViewerEnabled ? 'chat' : 'dual') : viewMode,
+        previousChatLayout: viewMode === 'solo' ? (compactViewerEnabled ? 'grid' : 'single') : chatLayout,
+      };
+      if (viewMode !== 'solo') {
+        focusReturnAudioRef.current = { activeChannel: soleChannel, audioEnabled };
+        setActiveChannel(soleChannel);
+        setChatChannel(soleChannel);
+        setChatLayout('single');
+        setViewMode('solo');
+      } else if (!focusReturnAudioRef.current) {
+        focusReturnAudioRef.current = { activeChannel: soleChannel, audioEnabled };
+      }
+      return;
+    }
+    if (!previous.channel) return;
+    oneStreamAutoFocusRef.current = { channel: '', automatic: false, previousMode: 'chat', previousChatLayout: 'grid' };
+    // A second stream restores the pre-auto-Focus layout. Manual Focus on
+    // multiple streams, or a user who already left Focus, is not overridden.
+    if (previous.automatic && viewMode === 'solo') {
+      focusReturnAudioRef.current = null;
+      setViewMode(previous.previousMode);
+      setChatLayout(previous.previousChatLayout);
+      if (channels.length && !channels.includes(chatChannel)) setChatChannel(channels[0]);
+    }
+  }, [screen, isDesktopGrid, channels, youtubeCompanion, viewMode, chatLayout, compactViewerEnabled, audioEnabled, chatChannel]);
 
   useEffect(() => {
     if (!channels.length) {
@@ -5191,6 +5241,20 @@ function SquadViewApp() {
       : viewMode === 'chat'
         ? (isDesktopGrid ? desktopChannels : mobileSplitChat ? dualChannels : [activeChatChannel])
         : [activeChannel];
+    // With one Twitch stream on the current desktop page, render a focused
+    // *layout* beside chat without entering Solo or changing audio ownership.
+    // The same mounted TwitchPlayer is retained across the transition.
+    const singleStreamAutoFocus = shouldAutoExpandSingleStream({
+      isDesktopGrid,
+      viewMode,
+      desktopGridChat,
+      desktopChatUsesGridTile,
+      visibleCount: visibleChannels.length,
+      youtubeVisible,
+      referralPromoVisible,
+      desktopDualChat,
+      desktopSixStream,
+    });
 
     // Only an exact five-channel roster uses centered bottom-row positioning.
     // The six-stream pager and all pinned slot positions remain unchanged otherwise.
@@ -5419,12 +5483,12 @@ function SquadViewApp() {
 
 
     return (
-      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''} ${shortDesktopTwoUp ? 'squadview-short-desktop-two-up' : ''} ${quadGridRequested && !desktopDualChat && !desktopSixStream ? `squadview-responsive-quad squadview-static-quad-${staticQuadCapacity}` : ''} ${compactSideQuad && !desktopDualChat && !desktopSixStream ? 'squadview-compact-side-quad' : ''} ${shortDesktopTwoUp && visibleChannels.length === 1 ? 'squadview-short-desktop-one' : ''} ${desktopDualChat ? 'squadview-desktop-dual-chat' : ''} ${desktopSixStream ? 'squadview-desktop-six-stream' : ''} ${desktopFiveStream ? 'squadview-ultrawide-five' : ''}`}>
+      <div className={`viewer-shell mode-${viewMode} chat-layout-${chatLayout} ${mobileYoutubeDual ? 'mobile-youtube-dual' : ''} ${compactViewerEnabled ? 'compact-multiview' : ''} ${mobileSplitChat ? 'mobile-split-chat' : ''} ${shortDesktopTwoUp ? 'squadview-short-desktop-two-up' : ''} ${quadGridRequested && !desktopDualChat && !desktopSixStream ? `squadview-responsive-quad squadview-static-quad-${staticQuadCapacity}` : ''} ${compactSideQuad && !desktopDualChat && !desktopSixStream ? 'squadview-compact-side-quad' : ''} ${shortDesktopTwoUp && visibleChannels.length === 1 ? 'squadview-short-desktop-one' : ''} ${desktopDualChat ? 'squadview-desktop-dual-chat' : ''} ${desktopSixStream ? 'squadview-desktop-six-stream' : ''} ${desktopFiveStream ? 'squadview-ultrawide-five' : ''} ${singleStreamAutoFocus ? 'squadview-single-stream-fill' : ''}`}>
         <header className="viewer-header">
           <button className="icon-button" onClick={() => exitViewer('back_button')} aria-label="Back"><ArrowLeft /></button>
           <div>
             <strong>SquadView</strong>
-            <span>{desktopSixStream ? (desktopFiveStream ? 'Five streams + chat' : 'Six streams + chat') : desktopDualChat ? 'Two streams + two chats' : viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : mobileSplitChat ? 'Split + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
+            <span>{singleStreamAutoFocus ? (viewMode === 'chat' ? 'Single stream + chat' : 'Single stream') : desktopSixStream ? (desktopFiveStream ? 'Five streams + chat' : 'Six streams + chat') : desktopDualChat ? 'Two streams + two chats' : viewMode === 'dual' ? (isDesktopGrid && channels.length > 2 ? 'Desktop grid' : 'Dual view') : viewMode === 'chat' ? (desktopGridChat ? 'Grid + chat' : mobileSplitChat ? 'Split + chat' : 'Stream + chat') : 'Focused stream + chat'}</span>
           </div>
           <div className="header-actions viewer-primary-actions">
             <button type="button" className="edit-group-button viewer-manage-action" onClick={() => openEditGroup()}>Manage streams</button>
